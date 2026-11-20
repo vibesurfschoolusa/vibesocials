@@ -243,9 +243,12 @@ export function BulkPostRow({
           <Alert variant="danger" title="This file did not upload.">
             <p>{row.uploadError}</p>
             <div className="mt-2 flex gap-2">
-              <Button size="md" disabled={locked} onClick={onRetry}>
-                Retry
-              </Button>
+              {/* R48 publishing L4: a file refused for itself is refused on every Retry. */}
+              {row.uploadErrorKind === "file" ? null : (
+                <Button size="md" disabled={locked} onClick={onRetry}>
+                  Retry
+                </Button>
+              )}
               <Button variant="outline" size="md" disabled={locked} onClick={onRemove}>
                 Remove
               </Button>

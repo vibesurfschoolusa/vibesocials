@@ -19,6 +19,7 @@ function row(overrides: Partial<BulkRow> = {}): BulkRow {
     upload: "done",
     progress: null,
     uploadError: null,
+    uploadErrorKind: null,
     blob: { url: "https://blob.example/a.jpg", filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 10 },
     mediaItemId: null,
     caption: "Sunny day",
@@ -383,5 +384,26 @@ describe("Add many form: It is in the Queue", () => {
   it("a draft confirmed in the Queue shows no time", () => {
     const html = render(row({ postId: "confirmed-in-queue", when: "", result: "In the Queue" }));
     expect(html).toContain("No time yet: set it in the Queue");
+  });
+});
+
+// R48 publishing L4: a file refused for its own type is refused on every
+// Retry, so its row offers only Remove; a network failure keeps Retry.
+describe("Add many row: a file that did not upload", () => {
+  const avif = "This file type (image/avif) isn't supported. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.";
+
+  it("refused for its own type: the file's sentence and Remove, no Retry", () => {
+    const html = render(row({ upload: "failed", blob: null, uploadError: avif, uploadErrorKind: "file" }));
+    expect(html).toContain(avif.replace("isn't", "isn&#x27;t"));
+    expect(html).toContain(">Remove<");
+    expect(html).not.toContain(">Retry<");
+  });
+
+  it("a network failure: Retry and Remove", () => {
+    const html = render(
+      row({ upload: "failed", blob: null, uploadError: "The upload failed. Retry it or remove it.", uploadErrorKind: "network" }),
+    );
+    expect(html).toContain(">Retry<");
+    expect(html).toContain(">Remove<");
   });
 });

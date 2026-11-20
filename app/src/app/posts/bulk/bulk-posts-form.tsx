@@ -112,6 +112,13 @@ export interface BulkRow {
   /** 0-100 while uploading. */
   progress: number | null;
   uploadError: string | null;
+  /**
+   * R48 publishing L4: why the upload failed. "file": the file itself was
+   * refused while it was prepared (its type, a photo that can't be converted),
+   * so a Retry would fail the same way and only Remove is offered, as on /u.
+   * "network": anything after that, which a Retry may fix.
+   */
+  uploadErrorKind: "file" | "network" | null;
   blob: UploadedBlob | null;
   /** Set for a row made from a Media item: it is posted by id, never uploaded again. */
   mediaItemId: string | null;
@@ -161,6 +168,7 @@ function newRow(file: Pick<File, "name" | "type">): BulkRow {
     upload: "queued",
     progress: null,
     uploadError: null,
+    uploadErrorKind: null,
     blob: null,
     mediaItemId: null,
     caption: "",
@@ -213,10 +221,17 @@ export interface BulkBatchCheck {
   googleError: string | null;
 }
 
-type RowCheck = Pick<BulkRow, "mimeType" | "durationSec" | "caption" | "when" | "blob"> & Partial<Pick<BulkRow, "altText">>;
+type RowCheck = Pick<BulkRow, "mimeType" | "durationSec" | "caption" | "when" | "blob"> &
+  Partial<Pick<BulkRow, "altText" | "uploadErrorKind">>;
+
+/** R48 publishing L4: a file refused while it was prepared, and the line a press leaves on its row. */
+export const BULK_FILE_REFUSED_TEXT = "This file can't be sent. Remove it, then choose a photo or video.";
+export const BULK_FILE_LEFT_OUT_TEXT = "This file can't be sent, so it was left out. Remove it.";
 
 /** Why a press would not send this row, judged against the clock `at` of the press, or null. */
 export function rowLocalBlock(row: RowCheck, mode: BulkFinishMode, at: Date, batch: BulkBatchCheck): string | null {
+  // Not "Retry it": a Retry would refuse the same file again.
+  if (row.uploadErrorKind === "file") return BULK_FILE_LEFT_OUT_TEXT;
   const platforms = platformsForRow(batch.selectedPlatforms, row.mimeType).platforms;
   return (
     rowSendBlock(
@@ -512,10 +527,12 @@ export function BulkPostsForm({
   async function uploadRow(id: string) {
     const file = filesRef.current.get(id);
     if (!file) return;
-    updateRow(id, { upload: "working", progress: null, uploadError: null, sendError: null });
+    updateRow(id, { upload: "working", progress: null, uploadError: null, uploadErrorKind: null, sendError: null });
+    let preparing = true;
     try {
       // Same preparation as Create: HEIC -> JPEG, big photos shrunk, unsupported types refused.
       const prepared = await prepareUploadFile(file);
+      preparing = false;
       filesRef.current.set(id, prepared);
       // A photo's thumbnail is the prepared file (a HEIC original would not show).
       // A video's comes from the frames read for its caption (captionRow).
@@ -559,7 +576,10 @@ export function BulkPostsForm({
       updateRow(id, {
         upload: "failed",
         progress: null,
-        uploadError: errorMessage(error, "The upload failed. Retry it or remove it."),
+        uploadErrorKind: preparing ? "file" : "network",
+        uploadError: preparing
+          ? errorMessage(error, BULK_FILE_REFUSED_TEXT)
+          : errorMessage(error, "The upload failed. Retry it or remove it."),
       });
     }
   }
@@ -855,7 +875,7 @@ export function BulkPostsForm({
   }
 
   function retryUpload(id: string) {
-    updateRow(id, { upload: "queued", uploadError: null });
+    updateRow(id, { upload: "queued", uploadError: null, uploadErrorKind: null });
     void runWork();
   }
 
