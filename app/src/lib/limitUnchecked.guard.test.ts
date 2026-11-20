@@ -25,6 +25,12 @@ const EXCEPTIONS: Record<string, { why: string; mustContain: string[] }> = {
   "lib/aiGuards.ts": { why: "hands the mark to checkWorkspaceAiQuota's callers", mustContain: ["...result"] },
   // A store error leaves the day unclaimed, so no email goes; nobody is answered.
   "server/notifications/onceADay.ts": { why: "no email is sent without a claim", mustContain: [".allowed"] },
+  // R46 pages-a L1: a plain form post, so it goes back to /c with its own code; the page
+  // says the couldn't-check reason (clientLinkLimit LIMIT_UNCHECKED_REASON, tested against the sentence).
+  "app/api/connect-link/[token]/start/route.ts": {
+    why: "back to /c, which says couldn't check",
+    mustContain: [".unavailable", "CONNECT_LIMIT_CODES.unchecked"],
+  },
 };
 
 /** The result types a fail-closed limiter (or a wrapper of one) returns. */

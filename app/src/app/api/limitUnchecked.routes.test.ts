@@ -192,7 +192,7 @@ const rows: Row[] = [
   { name: "workspaces/logo DELETE", call: () => logo.DELETE(get("/api/workspaces/logo?workspaceId=ws-1")) },
 ];
 
-/** The start form gets plain text, as its other refusals. */
+/** The start form is a plain form post: every limit answer goes back to /c (R45 pages-a L7, R46 pages-a L1). */
 const textRows: Row[] = [
   {
     name: "connect-link start (network)",
@@ -238,11 +238,15 @@ describe("a fail-closed limit that couldn't be checked", () => {
     await expect(response.json()).resolves.toEqual({ error: LIMIT_UNCHECKED_MESSAGE });
   });
 
-  it.each(textRows.map((row) => [row.name, row] as const))("%s: 503 plain text, couldn't check", async (_name, row) => {
+  // R46 pages-a L1: never a bare text page; /c shows the couldn't-check reason (clientLinkLimit LIMIT_UNCHECKED_REASON).
+  it.each(textRows.map((row) => [row.name, row] as const))("%s: back to the page as couldn't check", async (_name, row) => {
     limitReturns(row.passFirst ?? 0, UNAVAILABLE);
     const response = await row.call();
-    expect(response.status).toBe(503);
-    await expect(response.text()).resolves.toBe(LIMIT_UNCHECKED_MESSAGE);
+    expect(response.status).toBe(303);
+    const to = new URL(response.headers.get("location") as string);
+    expect(to.pathname).toBe(`/c/${TOKEN}`);
+    expect(to.searchParams.get("error")).toBe("limit_unchecked");
+    expect(Number(to.searchParams.get("until"))).toBeGreaterThan(Date.now() / 1000);
   });
 
   it.each(rows.map((row) => [row.name, row] as const))(
