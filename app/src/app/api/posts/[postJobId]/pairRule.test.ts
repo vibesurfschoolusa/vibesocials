@@ -604,19 +604,19 @@ describe("partialSendMessage and notSentNote - worded for the viewer's role", ()
   it("no stored sentence: owner is pointed at Activity to reconnect; member is told the owner can", () => {
     const none = new Map([["story-1", null]]);
     expect(partialSendMessage("feed-1", half(), dispatch(none), "owner")).toBe(
-      "The feed post is being sent. The Story was not: none of its platforms is connected. Activity shows what to reconnect.",
+      "The feed post is being sent. The Story was not: each of its platforms is either not connected or needs reconnecting. Activity shows what to reconnect.",
     );
     expect(partialSendMessage("feed-1", half(), dispatch(none), "member")).toBe(
-      "The feed post is being sent. The Story was not: none of its platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it.",
+      "The feed post is being sent. The Story was not: each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it.",
     );
   });
 
   it("notSentNote: owner and member forms", () => {
     expect(notSentNote("story", "owner")).toBe(
-      "Its Story was not sent: none of its platforms is connected. Activity shows what to reconnect.",
+      "Its Story was not sent: each of its platforms is either not connected or needs reconnecting. Activity shows what to reconnect.",
     );
     expect(notSentNote("story", "member")).toBe(
-      "Its Story was not sent: none of its platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it.",
+      "Its Story was not sent: each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it.",
     );
   });
 
@@ -737,7 +737,7 @@ describe("failedStartAnswer", () => {
     const leftAlone = { ...story, changed: false, note: "Its Story is already publishing, so it was not published." };
     expect(failedStartAnswer("feed-1", leftAlone, dispatch()).body.otherHalf).toEqual(leftAlone);
     expect(failedStartAnswer("feed-1", leftAlone, dispatch()).halfNote).toBeUndefined();
-    const notSent = { ...story, note: "Its Story was not sent: none of its platforms is connected." };
+    const notSent = { ...story, note: "Its Story was not sent: each of its platforms is either not connected or needs reconnecting." };
     expect(failedStartAnswer("feed-1", notSent, dispatch({ notSent: ["story-1"] })).body.otherHalf).toEqual(notSent);
   });
 });

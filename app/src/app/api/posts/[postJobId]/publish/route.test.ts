@@ -442,8 +442,31 @@ describe("POST /api/posts/[postJobId]/publish", () => {
 
     await expect(res.json()).resolves.toEqual({
       code: "NO_CONNECTIONS",
-      error: "Nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
+      error: "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what to reconnect.",
     });
+  });
+
+  // R52 pages-a L4: prepareDeferredPostJobDispatch answers NO_CONNECTIONS when
+  // no row is pending: a chosen platform with no connection (CONNECTION_GONE),
+  // one flagged needsReconnect (RECONNECT_REQUIRED), or a mix. One sentence is
+  // true for each, for the owner and for a member.
+  it.each([
+    ["a disconnected platform"],
+    ["a platform that needs reconnecting"],
+    ["a mix of the two"],
+  ])("Publish now with %s: the sentence names both reasons, owner and member", async () => {
+    for (const role of ["owner", "member"] as const) {
+      getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role }));
+      findFirstMock.mockResolvedValue({ status: "draft" });
+      prepareDispatchMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+
+      const res = await POST(req({}), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      const { error } = await res.json();
+      expect(error).toContain("either not connected or needs reconnecting");
+      expect(error).toContain(role === "owner" ? "Activity shows what to reconnect." : "the workspace owner can reconnect it.");
+    }
   });
 
   // F1 H3: a scheduled post that failed on our side before any platform was
@@ -1441,7 +1464,7 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
 
     expect(res.status).toBe(202);
     expect((await res.json()).message).toBe(
-      "The feed post is being sent. The Story was not: none of its platforms is connected. Activity shows what to reconnect.",
+      "The feed post is being sent. The Story was not: each of its platforms is either not connected or needs reconnecting. Activity shows what to reconnect.",
     );
   });
 
@@ -1491,10 +1514,10 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
       const body = await (await POST(req({ includePair: true }), ctx("job-1"))).json();
 
       expect(body.message).toBe(
-        "The feed post is being sent. The Story was not: none of its platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it.",
+        "The feed post is being sent. The Story was not: each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it.",
       );
       expect(body.otherHalf.note).toBe(
-        "Its Story was not sent: none of its platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it.",
+        "Its Story was not sent: each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it.",
       );
     });
 
@@ -1507,7 +1530,7 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
 
       expect(res.status).toBe(409);
       expect((await res.json()).error).toBe(
-        "Nothing was posted: none of this post's platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it.",
+        "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it.",
       );
     });
 

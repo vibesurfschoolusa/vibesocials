@@ -238,8 +238,8 @@ export type DispatchResult = {
 
 function noPlatformConnected(role: ViewerRole): string {
   return role === "member"
-    ? "none of its platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it."
-    : "none of its platforms is connected. Activity shows what to reconnect.";
+    ? "each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it."
+    : "each of its platforms is either not connected or needs reconnecting. Activity shows what to reconnect.";
 }
 
 /**

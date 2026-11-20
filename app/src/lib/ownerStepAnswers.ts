@@ -24,11 +24,15 @@ export function noConnectionsMessage(action: "create" | "publish", role: AnswerR
     : "Connect at least one platform before publishing.";
 }
 
-/** Publish now when none of the post's chosen platforms is connected (409). */
+/**
+ * Publish now when none of the post's chosen platforms can take it (409):
+ * prepare's NO_CONNECTIONS covers a platform with no connection and one that is
+ * connected but needs reconnecting (R52 pages-a L4), so the sentence names both.
+ */
 export function nothingSentMessage(role: AnswerReader): string {
   return role === "member"
-    ? "Nothing was posted: none of this post's platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it."
-    : "Nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.";
+    ? "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it."
+    : "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what to reconnect.";
 }
 
 /** Retry refused because the platform needs reconnecting first (RECONNECT_REQUIRED). */

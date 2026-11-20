@@ -62,7 +62,7 @@ const CHANGED_SINCE_REVIEW_BODY = {
  * email. The submitter is a member: only an owner can reconnect.
  */
 const NOT_SENT_NOTHING_CONNECTED =
-  "none of this post's platforms is connected. The workspace owner can reconnect them in Settings; Activity shows which.";
+  "each of this post's platforms is either not connected or needs reconnecting. The workspace owner can reconnect them in Settings; Activity shows which.";
 const NOT_SENT_SEND_FAILED = "publishing couldn't start. Open the post in Activity and retry it there.";
 /** R28 publishing L2: the failed start left the post with no results, so Activity offers Send again on it. */
 const NOT_SENT_SEND_FAILED_NO_RESULTS =
@@ -462,7 +462,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       return NextResponse.json(
         {
           error:
-            "Approved, but nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
+            "Approved, but nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what to reconnect.",
           code: dispatch.reasons.get(postJobId),
           ...(pair ? { otherHalf: pair } : {}),
         },

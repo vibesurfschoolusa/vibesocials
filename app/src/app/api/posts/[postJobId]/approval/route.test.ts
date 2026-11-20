@@ -325,14 +325,14 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     await expect(res.json()).resolves.toEqual({
       code: "NO_CONNECTIONS",
       error:
-        "Approved, but nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
+        "Approved, but nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what to reconnect.",
     });
     expect(inngestSendMock).not.toHaveBeenCalled();
     // R9-client-journey L3: the decision was recorded, so the submitter is told, with why nothing went out.
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sendEmailMock.mock.calls[0][0].subject).toContain("was approved, but nothing was sent");
     expect(sendEmailMock.mock.calls[0][0].html).toContain(
-      "Approved, but nothing was sent: none of this post&#39;s platforms is connected. The workspace owner can reconnect them in Settings; Activity shows which.",
+      "Approved, but nothing was sent: each of this post&#39;s platforms is either not connected or needs reconnecting. The workspace owner can reconnect them in Settings; Activity shows which.",
     );
   });
 
