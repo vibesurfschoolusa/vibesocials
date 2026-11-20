@@ -287,8 +287,8 @@ describe("sentences", () => {
   });
 
   it("YouTube workspace daily limit", () => {
-    expect(youtubeWorkspaceDailyLimitMessage(10)).toBe(
-      "This workspace has reached its limit of 10 YouTube uploads for today. Retry this upload tomorrow.",
+    expect(youtubeWorkspaceDailyLimitMessage(10, new Date("2026-11-19T15:00:00Z"))).toBe(
+      "This workspace reached its limit of 10 YouTube uploads for the day (YouTube's day ends at midnight Pacific time). Retry this upload after 08:00 UTC on November 20, 2026.",
     );
   });
 
@@ -352,8 +352,8 @@ describe("limit messages agree with their number", () => {
     [2, "YouTube uploads"],
     [10, "YouTube uploads"],
   ])("YouTube uploads: %i %s", (n, words) => {
-    expect(youtubeWorkspaceDailyLimitMessage(n)).toBe(
-      `This workspace has reached its limit of ${n} ${words} for today. Retry this upload tomorrow.`,
+    expect(youtubeWorkspaceDailyLimitMessage(n, new Date("2026-11-19T15:00:00Z"))).toBe(
+      `This workspace reached its limit of ${n} ${words} for the day (YouTube's day ends at midnight Pacific time). Retry this upload after 08:00 UTC on November 20, 2026.`,
     );
   });
 });
@@ -565,8 +565,8 @@ describe("limits across workspaces", () => {
     expect(newAccountPoolMessage("retry")).toBe(
       `Vibe Socials has reached today's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address, and retries count toward it. Retry in 9 hours. ${leave}`,
     );
-    expect(newAccountPoolAtSendMessage()).toBe(
-      `Not sent: Vibe Socials had reached the day's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address when this post was due. Retry it tomorrow, or schedule it again. ${leave}`,
+    expect(newAccountPoolAtSendMessage(new Date("2026-11-19T15:00:00Z"))).toBe(
+      `Not sent: Vibe Socials had reached the day's limit of 5 posts shared by accounts made that day (UTC) or with an unconfirmed email address when this post was due. Retry it after 00:00 UTC on November 20, 2026, or schedule it again. ${leave}`,
     );
   });
 
@@ -580,8 +580,8 @@ describe("limits across workspaces", () => {
     expect(serviceDailyPostLimitMessage("retry")).toBe(
       "Vibe Socials has reached its daily limit of posts for the whole service, and retries count toward it. Retry in 9 hours.",
     );
-    expect(serviceDailyPostLimitAtSendMessage()).toBe(
-      "Not sent: Vibe Socials had reached its daily limit of posts for the whole service when this post was due. Retry it tomorrow, or schedule it again.",
+    expect(serviceDailyPostLimitAtSendMessage(new Date("2026-11-19T15:00:00Z"))).toBe(
+      "Not sent: Vibe Socials had reached its daily limit of posts for the whole service when this post was due. Retry it after 00:00 UTC on November 20, 2026, or schedule it again.",
     );
   });
 
@@ -716,5 +716,42 @@ describe("personLabel", () => {
     expect(a).toBe("info@surf.example");
     expect(b).toBe("info@agency.example");
     expect(a).not.toBe(b);
+  });
+});
+
+// R47 pages-a L2: these sentences are stored on a result and read later in
+// Activity and email, so each names a fixed reset built from the moment it is
+// stored, never "today" or "tomorrow". A Florida owner's evening (23:30 EST) is
+// already the next UTC day; their morning (10:00 EST) is not.
+describe("stored limit sentences name a fixed reset", () => {
+  const lateEvening = new Date("2026-11-20T04:30:00Z"); // 23:30 EST on 19 November
+  const morning = new Date("2026-11-19T15:00:00Z"); // 10:00 EST on 19 November
+
+  it.each([
+    ["23:30 EST", lateEvening, "after 00:00 UTC on November 21, 2026"],
+    ["10:00 EST", morning, "after 00:00 UTC on November 20, 2026"],
+  ])("stored at %s: the service and new-account sentences name the next UTC midnight", (_when, at, reset) => {
+    for (const sentence of [serviceDailyPostLimitAtSendMessage(at), newAccountPoolAtSendMessage(at)]) {
+      expect(sentence).toContain(`Retry it ${reset}, or schedule it again.`);
+      expect(sentence).not.toMatch(/(?:today|tomorrow|tonight)/i);
+    }
+  });
+
+  it.each([
+    // 23:30 EST is 20:30 PST: YouTube's day ends at 08:00 UTC on the 20th.
+    ["23:30 EST", lateEvening, "after 08:00 UTC on November 20, 2026"],
+    ["10:00 EST", morning, "after 08:00 UTC on November 20, 2026"],
+    // 01:00 PST on the 20th: the next midnight Pacific is on the 21st.
+    ["04:00 EST", new Date("2026-11-20T09:00:00Z"), "after 08:00 UTC on November 21, 2026"],
+  ])("stored at %s: the YouTube sentence names the next midnight Pacific, in UTC", (_when, at, reset) => {
+    const sentence = youtubeWorkspaceDailyLimitMessage(10, at);
+    expect(sentence).toContain(`Retry this upload ${reset}.`);
+    expect(sentence).not.toMatch(/(?:today|tomorrow|tonight)/i);
+  });
+
+  it("YouTube's reset follows daylight saving: 07:00 UTC in summer", () => {
+    expect(youtubeWorkspaceDailyLimitMessage(10, new Date("2026-07-01T12:00:00Z"))).toContain(
+      "Retry this upload after 07:00 UTC on July 2, 2026.",
+    );
   });
 });

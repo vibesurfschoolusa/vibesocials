@@ -459,7 +459,7 @@ export async function checkYoutubeDailyLimit(
     const { start, end } = pacificDayRange(now);
     return {
       errorCode: YOUTUBE_WORKSPACE_DAILY_LIMIT_CODE,
-      errorMessage: youtubeWorkspaceDailyLimitMessage(limits.youtubeUploadsPerDay),
+      errorMessage: youtubeWorkspaceDailyLimitMessage(limits.youtubeUploadsPerDay, now),
       notifyOwners: () =>
         notifyOwnersOfLimitReached({
           workspaceId,

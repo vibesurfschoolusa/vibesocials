@@ -266,9 +266,10 @@ const sendsOf = (postJobId: string) =>
   store.events.filter((event) => event.kind === "send" && String(event.sourceId).startsWith(`send:${postJobId}:`));
 
 const LEAVE_SMALL_POOL = "It stops applying from the day after the account was made (00:00 UTC), once the owner's email address is confirmed.";
+// Stored sentences name a fixed reset (R47 pages-a L2): the clock is NOW, 14 November.
 const FULL_AT_SEND =
-  "Not sent: Vibe Socials had reached its daily limit of posts for the whole service when this post was due. Retry it tomorrow, or schedule it again.";
-const SMALL_POOL_AT_SEND = `Not sent: Vibe Socials had reached the day's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address when this post was due. Retry it tomorrow, or schedule it again. ${LEAVE_SMALL_POOL}`;
+  "Not sent: Vibe Socials had reached its daily limit of posts for the whole service when this post was due. Retry it after 00:00 UTC on November 15, 2026, or schedule it again.";
+const SMALL_POOL_AT_SEND = `Not sent: Vibe Socials had reached the day's limit of 5 posts shared by accounts made that day (UTC) or with an unconfirmed email address when this post was due. Retry it after 00:00 UTC on November 15, 2026, or schedule it again. ${LEAVE_SMALL_POOL}`;
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -1100,7 +1101,10 @@ describe("one ceiling over every free run of the day", () => {
       for (let p = 1; p <= 3; p += 1) await due(`ws-t-${a}`, `t-${a}-${p}`, DAY_1);
     }
     workspace("ws-customer", {}, [owner("customer")]);
-    await expect(due("ws-customer", "c-1", DAY_1)).resolves.toBe(FULL_AT_SEND);
+    // Refused on 13 November: the stored sentence names that day's reset.
+    await expect(due("ws-customer", "c-1", DAY_1)).resolves.toBe(
+      FULL_AT_SEND.replace("November 15, 2026", "November 14, 2026"),
+    );
     await expect(due("ws-customer", "c-2", NOW)).resolves.toBeNull();
   });
 

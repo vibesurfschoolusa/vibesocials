@@ -629,7 +629,7 @@ describe("checkYoutubeDailyLimit", () => {
     await expect(checkYoutubeDailyLimit("ws-1", NOW)).resolves.toEqual({
       errorCode: "YOUTUBE_WORKSPACE_DAILY_LIMIT",
       errorMessage:
-        "This workspace has reached its limit of 10 YouTube uploads for today. Retry this upload tomorrow.",
+        "This workspace reached its limit of 10 YouTube uploads for the day (YouTube's day ends at midnight Pacific time). Retry this upload after 08:00 UTC on November 11, 2026.",
       notifyOwners: expect.any(Function),
     });
   });

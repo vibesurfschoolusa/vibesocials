@@ -187,6 +187,16 @@ export function utcDisplayDateTime(at: Date): string {
   return `${utcDisplayDate(at)}, ${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())} UTC`;
 }
 
+/**
+ * "00:00 UTC on November 21, 2026": a reset as a fixed moment. R47 pages-a L2:
+ * for a sentence that is stored and read later (a result's errorMessage, shown
+ * in Activity and email), where "tomorrow" or "in 9 hours" stops being true.
+ */
+export function utcResetMoment(at: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())} UTC on ${utcDisplayDate(at)}`;
+}
+
 /** Bytes as GB with one decimal: "5.0 GB". */
 export function formatStorageGb(bytes: number): string {
   return `${(bytes / GB).toFixed(1)} GB`;
@@ -230,8 +240,9 @@ export function xMonthlyLimitMessage(limit: number, now: Date): string {
   return `This X account has used its ${limit} ${countWord(limit, "X post", "X posts")} for ${utcMonthName(now)}, counted across every workspace it posts from. X posts start again on ${utcDisplayDate(next)}.`;
 }
 
-export function youtubeWorkspaceDailyLimitMessage(limit: number): string {
-  return `This workspace has reached its limit of ${limit} ${countWord(limit, "YouTube upload", "YouTube uploads")} for today. Retry this upload tomorrow.`;
+/** Stored on the upload's result: names the reset `now` leads to (utcResetMoment), Pacific midnight given in UTC. */
+export function youtubeWorkspaceDailyLimitMessage(limit: number, now: Date = new Date()): string {
+  return `This workspace reached its limit of ${limit} ${countWord(limit, "YouTube upload", "YouTube uploads")} for the day (YouTube's day ends at midnight Pacific time). Retry this upload after ${utcResetMoment(pacificDayRange(now).end)}.`;
 }
 
 export function storageFullMessage(limitBytes: number): string {
@@ -247,7 +258,7 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
     return "Frees up when media is deleted on the Media page.";
   }
   if (kind === "postsPerDay") {
-    return `Starts again at 00:00 UTC on ${utcDisplayDate(resetsAt)}.`;
+    return `Starts again at ${utcResetMoment(resetsAt)}.`;
   }
   if (kind === "xPostsPerMonth") {
     return `Starts again on ${utcDisplayDate(resetsAt)}.`;
@@ -585,9 +596,12 @@ export function serviceDailyPostLimitMessage(mode: CrossWorkspaceLimitMode, time
   return `That day is full: ${PRODUCT_NAME} has reached its daily limit of posts for the whole service. Pick another day.`;
 }
 
-/** On the results of a scheduled post the scanner did not send (Activity, and the owner's email). */
-export function serviceDailyPostLimitAtSendMessage(): string {
-  return `Not sent: ${PRODUCT_NAME} had reached its daily limit of posts for the whole service when this post was due. Retry it tomorrow, or schedule it again.`;
+/**
+ * On the results of a scheduled post the scanner did not send (Activity, and
+ * the owner's email). Stored, so it names the reset `now` leads to (utcResetMoment).
+ */
+export function serviceDailyPostLimitAtSendMessage(now: Date = new Date()): string {
+  return `Not sent: ${PRODUCT_NAME} had reached its daily limit of posts for the whole service when this post was due. Retry it after ${utcResetMoment(utcDayRange(now).end)}, or schedule it again.`;
 }
 
 const LEAVE_NEW_ACCOUNT_POOL =
@@ -606,10 +620,14 @@ export function newAccountPoolMessage(mode: CrossWorkspaceLimitMode, time: Reset
   return `That day is full: ${PRODUCT_NAME} has reached the limit of ${posts} a day ${NEW_ACCOUNT_POOL_WHO}. Pick another day. ${LEAVE_NEW_ACCOUNT_POOL}`;
 }
 
-/** On the results of a scheduled post of a new account the scanner did not send. */
-export function newAccountPoolAtSendMessage(): string {
+/**
+ * On the results of a scheduled post of a new account the scanner did not
+ * send. Stored, so "that day" and the reset `now` leads to, never "today".
+ */
+export function newAccountPoolAtSendMessage(now: Date = new Date()): string {
   const posts = `${NEW_ACCOUNT_POOL_DAILY_LIMIT} ${countWord(NEW_ACCOUNT_POOL_DAILY_LIMIT, "post", "posts")}`;
-  return `Not sent: ${PRODUCT_NAME} had reached the day's limit of ${posts} ${NEW_ACCOUNT_POOL_WHO} when this post was due. Retry it tomorrow, or schedule it again. ${LEAVE_NEW_ACCOUNT_POOL}`;
+  const who = "shared by accounts made that day (UTC) or with an unconfirmed email address";
+  return `Not sent: ${PRODUCT_NAME} had reached the day's limit of ${posts} ${who} when this post was due. Retry it after ${utcResetMoment(utcDayRange(now).end)}, or schedule it again. ${LEAVE_NEW_ACCOUNT_POOL}`;
 }
 
 /**

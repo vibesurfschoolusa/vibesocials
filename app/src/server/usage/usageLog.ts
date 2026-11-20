@@ -843,14 +843,14 @@ async function refusalFor(
   const pool = await poolRefusal({ who, day, unit, size: sending, now, db });
   if (pool === "new") {
     return {
-      error: atSend ? newAccountPoolAtSendMessage() : newAccountPoolMessage(mode),
+      error: atSend ? newAccountPoolAtSendMessage(now) : newAccountPoolMessage(mode),
       code: SERVICE_DAILY_POST_LIMIT_CODE,
       ceiling: false,
     };
   }
   if (pool === "main" || pool === "ceiling") {
     return {
-      error: atSend ? serviceDailyPostLimitAtSendMessage() : serviceDailyPostLimitMessage(mode),
+      error: atSend ? serviceDailyPostLimitAtSendMessage(now) : serviceDailyPostLimitMessage(mode),
       code: SERVICE_DAILY_POST_LIMIT_CODE,
       ceiling: pool === "ceiling",
     };
