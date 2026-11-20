@@ -3,10 +3,10 @@ import type { Platform } from "@prisma/client";
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
 import { captionCounter, MAX_CAPTION_CHARS } from "@/lib/captionLimits";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
-import { buildPlatformPreview } from "@/lib/platformPreview";
+import { buildPlatformPreview, byteCountText } from "@/lib/platformPreview";
 import { PLATFORM_ORDER } from "@/lib/platforms";
 import { xWeightedLength } from "@/lib/xWeightedLength";
-import { youtubeCountHint, youtubeDescriptionLength } from "@/lib/youtubeDescription";
+import { youtubeDescriptionLength } from "@/lib/youtubeDescription";
 
 /**
  * A different caption per platform (`perPlatformOverrides`), as the composer
@@ -119,6 +119,11 @@ export interface PlatformCaptionCounter {
   over: boolean;
   /** e.g. `120 / 254`. */
   label: string;
+  /**
+   * YouTube only, when a character counts as more than one: why the number
+   * jumps. Shown on its own line under the count.
+   */
+  hint?: string;
 }
 
 /**
@@ -143,16 +148,23 @@ export function platformCaptionCounter(
     // or "hello" reading 50 looks wrong. No hint once the footer is dropped.
     const footerPosted =
       preview.rendered !== buildPlatformPreview({ platform, caption: text, user: null }).rendered;
-    const counted = charLimit === null ? (preview.byteCount ?? 0) : preview.charCount;
-    // A byte count jumps by 2 to 4 for one letter; say why, in plain words.
-    const hint = charLimit === null ? youtubeCountHint(buildCaptionWithFooter(text, footer ?? {}, platform)) : null;
+    const incl = footerPosted ? " incl. footer" : "";
+    // YouTube: the same count, limit and hint as its preview card.
+    const bytes = byteCountText(preview);
+    if (bytes !== null) {
+      return {
+        length: preview.byteCount ?? 0,
+        max: preview.byteLimit ?? limit,
+        over: preview.willTruncate,
+        label: `${bytes}${incl}`,
+        ...(preview.byteHint ? { hint: preview.byteHint } : {}),
+      };
+    }
     return {
-      length: counted,
+      length: preview.charCount,
       max: limit,
       over: preview.willTruncate,
-      label: `${counted.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")}${
-        footerPosted ? " incl. footer" : ""
-      }${hint ? ` · ${hint}` : ""}`,
+      label: `${preview.charCount.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")}${incl}`,
     };
   }
   // R51 publishing-flow L2: here only the routes' cap applies, so this counts

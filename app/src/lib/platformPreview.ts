@@ -5,7 +5,7 @@ import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes, truncateKeepingLinks } from "@/lib/truncate";
 import { removeXMentions } from "@/lib/xMentions";
 import { truncateXWeighted, xWeightedLength } from "@/lib/xWeightedLength";
-import { fitYouTubeDescription, youtubeDescriptionLength } from "@/lib/youtubeDescription";
+import { fitYouTubeDescription, youtubeCountHint, youtubeDescriptionLength } from "@/lib/youtubeDescription";
 
 // A local grapheme counter, intentionally NOT added to lib/truncate.ts: Phase
 // 7's only sanctioned non-UI change is the platformLimits.ts map + the
@@ -64,6 +64,8 @@ export interface PlatformPreviewResult {
    */
   byteCount?: number;
   byteLimit?: number;
+  /** Why `byteCount` runs ahead of the letters, when a character counts as more than one. */
+  byteHint?: string;
   /** True when `rendered` is shorter than the full (pre-truncation) text. */
   truncated: boolean;
   /**
@@ -74,6 +76,15 @@ export interface PlatformPreviewResult {
    * re-deriving one from the other.
    */
   willTruncate: boolean;
+}
+
+/**
+ * "4,812 / 5,000" for a platform counted in bytes (YouTube), or null. The
+ * caption counter and the preview card both show this, so they can't differ.
+ */
+export function byteCountText(preview: PlatformPreviewResult): string | null {
+  if (preview.byteCount === undefined || preview.byteLimit === undefined) return null;
+  return `${preview.byteCount.toLocaleString("en-US")} / ${preview.byteLimit.toLocaleString("en-US")}`;
 }
 
 /**
@@ -116,12 +127,14 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
     const rendered = fitYouTubeDescription(fullCaption);
     const byteCount = youtubeDescriptionLength(fullCaption);
     const willTruncate = byteCount > utf8ByteLimit;
+    const byteHint = youtubeCountHint(fullCaption);
     return {
       rendered,
       charCount: countGraphemes(fullCaption),
       limit: null,
       byteCount,
       byteLimit: utf8ByteLimit,
+      ...(byteHint ? { byteHint } : {}),
       truncated: willTruncate,
       willTruncate,
     };

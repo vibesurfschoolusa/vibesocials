@@ -345,11 +345,18 @@ describe("platformCaptionCounter and adaptMaxLength on YouTube", () => {
     const counter = platformCaptionCounter(text, "youtube", null);
     expect(counter.length).toBe(5001);
     expect(counter.over).toBe(true);
-    expect(counter.label).toBe("5,001 / 5,000 · YouTube counts most emoji as 4 and an accented letter as 2");
+    expect(counter.label).toBe("5,001 / 5,000");
+    expect(counter.hint).toBe("YouTube counts most emoji as 4 and an accented letter as 2");
   });
 
   it("names the < and > swap when the text has one", () => {
-    expect(platformCaptionCounter("I <3 waves", "youtube", null).label).toBe("12 / 5,000 · YouTube counts a < or > as 3");
+    expect(platformCaptionCounter("I <3 waves", "youtube", null)).toEqual({
+      length: 12,
+      max: 5000,
+      over: false,
+      label: "12 / 5,000",
+      hint: "YouTube counts a < or > as 3",
+    });
   });
 
   it("says incl. footer as before, and the footer can push it over", () => {

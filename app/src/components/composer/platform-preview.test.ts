@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Platform } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
+import type { CaptionFooterUser } from "@/lib/captionFooter";
+import { platformCaptionCounter } from "@/lib/platformOverrides";
 import { STORY_NO_CAPTION } from "@/lib/storyPlacement";
 
 import { PlatformPreviewList } from "./platform-preview";
@@ -85,5 +87,54 @@ describe("PlatformPreviewList with a Story-only platform", () => {
     expect(html).not.toContain(STORY_NO_CAPTION);
     expect(html).toContain("/ 2200 characters");
     expect(html).toContain("Will be shortened");
+  });
+});
+
+// R52 platform-clients L1 follow-up: YouTube's card reads the same number,
+// limit and hint as its caption counter; every other card's count line is
+// exactly as on main f796e2e.
+describe("PlatformPreviewList count line", () => {
+  const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #waves", trackWebsiteLinks: true };
+  const short = "Dawn patrol at Las Olas \u{1F30A} <3 café ".repeat(4).trim();
+  const long = "Glassy waves é ".repeat(250);
+  const card = (platform: Platform, caption: string, footer: CaptionFooterUser | null = user) =>
+    renderToStaticMarkup(
+      createElement(PlatformPreviewList, { platforms: [platform], caption, user: footer, mediaUrl: null, mediaMimeType: null }),
+    );
+  const line = (text: string) => `<p class="text-xs text-muted-foreground">${text}</p>`;
+  // The first such line is the list's own intro sentence.
+  const countLines = (markup: string) =>
+    (markup.match(/<p class="text-xs text-muted-foreground">[^<]*<\/p>/g) ?? []).slice(1);
+
+  it.each([
+    ["x", "198 / 280 characters", "3749 / 280 characters"],
+    ["instagram", "189 / 2200 characters", "3749 / 2200 characters"],
+    ["linkedin", "253 / 3000 characters", "3749 / 3000 characters"],
+    ["facebook_page", "253 characters", "3867 characters"],
+    ["google_business_profile", "251 / 1500 characters", "3749 / 1500 characters"],
+  ] as const)("%s: unchanged", (platform, shortLine, longLine) => {
+    expect(countLines(card(platform, short))).toEqual([line(shortLine)]);
+    expect(countLines(card(platform, long))).toEqual([line(longLine)]);
+  });
+
+  it.each([
+    [`${"Waves \u{1F30A}".repeat(500)}!`, null],
+    [short, user],
+    [long, user],
+    ["a".repeat(4812), null],
+    ["I <3 waves", null],
+  ] as const)("youtube: the counter's number, limit and hint (%#)", (caption, footer) => {
+    const counter = platformCaptionCounter(caption, "youtube", footer);
+    const expected = [line(`${counter.length.toLocaleString("en-US")} / ${counter.max.toLocaleString("en-US")}`)];
+    if (counter.hint) expected.push(line(counter.hint.replace(/</g, "&lt;").replace(/>/g, "&gt;")));
+    expect(countLines(card("youtube", caption, footer))).toEqual(expected);
+    expect(counter.max).toBe(5000);
+  });
+
+  it("youtube: an emoji-heavy post reads 5,001 / 5,000 with the hint beneath", () => {
+    expect(countLines(card("youtube", `${"Waves \u{1F30A}".repeat(500)}!`, null))).toEqual([
+      line("5,001 / 5,000"),
+      line("YouTube counts most emoji as 4 and an accented letter as 2"),
+    ]);
   });
 });

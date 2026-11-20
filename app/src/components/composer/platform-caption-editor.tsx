@@ -194,6 +194,7 @@ export function PlatformCaptionEditor({
           const switchLabelId = `${idPrefix}-${platform}-switch-label`;
           const textareaId = `${idPrefix}-${platform}-caption`;
           const countId = `${idPrefix}-${platform}-count`;
+          const hintId = `${countId}-hint`;
           const counter = on ? platformCaptionCounter(text, platform, footer) : null;
           return (
             <div key={platform} className="space-y-2">
@@ -238,7 +239,7 @@ export function PlatformCaptionEditor({
                     }}
                     rows={3}
                     aria-invalid={counter.over || undefined}
-                    aria-describedby={countId}
+                    aria-describedby={counter.hint ? `${countId} ${hintId}` : countId}
                   />
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <Button
@@ -263,6 +264,12 @@ export function PlatformCaptionEditor({
                       {counter.over ? " (too long)" : ""}
                     </p>
                   </div>
+                  {/* Its own line, so "(too long)" stays next to the number on a phone. */}
+                  {counter.hint ? (
+                    <p id={hintId} className="text-xs text-muted-foreground">
+                      {counter.hint}
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
             </div>

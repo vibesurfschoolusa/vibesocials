@@ -10,7 +10,7 @@ import { MediaCountBadge, mediaCountBadge } from "@/components/media-thumb";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
-import { buildPlatformPreview } from "@/lib/platformPreview";
+import { buildPlatformPreview, byteCountText } from "@/lib/platformPreview";
 import { STORY_NO_CAPTION } from "@/lib/storyPlacement";
 
 export interface PlatformPreviewListProps {
@@ -267,10 +267,13 @@ function PlatformPreviewCard({
           </p>
 
           <p className="text-xs text-muted-foreground">
-            {preview.limit !== null
-              ? `${preview.charCount} / ${preview.limit} characters`
-              : `${preview.charCount} characters`}
+            {byteCountText(preview) ??
+              (preview.limit !== null
+                ? `${preview.charCount} / ${preview.limit} characters`
+                : `${preview.charCount} characters`)}
           </p>
+          {/* YouTube's count runs ahead of the letters: the counter's own hint, on its own line. */}
+          {preview.byteHint ? <p className="text-xs text-muted-foreground">{preview.byteHint}</p> : null}
         </>
       )}
     </Card>
