@@ -138,13 +138,16 @@ export async function POST(request: Request) {
       if (process.env.RESEND_API_KEY) {
         const baseUrl = process.env.NEXTAUTH_URL ?? "";
         const rawToken = await issueAccountToken(prisma, user.id, "email_verify");
-        await deliverAccountEmail(
+        const delivered = await deliverAccountEmail(
           user.email,
           buildVerifyEmail({ to: user.email, rawToken, baseUrl }),
         );
+        // R53 new-customer L2: false (Resend refused or timed out) went unlogged.
+        // No address: it is personal data.
+        if (!delivered) logger.warn("[register] verification email failed", { kind: "not_sent" });
       }
     } catch (error) {
-      logger.warn("[register] verification email failed", { error });
+      logger.warn("[register] verification email failed", { kind: "threw", error });
     }
 
     return NextResponse.json(registerOkBody(user.email, user.name), { status: 201 });

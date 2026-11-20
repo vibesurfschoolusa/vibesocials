@@ -46,6 +46,8 @@ export function verifyEmailBannerShown(accountSaysShow: boolean, suppressed: boo
  * R8-new-customer L3: the nudge names the address (with billing off it is the
  * only one, and a mistyped address never gets the link) and where to change
  * it, as the workspace banner does (workspace-paused-banner.tsx).
+ * R53 new-customer L2: the sign-up email can fail without the sign-up failing,
+ * and nothing records it, so the sentence claims no link was sent.
  */
 export function VerifyEmailNotice({
   email,
@@ -62,7 +64,9 @@ export function VerifyEmailNotice({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           {/* R20 pages L2: the address is one long word; let it break at phone width. */}
           <span className="min-w-0 break-words text-foreground">
-            {email ? `Verify your email: we sent a link to ${email}.` : "Verify your email: we sent you a link."}
+            {email
+              ? `Verify your email (${email}). If the link didn't arrive, press Resend email.`
+              : "Verify your email. If the link didn't arrive, press Resend email."}
           </span>
           <Button size="sm" variant="outline" loading={sending} onClick={onResend}>
             Resend email

@@ -46,9 +46,12 @@ describe("VerifyEmailNotice", () => {
   const render = (email: string | null) =>
     renderToStaticMarkup(createElement(VerifyEmailNotice, { email, sending: false, onResend: () => {} }));
 
+  // R53 new-customer L2: the sign-up email can fail (Resend refuses or times
+  // out), so the banner claims no link was sent; it is true either way.
   it("names the address, offers Resend, and links Settings, Account for a wrong one", () => {
     const html = render("maria@gmial.com");
-    expect(html).toContain("Verify your email: we sent a link to maria@gmial.com.");
+    expect(html).toContain("Verify your email (maria@gmial.com). If the link didn&#x27;t arrive, press Resend email.");
+    expect(html).not.toContain("we sent");
     expect(html).toContain("Resend email");
     expect(html).toContain("Wrong address?");
     expect(html).toMatch(/<a[^>]*href="\/settings#account"[^>]*>Change it in Settings, Account<\/a>/);
@@ -56,7 +59,8 @@ describe("VerifyEmailNotice", () => {
 
   it("without an address in the session: the sentence without one", () => {
     const html = render(null);
-    expect(html).toContain("Verify your email: we sent you a link.");
+    expect(html).toContain("Verify your email. If the link didn&#x27;t arrive, press Resend email.");
+    expect(html).not.toContain("we sent");
     expect(html).toContain("Change it in Settings, Account");
   });
 });
@@ -68,6 +72,6 @@ describe("VerifyEmailNotice at phone width", () => {
     const html = renderToStaticMarkup(
       createElement(VerifyEmailNotice, { email: "marketing.department@coastalrealtygroup.com", sending: false, onResend: () => {} }),
     );
-    expect(html).toMatch(/<span class="min-w-0 break-words text-foreground">Verify your email: we sent a link to marketing\.department@coastalrealtygroup\.com\.<\/span>/);
+    expect(html).toMatch(/<span class="min-w-0 break-words text-foreground">Verify your email \(marketing\.department@coastalrealtygroup\.com\)\. If the link didn&#x27;t arrive, press Resend email\.<\/span>/);
   });
 });

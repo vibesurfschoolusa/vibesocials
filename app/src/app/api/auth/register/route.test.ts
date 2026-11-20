@@ -423,7 +423,44 @@ describe("POST /api/auth/register", () => {
     // rejection was swallowed rather than propagated.
     expect(issueAccountTokenMock).toHaveBeenCalledWith(expect.anything(), "user-1", "email_verify");
     expect(deliverAccountEmailMock).toHaveBeenCalledTimes(1);
+    const logged = JSON.stringify(warnSpy.mock.calls);
+    expect(logged).toContain("[register] verification email failed");
+    expect(logged).toContain("threw");
+    expect(logged).not.toContain("user@example.com");
 
+    warnSpy.mockRestore();
+  });
+
+  // R53 new-customer L2: deliverAccountEmail answers false (it never throws)
+  // when Resend refuses or times out; that went unlogged here.
+  it("the verification email sent: 201 and no failure logged", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    happyPathUser();
+    deliverAccountEmailMock.mockResolvedValue(true);
+
+    const response = await POST(jsonRequest({ email: "user@example.com", password: "goodpassword", name: "New User" }));
+
+    expect(response.status).toBe(201);
+    expect(deliverAccountEmailMock).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain("verification email failed");
+    warnSpy.mockRestore();
+  });
+
+  it("the verification email not taken (false): logged by kind with no address, and the sign-up still succeeds", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    happyPathUser();
+    deliverAccountEmailMock.mockResolvedValue(false);
+
+    const response = await POST(jsonRequest({ email: "user@example.com", password: "goodpassword", name: "New User" }));
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({ id: "ok", email: "user@example.com", name: "New User" });
+    const logged = JSON.stringify(warnSpy.mock.calls);
+    expect(logged).toContain("[register] verification email failed");
+    expect(logged).toContain("not_sent");
+    expect(logged).not.toContain("user@example.com");
     warnSpy.mockRestore();
   });
 
