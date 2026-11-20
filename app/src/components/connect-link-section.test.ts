@@ -337,14 +337,19 @@ describe("Client connect link: Replace when the site offers fewer platforms", ()
 
   // R47 review: focus goes to Cancel, so the sentence is its description, and
   // it is read out through the shared announcer as it appears.
-  it("nothing can be ticked: the sentence describes Cancel and is announced", () => {
+  // R47 second look: focus lands on Cancel, which this sentence describes, so it
+  // is read then; announcing it as well read it twice.
+  it("nothing can be ticked: the sentence is Cancel's description, and is not announced as well", () => {
     const html = view({ link: LINK, available: [], selected: [], replacing: true });
-    expect(html).toMatch(/<div id="connect-link-replace-none"><p[^>]*>No platform can be connected/);
+    expect(html).toMatch(/<p id="connect-link-replace-none"[^>]*>No platform can be connected/);
     expect(html).toMatch(/<button[^>]*aria-describedby="connect-link-replace-none"[^>]*>Cancel<\/button>/);
     const source = readFileSync(join(__dirname, "connect-link-section.tsx"), "utf8");
-    expect(source).toContain("<AnnouncedText className=\"text-sm text-muted-foreground\" text={REPLACE_NONE_OFFERED_MESSAGE} />");
+    expect(source).not.toMatch(/<AnnouncedText[^>]*REPLACE_NONE_OFFERED_MESSAGE/);
+    // The card's one announced line is still the loading line; boxed Replace and Create announce nothing new.
+    expect(source.match(/<AnnouncedText /g)).toHaveLength(1);
+    expect(source).toContain('<AnnouncedText className="sr-only" text="Loading the client connect link…" />');
     const boxes = view({ link: LINK, available: ["tiktok"], selected: [], replacing: true });
-    expect(boxes).not.toContain("aria-describedby=\"connect-link-replace-none\"");
+    expect(boxes).not.toContain('aria-describedby="connect-link-replace-none"');
   });
 
   it("the panel's Replace starts from replacePlatforms, and its confirm sends what is ticked", () => {

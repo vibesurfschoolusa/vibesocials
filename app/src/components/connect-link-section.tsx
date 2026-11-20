@@ -224,10 +224,11 @@ export function ConnectLinkSectionView({
             </p>
             {/* R47 lead review: Replace is always offered; with no box to tick it says so. */}
             {replacing && available.length === 0 ? (
-              // R47 review: focus goes to Cancel, which this describes; read out as it appears.
-              <div id={REPLACE_NONE_ID}>
-                <AnnouncedText className="text-sm text-muted-foreground" text={REPLACE_NONE_OFFERED_MESSAGE} />
-              </div>
+              // R47 review: focus goes to Cancel, which this describes, so it is read
+              // then; it is not announced as well (that read it twice).
+              <p id={REPLACE_NONE_ID} className="text-sm text-muted-foreground">
+                {REPLACE_NONE_OFFERED_MESSAGE}
+              </p>
             ) : replacing ? (
               <PlatformBoxes
                 legend="The platforms the new link offers"
