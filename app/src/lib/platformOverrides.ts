@@ -156,7 +156,7 @@ export function platformCaptionCounter(
         length: preview.byteCount ?? 0,
         max: preview.byteLimit ?? limit,
         over: preview.willTruncate,
-        label: `${bytes}${incl}`,
+        label: bytes,
         ...(preview.byteHint ? { hint: preview.byteHint } : {}),
       };
     }

@@ -44,12 +44,33 @@ describe("YouTube's description rule", () => {
     expect(fitYouTubeDescription(caption)).toBe(`${"\u{1F30A}".repeat(1249)}…`);
   });
 
-  it("names why the number jumps only when something counts as more than one", () => {
-    expect(youtubeCountHint("plain words")).toBeNull();
-    expect(youtubeCountHint("café \u{1F30A}")).toBe("YouTube counts most emoji as 4 and an accented letter as 2");
-    expect(youtubeCountHint("I <3 waves")).toBe("YouTube counts a < or > as 3");
-    expect(youtubeCountHint("I <3 café")).toBe(
-      "YouTube counts most emoji as 4 and an accented letter as 2, and a < or > as 3",
-    );
+  // R52 fix review L1: the hint is true for every text that shows it. Each
+  // sample's characters really count as the hint says.
+  const GENERAL = "YouTube counts some characters as more than one: accented letters and curly quotes as 2 or 3, emoji as 3 or more";
+  const counted = (text: string) => youtubeDescriptionLength(text);
+
+  it("ASCII only: no hint", () => {
+    expect(youtubeCountHint("plain words, 'straight' quotes & plain ASCII")).toBeNull();
+  });
+
+  it.each([
+    ["a curly apostrophe", "We\u2019re out", "\u2019", 3],
+    ["an accented letter", "Caf\u00e9", "\u00e9", 2],
+    ["one simple emoji", "Waves \u{1F30A}", "\u{1F30A}", 4],
+    ["a joined surfer", "\u{1F3C4}\u200D\u2642\uFE0F", "\u{1F3C4}\u200D\u2642\uFE0F", 13],
+    ["a joined family", "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}", "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}", 25],
+    ["a skin tone", "\u{1F44D}\u{1F3FD}", "\u{1F44D}\u{1F3FD}", 8],
+    ["a flag", "\u{1F1FA}\u{1F1F8}", "\u{1F1FA}\u{1F1F8}", 8],
+    ["a red heart", "\u2764\uFE0F", "\u2764\uFE0F", 6],
+  ] as const)("%s: the general hint, and it counts as the hint says", (_kind, text, character, size) => {
+    expect(youtubeCountHint(text)).toBe(GENERAL);
+    expect(counted(character)).toBe(size);
+    expect(size).toBeGreaterThan(1);
+  });
+
+  it("names < and > only when the text has one", () => {
+    expect(youtubeCountHint("I <3 waves")).toBe("YouTube counts < and > as 3");
+    expect(counted("<")).toBe(3);
+    expect(youtubeCountHint("I <3 caf\u00e9")).toBe(`${GENERAL}, and < or > as 3`);
   });
 });

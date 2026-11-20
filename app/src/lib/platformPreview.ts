@@ -66,6 +66,12 @@ export interface PlatformPreviewResult {
   byteLimit?: number;
   /** Why `byteCount` runs ahead of the letters, when a character counts as more than one. */
   byteHint?: string;
+  /**
+   * True when `byteCount` includes the workspace's footer. YouTube always keeps
+   * its footer (captionFooter.ts drops none without a character limit), so
+   * this holds over the limit too, where the cut takes the footer.
+   */
+  byteIncludesFooter?: boolean;
   /** True when `rendered` is shorter than the full (pre-truncation) text. */
   truncated: boolean;
   /**
@@ -79,12 +85,15 @@ export interface PlatformPreviewResult {
 }
 
 /**
- * "4,812 / 5,000" for a platform counted in bytes (YouTube), or null. The
- * caption counter and the preview card both show this, so they can't differ.
+ * "4,812 / 5,000 incl. footer" for a platform counted in bytes (YouTube), or
+ * null. The caption counter and the preview card both show this, so they
+ * can't differ.
  */
 export function byteCountText(preview: PlatformPreviewResult): string | null {
   if (preview.byteCount === undefined || preview.byteLimit === undefined) return null;
-  return `${preview.byteCount.toLocaleString("en-US")} / ${preview.byteLimit.toLocaleString("en-US")}`;
+  return `${preview.byteCount.toLocaleString("en-US")} / ${preview.byteLimit.toLocaleString("en-US")}${
+    preview.byteIncludesFooter ? " incl. footer" : ""
+  }`;
 }
 
 /**
@@ -135,6 +144,7 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
       byteCount,
       byteLimit: utf8ByteLimit,
       ...(byteHint ? { byteHint } : {}),
+      byteIncludesFooter: buildCaptionWithFooter("", input.user ?? {}, input.platform) !== "",
       truncated: willTruncate,
       willTruncate,
     };

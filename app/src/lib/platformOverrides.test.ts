@@ -346,7 +346,7 @@ describe("platformCaptionCounter and adaptMaxLength on YouTube", () => {
     expect(counter.length).toBe(5001);
     expect(counter.over).toBe(true);
     expect(counter.label).toBe("5,001 / 5,000");
-    expect(counter.hint).toBe("YouTube counts most emoji as 4 and an accented letter as 2");
+    expect(counter.hint).toBe("YouTube counts some characters as more than one: accented letters and curly quotes as 2 or 3, emoji as 3 or more");
   });
 
   it("names the < and > swap when the text has one", () => {
@@ -355,7 +355,7 @@ describe("platformCaptionCounter and adaptMaxLength on YouTube", () => {
       max: 5000,
       over: false,
       label: "12 / 5,000",
-      hint: "YouTube counts a < or > as 3",
+      hint: "YouTube counts < and > as 3",
     });
   });
 
@@ -422,5 +422,31 @@ describe("platformCaptionCounter and adaptMaxLength on other platforms, unchange
       label: longLabel,
     });
     expect(adaptMaxLength(platform, user)).toBe(adapt);
+  });
+});
+
+// R52 fix review L2: YouTube always posts and counts its footer, so the label
+// says "incl. footer" whenever there is one, over the limit too.
+describe("platformCaptionCounter on YouTube: incl. footer", () => {
+  const footer = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf" };
+
+  it("under the limit with a footer", () => {
+    const counter = platformCaptionCounter("hello", "youtube", footer);
+    expect(counter.over).toBe(false);
+    expect(counter.label).toBe(`${buildCaptionWithFooter("hello", footer, "youtube").length} / 5,000 incl. footer`);
+  });
+
+  it("over the limit with a footer: still incl. footer", () => {
+    const counter = platformCaptionCounter("a".repeat(5500), "youtube", footer);
+    expect(counter.over).toBe(true);
+    const length = buildCaptionWithFooter("a".repeat(5500), footer, "youtube").length;
+    expect(counter.label).toBe(`${length.toLocaleString("en-US")} / 5,000 incl. footer`);
+  });
+
+  it("no footer: no incl. footer, under or over", () => {
+    for (const user of [null, {}, { companyWebsite: "  ", defaultHashtags: "" }]) {
+      expect(platformCaptionCounter("hello", "youtube", user).label).toBe("5 / 5,000");
+      expect(platformCaptionCounter("a".repeat(5500), "youtube", user).label).toBe("5,500 / 5,000");
+    }
   });
 });

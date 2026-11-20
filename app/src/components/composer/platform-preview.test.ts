@@ -125,7 +125,7 @@ describe("PlatformPreviewList count line", () => {
     ["I <3 waves", null],
   ] as const)("youtube: the counter's number, limit and hint (%#)", (caption, footer) => {
     const counter = platformCaptionCounter(caption, "youtube", footer);
-    const expected = [line(`${counter.length.toLocaleString("en-US")} / ${counter.max.toLocaleString("en-US")}`)];
+    const expected = [line(counter.label)];
     if (counter.hint) expected.push(line(counter.hint.replace(/</g, "&lt;").replace(/>/g, "&gt;")));
     expect(countLines(card("youtube", caption, footer))).toEqual(expected);
     expect(counter.max).toBe(5000);
@@ -134,7 +134,28 @@ describe("PlatformPreviewList count line", () => {
   it("youtube: an emoji-heavy post reads 5,001 / 5,000 with the hint beneath", () => {
     expect(countLines(card("youtube", `${"Waves \u{1F30A}".repeat(500)}!`, null))).toEqual([
       line("5,001 / 5,000"),
-      line("YouTube counts most emoji as 4 and an accented letter as 2"),
+      line("YouTube counts some characters as more than one: accented letters and curly quotes as 2 or 3, emoji as 3 or more"),
     ]);
+  });
+});
+
+// R52 fix review L2: the card's YouTube line agrees with the counter on
+// "incl. footer", over the limit too.
+describe("PlatformPreviewList YouTube count line: incl. footer", () => {
+  const footer = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf" };
+  const youtubeLine = (caption: string, user: CaptionFooterUser | null) =>
+    (renderToStaticMarkup(
+      createElement(PlatformPreviewList, { platforms: ["youtube"], caption, user, mediaUrl: null, mediaMimeType: null }),
+    ).match(/<p class="text-xs text-muted-foreground">[^<]*<\/p>/g) ?? [])[1];
+
+  it.each([
+    ["under, with a footer", "hello", footer],
+    ["over, with a footer", "a".repeat(5500), footer],
+    ["under, no footer", "hello", null],
+    ["over, no footer", "a".repeat(5500), null],
+  ] as const)("%s: the counter's label", (_case, caption, user) => {
+    const label = platformCaptionCounter(caption, "youtube", user).label;
+    expect(youtubeLine(caption, user)).toBe(`<p class="text-xs text-muted-foreground">${label}</p>`);
+    expect(label.endsWith(" incl. footer")).toBe(user !== null);
   });
 });
