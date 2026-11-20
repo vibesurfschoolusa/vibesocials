@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CUT_MARK,
+  FILTERED_VALUE,
   LINK_TOKEN,
+  MAX_REDACTED_LENGTH,
   SENTRY_DATA_COLLECTION,
   redactBreadcrumb,
   redactForSentry,
@@ -694,5 +697,58 @@ describe("redactForSentry: an encoded space never ends a filtered value", () => 
 
   it("a token hidden by encoding is still redacted", () => {
     expect(redactForSentry({ message: "%2Fc%2FHIDDEN-SECRET" }).message).toBe("/c/[token]");
+  });
+});
+
+// R46 security L1: each pattern ran from every "/" or "?" to the end of the
+// text, so the time grew with the square of its length, on text anyone can send.
+describe("redaction time on long crafted text", () => {
+  function timed(item: unknown): number {
+    const started = performance.now();
+    redactForSentry(item);
+    return performance.now() - started;
+  }
+
+  it("40,000 slashes redact in under 50 ms", () => {
+    expect(timed({ message: "/".repeat(40_000) })).toBeLessThan(50);
+  });
+
+  it("40,000 question marks redact in under 50 ms", () => {
+    expect(timed({ message: "?".repeat(40_000) })).toBeLessThan(50);
+  });
+
+  it("a 15 KB /api/media?//// URL event redacts in under 50 ms", () => {
+    const url = `/api/media?${"/".repeat(15_000)}`;
+    const event = {
+      transaction: `GET ${url}`,
+      request: { url: `https://vibesocials.wtf${url}` },
+      exception: { values: [{ value: `Bad request ${url}` }] },
+      contexts: { trace: { data: { "http.target": url } } },
+    };
+    expect(timed(event)).toBeLessThan(50);
+  });
+
+  it("a long string is cut, says so, and keeps nothing a token could hide in", () => {
+    const text = `${"a".repeat(5_000)} /c/LONG-SECRET?code=LONG-CODE`;
+    const out = redactForSentry({ message: text }).message;
+    expect(out.length).toBeLessThan(text.length);
+    expect(out.endsWith(CUT_MARK)).toBe(true);
+    expect(out).not.toContain("LONG-SECRET");
+    expect(out).not.toContain("LONG-CODE");
+  });
+
+  it("a cut inside a link token or a query value still hides what is left of it", () => {
+    // The cut falls a few characters into each secret.
+    for (const tail of ["/c/SECRETTOKENVALUE", "?code=SECRETCODEVALUE", "/r#SECRETFRAGMENT"]) {
+      const text = `${"a".repeat(MAX_REDACTED_LENGTH - 10)} ${tail}`;
+      const out = redactForSentry({ message: text }).message;
+      expect(out, tail).not.toMatch(/SEC/);
+    }
+  });
+
+  it("keeps a fragment's path and a query name, as before", () => {
+    expect(redactLinkTokens("see /a/b/c#frag and https://x.test/p#q")).toBe("see /a/b/c and https://x.test/p");
+    expect(redactLinkTokens("/p??a=1&b/c=2")).toBe(`/p??a=${FILTERED_VALUE}&b/c=${FILTERED_VALUE}`);
+    expect(redactLinkTokens("/p?a?b=1")).toBe(`/p?a?b=${FILTERED_VALUE}`);
   });
 });

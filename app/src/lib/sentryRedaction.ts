@@ -169,17 +169,25 @@ export const LINK_TOKEN = "[token]";
 const LINK_TOKEN_PATH =
   /(^|\s|\/\/[^/\s?#]+)(\/(?:c|u|v|join|api\/(?:connect-link|review-link|upload-link|invites))\/)[^/?#\s]+/g;
 
-/** A URL's or a path's #fragment: everything from "#" to the next space. */
-const URL_FRAGMENT = /((?:https?:\/\/|\/)[^\s#]*)#\S*/gi;
+/**
+ * A URL's or a path's #fragment: everything from "#" to the next space, after a
+ * path. R46 security L1: the part kept starts at the last "/" before the "#"
+ * and holds no "/", so no "/" is scanned twice and the time stays linear.
+ */
+const URL_FRAGMENT = /(\/[^\s#/]*)#\S*/g;
 
-/** One query value: `?name=` or `&name=`, then the value up to "&", "#" or a space. */
-const QUERY_VALUE = /([?&][^=&#\s]+=)([^&#\s]*)/g;
+/**
+ * One query value: `?name=` or `&name=`, then the value up to "&", "#" or a
+ * space. R46 security L1: the name holds no "?" (nor "&"), so a run of them is
+ * scanned once, not once from each.
+ */
+const QUERY_VALUE = /([?&][^=&#\s?]+=)([^&#\s]*)/g;
 /**
  * The same, in text that was decoded: a space there was a %20 or a "+" inside
  * the value, so only "&" or "#" ends it (R45 review L2: "?q=jane%20doe" kept
  * "doe" past the filter).
  */
-const DECODED_QUERY_VALUE = /([?&][^=&#\s]+=)([^&#]*)/g;
+const DECODED_QUERY_VALUE = /([?&][^=&#\s?]+=)([^&#]*)/g;
 
 /**
  * A link page's dynamic segment in Next's router state (the Next-Router-State-Tree
@@ -275,8 +283,27 @@ const SDK_METADATA = "sdkProcessingMetadata";
 /** `name=value&name=value`, with no space, "/" before the first "=", "?" or "#". */
 const BARE_QUERY = /^[^\s/?#=&]+=[^\s#]*$/;
 
+/**
+ * R46 security L1: every string is cut to this length before any pattern
+ * runs, so no text anyone can send makes an event slow to redact. A cut never
+ * shows more: what is left of a token or a value is still redacted.
+ */
+export const MAX_REDACTED_LENGTH = 4096;
+/** Ends a string that was cut. */
+export const CUT_MARK = "…[cut]";
+
+function cutLong(text: string): string {
+  if (text.length <= MAX_REDACTED_LENGTH) return text;
+  let end = MAX_REDACTED_LENGTH;
+  // Never half a surrogate pair.
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${text.slice(0, end)}${CUT_MARK}`;
+}
+
 /** `text` through redactLinkTokens, and decoded first when only the decoded form shows a token. */
-function redactString(text: string): string {
+function redactString(input: string): string {
+  const text = cutLong(input);
   // A bare query string (an event's request.query_string) has no "?" for QUERY_VALUE to start at.
   if (BARE_QUERY.test(text)) return redactQueryValues(`?${text}`).slice(1);
   const redacted = redactLinkTokens(text);
