@@ -9,6 +9,14 @@ export const SEND_AGAIN_MAX_AGE_DAYS = 7;
 export const TOO_OLD_TO_SEND_MESSAGE =
   "This post was not sent, and it is too old to send again. Create it again if you still want it.";
 
+/**
+ * R49 pages-b L1: the Story half of a Feed and Story post has its own card;
+ * its feed post may be out, so its step creates the Story alone (Create's
+ * "post to" choice), not the whole post again.
+ */
+export const STORY_TOO_OLD_TO_SEND_MESSAGE =
+  "This Story was not sent, and it is too old to send again. If you still want it, create a new post with Story chosen, not Feed and Story, so the feed post is not sent twice.";
+
 /** The route's refusal for a post older than the rule allows. */
 export const TOO_OLD_TO_SEND_ERROR = "This post is too old to send again. Create it again.";
 

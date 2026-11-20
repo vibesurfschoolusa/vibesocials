@@ -20,7 +20,7 @@ import { answerLostText } from "@/lib/answerLost";
 import { dispatchFailedText } from "@/lib/composerSubmitOutcome";
 import { postActionRefusal, sendActionRequest } from "@/lib/queueActions";
 import { memberReconnectMessage, NOT_SENT_MESSAGE, sentenceForRecipient } from "@/lib/publishFailureText";
-import { sendAgainTooOld, TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
+import { sendAgainTooOld, STORY_TOO_OLD_TO_SEND_MESSAGE, TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
 import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
 import { retryAllPlan, type LeftOut } from "@/lib/retryAll";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
@@ -211,6 +211,15 @@ export function retryNotSentText(label: string): string {
  * and its own Send again (it sends only this half), so its card names it.
  */
 export const STORY_NOT_SENT_MESSAGE = NOT_SENT_MESSAGE.replace(/^This post/, "This Story");
+
+/**
+ * R49 pages-b L1, one rule: each not-sent sentence on the card has a Story
+ * form, chosen by the card's storyHalf, the too-old one included.
+ */
+export function unsentLine(tooOld: boolean, storyHalf: boolean): string {
+  if (tooOld) return storyHalf ? STORY_TOO_OLD_TO_SEND_MESSAGE : TOO_OLD_TO_SEND_MESSAGE;
+  return storyHalf ? STORY_NOT_SENT_MESSAGE : NOT_SENT_MESSAGE;
+}
 
 export const SEND_AGAIN_NOT_SENT =
   "We couldn't reach Vibe Socials, so the post wasn't sent. Check your connection and press Send again.";
@@ -678,7 +687,7 @@ export function PostJobCard({
           record why, so one sentence that is true for every cause. */}
       {canSendAgain || tooOldToSend ? (
         <p className="mt-3 rounded-[var(--radius)] border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-foreground">
-          {tooOldToSend ? TOO_OLD_TO_SEND_MESSAGE : job.storyHalf ? STORY_NOT_SENT_MESSAGE : NOT_SENT_MESSAGE}
+          {unsentLine(tooOldToSend, job.storyHalf === true)}
         </p>
       ) : null}
 

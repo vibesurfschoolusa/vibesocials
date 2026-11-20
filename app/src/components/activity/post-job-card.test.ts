@@ -11,7 +11,7 @@ import type { PostJobDTO, PostJobResultDTO } from "@/lib/postsDto";
 import type { Platform } from "@prisma/client";
 
 import { NOT_SENT_MESSAGE } from "@/lib/publishFailureText";
-import { TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
+import { STORY_TOO_OLD_TO_SEND_MESSAGE, TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
 import { answerLostText } from "@/lib/answerLost";
 import { dispatchFailedText } from "@/lib/composerSubmitOutcome";
 
@@ -221,6 +221,32 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       expect(html).not.toContain("Send again</button>");
       expect(html).toContain(TOO_OLD_TO_SEND_MESSAGE);
       expect(html).not.toContain(NOT_SENT_MESSAGE);
+    });
+
+    // R49 pages-b L1: a Story half too old to send again says it is the Story,
+    // and what to create, so the feed post is not made a second time.
+    it("names the Story on a too-old Story half's card, and says to create the Story alone", () => {
+      const html = render({
+        status: "failed",
+        results: [],
+        storyHalf: true,
+        createdAt: "2026-01-18T10:00:00.000Z",
+        scheduledFor: null,
+      });
+      expect(html).not.toContain("Send again</button>");
+      expect(html).toContain(STORY_TOO_OLD_TO_SEND_MESSAGE);
+      expect(STORY_TOO_OLD_TO_SEND_MESSAGE).toMatch(/^This Story was not sent, and it is too old to send again\./);
+      expect(STORY_TOO_OLD_TO_SEND_MESSAGE).toContain("with Story chosen, not Feed and Story");
+      expect(html).not.toContain(TOO_OLD_TO_SEND_MESSAGE);
+      expect(html).not.toContain("This Story was not sent. Use Send again");
+    });
+
+    it("keeps the too-old sentence of a feed post as it was", () => {
+      const html = render({ status: "failed", results: [], createdAt: "2026-01-18T10:00:00.000Z", scheduledFor: null });
+      expect(html).toContain(
+        "This post was not sent, and it is too old to send again. Create it again if you still want it.",
+      );
+      expect(html).not.toContain(STORY_TOO_OLD_TO_SEND_MESSAGE);
     });
 
     it("shows the button only on a failed post with no results", () => {
