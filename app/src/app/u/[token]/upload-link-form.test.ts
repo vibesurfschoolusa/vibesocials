@@ -56,13 +56,41 @@ describe("UploadSummary, after the files were sent", () => {
 
   // Decided by the kind: a refused file whose sentence happens to mention the
   // connection is still not blamed on it.
-  it("refused only, one reason: the server's reason, no connection advice", () => {
+  it("refused only: no connection advice", () => {
     const odd: ClientFileFailure = { kind: "refused", message: "Check your connection settings in the link." };
     const html = render(0, [linkOff, linkOff]);
     expect(html).toContain('role="alert"');
-    expect(html).toContain("None of the 2 files were sent. This link is no longer active. Ask for a new one.");
     expect(html).not.toContain("connection");
     expect(render(0, [odd])).not.toContain("then try again with the button below");
+  });
+
+  // R49 client-journey L1: a one-file sentence after "None of the 3 files"
+  // read as one photo to fix. With more than one failure the summary points
+  // at each file, whose row keeps its own sentence; one file keeps its reason.
+  describe("several files refused for the same reason", () => {
+    const shrink: ClientFileFailure = {
+      kind: "file",
+      message: "We couldn't make this photo smaller. Save it as a smaller JPEG, then press Send more and choose it again.",
+    };
+
+    it("three failed shrinks: the summary never speaks of one photo", () => {
+      const html = render(0, [shrink, shrink, shrink]);
+      expect(html).toContain("None of the files were sent. See the reason under each file.");
+      expect(html).not.toContain("this photo");
+      expect(html).not.toContain("choose it again");
+    });
+
+    it("three of the server's link-off sentence: still reads right", () => {
+      const html = render(0, [linkOff, linkOff, linkOff]);
+      expect(html).toContain("None of the files were sent. See the reason under each file.");
+      expect(html).not.toContain("connection");
+    });
+
+    it("one failed shrink: its own reason, as before", () => {
+      expect(render(0, [shrink])).toContain(
+        "The file wasn&#x27;t sent. We couldn&#x27;t make this photo smaller. Save it as a smaller JPEG, then press Send more and choose it again.",
+      );
+    });
   });
 
   it("gives one refused file's reason", () => {

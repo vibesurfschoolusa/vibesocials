@@ -147,11 +147,11 @@ function nothingSentText(failures: ClientFileFailure[]): string {
       : `None of the ${failures.length} files arrived. The reason is under each file.`;
     return `${reason} Check your connection, then try again with the button below.`;
   }
-  // A refusal is not the connection's fault: say its reason when it is the only one.
-  const reasons = new Set(failures.map((failure) => `${failure.kind}:${failure.message}`));
-  if (reasons.size === 1) {
-    return `${one ? "The file wasn't sent." : `None of the ${failures.length} files were sent.`} ${failures[0].message}`;
-  }
+  // A refusal is not the connection's fault: one file's reason is said here.
+  // R49 client-journey L1: with several, each row keeps its own sentence, since
+  // a sentence written for one file ("this photo… choose it again") read as
+  // one file to fix when it summed up several.
+  if (one) return `The file wasn't sent. ${failures[0].message}`;
   return "None of the files were sent. See the reason under each file.";
 }
 
