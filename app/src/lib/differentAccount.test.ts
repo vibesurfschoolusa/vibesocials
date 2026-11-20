@@ -83,9 +83,12 @@ describe("different account on reconnect", () => {
   it("Settings, Instagram, not offered in the list: the Facebook sign-in that works", () => {
     const sentence = choiceDifferentAccountMessage("instagram", "@otherbiz", "@surfschool", false);
     expect(sentence).toBe(
-      "You chose @otherbiz; the Page linked to @surfschool wasn't listed. To reconnect it, sign in with a Facebook account that manages that Page and tick it when Facebook lists the Pages (and its Instagram account, if listed), or use Switch account to change to @otherbiz.",
+      "You chose @otherbiz; @surfschool wasn't listed. To reconnect it, sign in with a Facebook account that manages the Page linked to @surfschool and tick that Page when Facebook lists the Pages (and its Instagram account, if listed), or use Switch account to change to @otherbiz.",
     );
     expect(sentence).not.toMatch(/signed in to @otherbiz|sign in to @surfschool/i);
+    // R52 fix review L1: the list shows Instagram accounts, and "offered" is
+    // decided by the account's id, so the Page itself may have come back.
+    expect(sentence).not.toMatch(/Page linked to @surfschool wasn't/);
   });
 
   // R52 client-journey L1: the owner's email tells the client to tick the
@@ -246,6 +249,16 @@ describe("a refused choice from a list", () => {
   });
 
   // R52 client-journey L1: the link choice's 409 carries the tick step when the Page wasn't offered.
+  // R52 fix review L1: the client's 409 when the Instagram account wasn't
+  // offered claims nothing about the Page; it gives the step.
+  it("the client's page, Instagram not offered: no claim the Page was missing, the full step", () => {
+    const sentence = linkChoiceDifferentAccountMessage("instagram", "@surfschool", false);
+    expect(sentence).not.toMatch(/wasn't listed|didn't return/);
+    expect(sentence).toContain(
+      "If you manage the Page linked to @surfschool, press Reconnect, sign in with a Facebook account that manages it and tick it when Facebook lists the Pages (and its Instagram account, if listed).",
+    );
+  });
+
   it("the client's page, Instagram and Facebook Page: offered, choose it; not offered, the tick step", () => {
     for (const platform of ["instagram", "facebook_page"] as const) {
       expect(linkChoiceDifferentAccountMessage(platform, "surfschool", true)).toBe(

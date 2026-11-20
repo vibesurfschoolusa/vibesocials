@@ -139,14 +139,13 @@ export function linkedInReconnectSignInStep(pageName: string): string {
  */
 export function settingsDifferentAccountMessage(platform: Platform, signedInName: string, connectedName: string): string {
   // Facebook Page and Instagram (through Facebook) are chosen from a list
-  // after the sign-in. For Instagram the page named is the Facebook Page, so
-  // the step can call it "that Page".
-  const entry = PAGE_ACCOUNT[platform];
-  const what = entry?.listsPages
-    ? `You chose ${signedInName}; ${managedPage(platform, connectedName)} wasn't listed.`
+  // after the sign-in. R52 fix review L1: it names what the list shows. For
+  // Instagram that is the accounts (offered is decided by the account's id),
+  // so the Page itself may have come back; the step names it in full.
+  const what = PAGE_ACCOUNT[platform]?.listsPages
+    ? `You chose ${signedInName}; ${connectedName} wasn't listed.`
     : `You signed in to ${signedInName}, not ${connectedName}.`;
-  const step = reconnectStep(platform, connectedName, entry?.linkedPage ? "that Page" : undefined);
-  return `${what} ${step}, or use Switch account to change to ${signedInName}.`;
+  return `${what} ${reconnectStep(platform, connectedName)}, or use Switch account to change to ${signedInName}.`;
 }
 
 /**
