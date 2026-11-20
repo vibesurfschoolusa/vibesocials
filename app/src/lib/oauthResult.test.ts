@@ -246,8 +246,25 @@ describe("describeOAuthResult — real callback-route codes", () => {
       "Facebook didn't return a Page. Your existing connection is unchanged.",
     );
     expect(describeOAuthResult({ error: "instagram_no_instagram_account", success: null }, { shown: () => "connected" })!.message).toBe(
-      `${"Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it first."} Your existing connection is unchanged.`,
+      "Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it in your Page's settings on Facebook, under Linked accounts. Your existing connection is unchanged.",
     );
+  });
+
+  // R53 fix review L1: with no step after it, "link it first" had nothing to
+  // come first to; the link step then says where, on its own.
+  it("Instagram's link step: 'first' only when the button step follows, on Settings and on /c", () => {
+    const settings = (shown: ShownControl) =>
+      describeOAuthResult({ error: "instagram_no_instagram_account", success: null }, { shown: () => shown })!.message;
+    const link = (shown: ShownControl) =>
+      describeConnectLinkResult(new URLSearchParams({ error: "instagram_no_instagram_account" }), { shown: () => shown })!.message;
+    for (const message of [settings("connect"), settings("reconnect"), link("connect"), link("reconnect")]) {
+      expect(message).toContain("isn't linked to your Page yet, link it first. ");
+      expect(message).toMatch(/link it first\. (Click|Press) (Connect again|Reconnect), sign in/);
+    }
+    for (const message of [settings("connected"), link("connected")]) {
+      expect(message).toBe("Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it in your Page's settings on Facebook, under Linked accounts. Your existing connection is unchanged.");
+      expect(message).not.toContain("first");
+    }
   });
 
   it("the same two on the connect link page, with its press", () => {

@@ -155,11 +155,16 @@ const CAUSE_FIXES: Record<string, string> = {
  * before (`first`), then the steps in the order they are done: the button,
  * then the sign-in and the tick in Facebook's list (lib/differentAccount.ts).
  */
-const SIGN_IN_CAUSES: Record<string, { known: string; first?: string; platform: Platform; name: string }> = {
+const SIGN_IN_CAUSES: Record<string, { known: string; first?: { before: string; alone: string }; platform: Platform; name: string }> = {
   facebook_page_no_pages: { known: "Facebook didn't return a Page.", platform: "facebook_page", name: "your Facebook Page" },
   instagram_no_instagram_account: {
     known: "Facebook didn't return a Page with a linked Instagram account.",
-    first: "If your Instagram professional account isn't linked to your Page yet, link it first.",
+    // R53 fix review L1: "first" only when the button step follows; alone, it
+    // says where (Facebook's Page settings call it Linked accounts).
+    first: {
+      before: "If your Instagram professional account isn't linked to your Page yet, link it first.",
+      alone: "If your Instagram professional account isn't linked to your Page yet, link it in your Page's settings on Facebook, under Linked accounts.",
+    },
     platform: "instagram",
     name: "your Instagram account",
   },
@@ -169,7 +174,7 @@ const SIGN_IN_CAUSES: Record<string, { known: string; first?: string; platform: 
 function signInCauseMessage(code: string, shown: ShownControl, press: "click" | "press"): string {
   const { known, first, platform, name } = SIGN_IN_CAUSES[code];
   const button = signInButton(shown);
-  const parts = [known, ...(first ? [first] : [])];
+  const parts = [known, ...(first ? [button ? first.before : first.alone] : [])];
   if (button) parts.push(`${capitalized(pressAgain(press, button))}, ${signInTo(platform, name)}.`);
   if (shown !== "connect") parts.push("Your existing connection is unchanged.");
   return parts.join(" ");
