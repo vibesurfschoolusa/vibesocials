@@ -22,8 +22,16 @@ describe("captionTooLongMessage", () => {
     expect(captionTooLongMessage("baseCaption")).toBe(
       "baseCaption is too long (max 10,000 characters).",
     );
-    expect(captionTooLongMessage("perPlatformOverrides.x")).toBe(
-      "perPlatformOverrides.x is too long (max 10,000 characters).",
+  });
+
+  // R51 publishing-flow L2: a platform's own caption is named in plain words, with the step.
+  it("names a platform's own caption by the platform's name", () => {
+    expect(captionTooLongMessage("perPlatformOverrides.x")).toBe("X's own caption is too long: keep it to 10,000 characters.");
+    expect(captionTooLongMessage("perPlatformOverrides.facebook_page")).toBe(
+      "Facebook Page's own caption is too long: keep it to 10,000 characters.",
+    );
+    expect(captionTooLongMessage("perPlatformOverrides.instagram")).toBe(
+      "Instagram's own caption is too long: keep it to 10,000 characters.",
     );
   });
 

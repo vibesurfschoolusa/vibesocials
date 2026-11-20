@@ -743,7 +743,7 @@ describe("PATCH /api/posts/[postJobId] — caption length cap and override keys 
     expect(res.status).toBe(400);
     await expect(res.json()).resolves.toEqual({
       code: "CAPTION_TOO_LONG",
-      error: "perPlatformOverrides.x is too long (max 10,000 characters).",
+      error: "X's own caption is too long: keep it to 10,000 characters.",
     });
     expectNothingRead();
   });

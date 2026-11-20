@@ -1,6 +1,7 @@
 import type { Platform } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
+import { findOverlongCaption } from "./captionLimits";
 import { buildCaptionWithFooter } from "./captionFooter";
 import { buildPlatformPreview } from "./platformPreview";
 
@@ -301,5 +302,25 @@ describe("platformCaptionCounter and adaptMaxLength with tracking tags", () => {
     }
     // On X the tagged link weighs 23 like the plain one.
     expect(platformCaptionCounter("hello", "x", on)).toEqual(platformCaptionCounter("hello", "x", off));
+  });
+});
+
+// R51 publishing-flow L2: with no limit of its own a platform's caption meets
+// only the routes' 10,000 cap, so the counter counts as they do (UTF-16 units).
+describe("platformCaptionCounter without a platform limit", () => {
+  it.each(["facebook_page", "youtube"] as const)("%s: 9,200 letters and 500 emoji read over", (platform) => {
+    const counter = platformCaptionCounter(`${"a".repeat(9200)}${"🌊".repeat(500)}`, platform, null);
+    expect(counter.length).toBe(10_200);
+    expect(counter.over).toBe(true);
+    expect(counter.label).toBe("10,200 / 10,000");
+  });
+
+  it.each(["facebook_page", "youtube"] as const)("%s: the counter and the server agree at 10,000 and 10,001 units", (platform) => {
+    for (const text of [`${"a".repeat(9998)}🌊`, `${"a".repeat(9999)}🌊`, "a".repeat(10_000), "a".repeat(10_001)]) {
+      const serverRefuses = findOverlongCaption({ perPlatformOverrides: { [platform]: text } }) !== null;
+      expect(platformCaptionCounter(text, platform, null).over).toBe(serverRefuses);
+    }
+    expect(platformCaptionCounter("a".repeat(10_000), platform, null).over).toBe(false);
+    expect(platformCaptionCounter("a".repeat(10_001), platform, null).over).toBe(true);
   });
 });

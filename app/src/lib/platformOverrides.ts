@@ -1,7 +1,7 @@
 import type { Platform } from "@prisma/client";
 
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
-import { MAX_CAPTION_CHARS } from "@/lib/captionLimits";
+import { captionCounter, MAX_CAPTION_CHARS } from "@/lib/captionLimits";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { buildPlatformPreview } from "@/lib/platformPreview";
 import { PLATFORM_ORDER } from "@/lib/platforms";
@@ -121,7 +121,7 @@ export interface PlatformCaptionCounter {
  * text that will be posted (buildPlatformPreview: footer parts that publishing
  * drops are left out, @-mentions too on X, X by its weight) against the limit,
  * and is over exactly when the preview says the post will be shortened. Without
- * a limit: the caption against the app's 10,000-character cap.
+ * a limit: the caption against the app's 10,000-character cap, counted as the routes count it.
  */
 export function platformCaptionCounter(
   text: string,
@@ -144,7 +144,9 @@ export function platformCaptionCounter(
       }`,
     };
   }
-  const length = platformLength(text, platform);
+  // R51 publishing-flow L2: here only the routes' cap applies, so this counts
+  // as findOverlongCaption does (UTF-16 units), and is red exactly when it refuses.
+  const length = captionCounter(text).length;
   const max = MAX_CAPTION_CHARS;
   return {
     length,

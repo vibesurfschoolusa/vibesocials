@@ -1978,7 +1978,24 @@ describe("POST /api/posts — caption length cap and override keys (2026-11-01 s
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       code: "CAPTION_TOO_LONG",
-      error: "perPlatformOverrides.x is too long (max 10,000 characters).",
+      error: "X's own caption is too long: keep it to 10,000 characters.",
+    });
+    expectNothingWritten();
+  });
+
+  // R51 publishing-flow L2: Facebook Page has no limit of its own, and Instagram's
+  // preview only says "Will be shortened"; both meet the cap in plain words.
+  it.each([
+    ["facebook_page", "Facebook Page"],
+    ["instagram", "Instagram"],
+  ])("names %s's own caption over the cap in plain words", async (platform, name) => {
+    const caption = `${"a".repeat(9200)}${"🌊".repeat(500)}`;
+    const response = await POST(jsonRequest(blobBody({ perPlatformOverrides: { [platform]: caption } })));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      code: "CAPTION_TOO_LONG",
+      error: `${name}'s own caption is too long: keep it to 10,000 characters.`,
     });
     expectNothingWritten();
   });
@@ -1994,7 +2011,7 @@ describe("POST /api/posts — caption length cap and override keys (2026-11-01 s
     expect(override.status).toBe(400);
     await expect(override.json()).resolves.toMatchObject({
       code: "CAPTION_TOO_LONG",
-      error: "perPlatformOverrides.linkedin is too long (max 10,000 characters).",
+      error: "LinkedIn's own caption is too long: keep it to 10,000 characters.",
     });
     expectNothingWritten();
   });

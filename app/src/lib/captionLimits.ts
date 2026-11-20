@@ -1,6 +1,6 @@
 import type { Platform } from "@prisma/client";
 
-import { PLATFORM_ORDER } from "@/lib/platforms";
+import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 
 /**
  * 2026-11-01 scale audit (jobs, event size): the one cap on a caption's length, shared by
@@ -20,13 +20,21 @@ export const MAX_CAPTION_CHARS = 10_000;
 /** `code` of the 400 an over-long caption gets. */
 export const CAPTION_TOO_LONG_CODE = "CAPTION_TOO_LONG";
 
+const OVERRIDE_FIELD = "perPlatformOverrides.";
+
 /**
  * The 400 `error` text, and the composer's inline message when called with
  * "Caption". `field` is `baseCaption` or `perPlatformOverrides.<platform>` on
- * the API, matching the field-named messages those routes already return.
+ * the API. R51 publishing-flow L2: a platform's own caption is read on Create's
+ * own-caption box, so it is named by the platform's name, with the step.
  */
 export function captionTooLongMessage(field: string): string {
-  return `${field} is too long (max ${MAX_CAPTION_CHARS.toLocaleString("en-US")} characters).`;
+  const max = MAX_CAPTION_CHARS.toLocaleString("en-US");
+  const platform = field.startsWith(OVERRIDE_FIELD) ? field.slice(OVERRIDE_FIELD.length) : null;
+  if (platform && (PLATFORM_ORDER as readonly string[]).includes(platform)) {
+    return `${platformLabel(platform as Platform)}'s own caption is too long: keep it to ${max} characters.`;
+  }
+  return `${field} is too long (max ${max} characters).`;
 }
 
 /**
