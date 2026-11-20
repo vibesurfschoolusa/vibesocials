@@ -127,8 +127,16 @@ export function uploadTypeOf(file: { name: string; type: string }): string {
   return extension !== undefined && Object.hasOwn(TYPE_BY_EXTENSION, extension) ? TYPE_BY_EXTENSION[extension] : "";
 }
 
-export const HEIC_CONVERSION_FAILED_MESSAGE =
-  "We couldn't convert this iPhone (HEIC) photo. Export it as a JPEG and try again.";
+const HEIC_FAILED = "We couldn't convert this iPhone (HEIC) photo.";
+
+export const HEIC_CONVERSION_FAILED_MESSAGE = `${HEIC_FAILED} Export it as a JPEG and try again.`;
+
+/** R47 lead review: the HEIC refusal's step names the control the screen has, as unknownTypeMessage does. */
+export function heicConversionFailedMessage(context: UnknownTypeContext = "choose"): string {
+  return context === "sendMore"
+    ? `${HEIC_FAILED} Export it as a JPEG, then press Send more and choose it again.`
+    : HEIC_CONVERSION_FAILED_MESSAGE;
+}
 
 /**
  * The type `file` will have once prepareUploadFile is done, decided the same
@@ -162,7 +170,7 @@ export async function prepareUploadFile(
       jpeg = await deps.convertHeicToJpeg(file, HEIC_JPEG_QUALITY);
     } catch (error) {
       console.error("[prepareUploadFile] HEIC conversion failed", error);
-      throw new Error(HEIC_CONVERSION_FAILED_MESSAGE);
+      throw new Error(heicConversionFailedMessage(context));
     }
     prepared = new File([jpeg], jpegFileName(file.name), {
       type: "image/jpeg",

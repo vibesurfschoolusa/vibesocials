@@ -189,6 +189,27 @@ describe("sendClientFile", () => {
       expect(await failure()).toMatchObject({ kind: "file", message: "We couldn't convert this iPhone (HEIC) photo." });
     });
 
+    // R47 lead review: a HEIC that won't convert is refused again as it is; on /u the step names Send more.
+    it("a HEIC that won't convert: the file's own kind, and the step names Send more", async () => {
+      const failing = {
+        convertHeicToJpeg: vi.fn(async () => {
+          throw new Error("decode failed");
+        }),
+        reencodeAsJpeg: vi.fn(),
+      };
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      deps.prepare.mockImplementation((file: File) => prepareLinkFile(file, failing));
+      const error = await sendClientFile(input(), deps).then(
+        () => null,
+        (caught: ClientFileError) => caught,
+      );
+      expect(error).toMatchObject({
+        kind: "file",
+        message: "We couldn't convert this iPhone (HEIC) photo. Export it as a JPEG, then press Send more and choose it again.",
+      });
+      expect(deps.fetch).not.toHaveBeenCalled();
+    });
+
     it("a typeless IMG_0042: the file's own kind, and the step names Send more", async () => {
       deps.prepare.mockImplementation(prepareLinkFile);
       const error = await sendClientFile(input({ file: new File(["abc"], "IMG_0042", { type: "" }) }), deps).then(

@@ -1,6 +1,6 @@
 import { put } from "@vercel/blob/client";
 
-import { prepareUploadFile } from "@/lib/prepareUploadFile";
+import { prepareUploadFile, type PrepareUploadDeps } from "@/lib/prepareUploadFile";
 import { answerLostText } from "@/lib/answerLost";
 import { waitSecondsOf, waitText } from "@/lib/tooManyTriesText";
 import {
@@ -39,13 +39,13 @@ export interface SendFileDeps {
   fetch: (url: string, init: RequestInit) => Promise<Response>;
 }
 
-/** Prepared as on Create, with the step for a type that can't be told naming /u's Send more. */
-export function prepareLinkFile(file: File): Promise<File> {
-  return prepareUploadFile(file, undefined, "sendMore");
+/** Prepared as on Create, with the steps of a refused file naming /u's Send more. `deps` for tests. */
+export function prepareLinkFile(file: File, deps?: PrepareUploadDeps): Promise<File> {
+  return prepareUploadFile(file, deps, "sendMore");
 }
 
 const browserDeps: SendFileDeps = {
-  prepare: prepareLinkFile,
+  prepare: (file) => prepareLinkFile(file),
   put: (pathname, body, options) => put(pathname, body, options),
   fetch: (url, init) => fetchOrNoAnswer(url, init),
 };

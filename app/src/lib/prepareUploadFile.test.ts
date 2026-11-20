@@ -109,6 +109,16 @@ describe("prepareUploadFile", () => {
     );
   });
 
+  // R47 lead review: Create (and every "choose" place) keeps its own step; /u names Send more.
+  it("the HEIC sentence: unchanged where the file is chosen again, Send more on /u", async () => {
+    const deps = fakeDeps({ convertHeicToJpeg: vi.fn(async () => Promise.reject(new Error("libheif: bad box"))) });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(HEIC_CONVERSION_FAILED_MESSAGE).toBe("We couldn't convert this iPhone (HEIC) photo. Export it as a JPEG and try again.");
+    await expect(prepareUploadFile(file("IMG.heic", "image/heic"), deps, "sendMore")).rejects.toThrow(
+      "We couldn't convert this iPhone (HEIC) photo. Export it as a JPEG, then press Send more and choose it again.",
+    );
+  });
+
   it("refuses a type the upload route would refuse, before uploading", async () => {
     await expect(prepareUploadFile(file("scan.tiff", "image/tiff"), fakeDeps())).rejects.toThrow(
       /This file type \(image\/tiff\) isn't supported/,
