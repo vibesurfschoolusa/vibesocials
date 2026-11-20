@@ -351,7 +351,7 @@ describe("new and unconfirmed accounts have a pool of their own", () => {
     workspace("ws-fresh-3", {}, [fresh("fresh-3")]);
     for (let p = 1; p <= 5; p += 1) await due("ws-fresh", `f-${p}`);
     expect((await crossWorkspacePostRefusal({ workspaceId: "ws-fresh-3", workspace: {}, day: NOW, mode: "now" }))?.error).toBe(
-      `Vibe Socials has reached today's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address. Schedule this post for another day, or try again tomorrow. ${LEAVE_SMALL_POOL}`,
+      `Vibe Socials has reached today's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address. Schedule this post for another day, or try again in 9 hours. ${LEAVE_SMALL_POOL}`,
     );
     expect(
       (await crossWorkspacePostRefusal({ workspaceId: "ws-fresh-3", workspace: {}, day: NOW, mode: "schedule" }))?.code,
@@ -430,7 +430,7 @@ describe("the per-person number", () => {
     await expect(crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now" })).resolves.toEqual({
       code: "OWNER_DAILY_POST_LIMIT",
       error:
-        "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow.",
+        "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again in 9 hours.",
     });
     // Tomorrow has nothing yet.
     await expect(
@@ -505,12 +505,12 @@ describe("the per-person number", () => {
     expect(
       (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now", viewerUserId: "owner-1" }))?.error,
     ).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 once you confirm your email address.",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again in 9 hours. The limit is 15 once you confirm your email address.",
     );
     expect(
       (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now", viewerUserId: "a-member" }))?.error,
     ).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 once owner-1 confirms their email address.",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again in 9 hours. The limit is 15 once owner-1 confirms their email address.",
     );
   });
 
@@ -534,7 +534,7 @@ describe("the per-person number", () => {
     expect(
       (await crossWorkspacePostRefusal({ workspaceId: "ws-team", workspace: {}, day: NOW, mode: "now", viewerUserId: "lead" }))?.error,
     ).toBe(
-      "Jane, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 once Jane confirms their email address.",
+      "Jane, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again in 9 hours. The limit is 15 once Jane confirms their email address.",
     );
   });
 
@@ -546,10 +546,10 @@ describe("the per-person number", () => {
     const refusal = (viewerUserId: string) =>
       crossWorkspacePostRefusal({ workspaceId: "ws-team", workspace: {}, day: NOW, mode: "now", viewerUserId });
     expect((await refusal("lead"))?.error).toBe(
-      "bob@agency.example, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 once bob@agency.example confirms their email address.",
+      "bob@agency.example, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again in 9 hours. The limit is 15 once bob@agency.example confirms their email address.",
     );
     expect((await refusal("member-1"))?.error).toBe(
-      "bob, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 once bob confirms their email address.",
+      "bob, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again in 9 hours. The limit is 15 once bob confirms their email address.",
     );
     const usage = await ownersPersonalUsage("ws-team", NOW, "lead");
     expect(usage.find((person) => person.userId === "bob")?.name).toBe("bob@agency.example");
@@ -561,7 +561,7 @@ describe("the per-person number", () => {
     workspace("ws-team", {}, [owner("lead"), owner("maria", { name: "Maria", createdAt: new Date(NOW.getTime() - 3_600_000), emailVerifiedAt: NOW })]);
     scheduled("ws-team", 5, NOW);
     expect((await crossWorkspacePostRefusal({ workspaceId: "ws-team", workspace: {}, day: NOW, mode: "now" }))?.error).toBe(
-      "Maria, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. Their limit is 15 from 00:00 UTC tomorrow.",
+      "Maria, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again in 9 hours. Their limit is 15 from 00:00 UTC tomorrow.",
     );
   });
 
@@ -724,7 +724,7 @@ describe("retries", () => {
     }
     await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW })).resolves.toEqual({
       code: "POST_RETRY_LIMIT",
-      error: "This post has been retried 3 times today, the most for one day. Try again tomorrow.",
+      error: "This post has been retried 3 times today, the most for one day. Try again in 9 hours.",
     });
     // Another post is not affected.
     await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "post-b", requestId: "s1", now: NOW })).resolves.toBeNull();
@@ -739,8 +739,8 @@ describe("retries", () => {
     }
     const failed = (platform: string, errorCode: string | null = "PLATFORM_ERROR") => ({ platform, status: "failed", errorCode });
     const WITH_POINTER =
-      "This post has been retried 3 times today, the most for one day. Try again tomorrow. Retry all failed retries every failed platform of a post at once and counts as one retry.";
-    const WITHOUT = "This post has been retried 3 times today, the most for one day. Try again tomorrow.";
+      "This post has been retried 3 times today, the most for one day. Try again in 9 hours. Retry all failed retries every failed platform of a post at once and counts as one retry.";
+    const WITHOUT = "This post has been retried 3 times today, the most for one day. Try again in 9 hours.";
     store.results["post-a"] = [failed("x"), failed("youtube"), { platform: "linkedin", status: "success", errorCode: null }];
     expect((await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW }))?.error).toBe(WITH_POINTER);
     // X may already be live: Retry all would cover only YouTube, so the card has no such button.
@@ -778,13 +778,13 @@ describe("retries", () => {
     workspace("ws-1", {}, [owner("owner-1")]);
     for (let p = 1; p <= 15; p += 1) await due("ws-1", `p-${p}`);
     expect((await reserveRetry({ workspaceId: "ws-1", postJobId: "p-1", requestId: "r1", now: NOW }))?.error).toBe(
-      "This workspace's owner has reached the limit of 15 posts a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day.",
+      "This workspace's owner has reached the limit of 15 posts a day across the workspaces they own, and retries count toward it. Retry in 9 hours, or schedule the post again for another day.",
     );
     workspace("ws-2", {}, [owner("owner-2")]);
     for (let p = 1; p <= 3; p += 1) await due("ws-2", `q-${p}`);
     await sentElsewhere(2, NOW);
     expect((await reserveRetry({ workspaceId: "ws-2", postJobId: "q-1", requestId: "r1", now: NOW }))?.error).toBe(
-      "Vibe Socials has reached its daily limit of posts for the whole service, and retries count toward it. Retry tomorrow.",
+      "Vibe Socials has reached its daily limit of posts for the whole service, and retries count toward it. Retry in 9 hours.",
     );
   });
 
@@ -883,7 +883,7 @@ describe("withdrawing a send that was not handed to publishing", () => {
 // billing is off its owners' per-person number applies, to a retry as to Post now.
 describe("a retry and the owner's daily number", () => {
   const OWNER_RETRY =
-    "This workspace's owner has reached the limit of 15 posts a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day.";
+    "This workspace's owner has reached the limit of 15 posts a day across the workspaces they own, and retries count toward it. Retry in 9 hours, or schedule the post again for another day.";
   const retry = (workspaceId: string, postJobId: string, requestId: string) =>
     reserveRetry({ workspaceId, postJobId, requestId, now: NOW });
 
@@ -943,7 +943,7 @@ describe("a retry and the owner's daily number", () => {
 
 describe("two at once", () => {
   const reserve = (requestId: string) => reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, now: NOW });
-  const THREE_TIMES = "This post has been retried 3 times today, the most for one day. Try again tomorrow.";
+  const THREE_TIMES = "This post has been retried 3 times today, the most for one day. Try again in 9 hours.";
 
   // Third look: the count and the record for one post run under a per-post
   // transaction lock, so two clicks run one after the other.
@@ -1023,7 +1023,7 @@ describe("two at once", () => {
 // R8-security M1: one hard ceiling of free runs a UTC day, all pools and guaranteed runs together.
 describe("one ceiling over every free run of the day", () => {
   const SERVICE_NOW =
-    "Vibe Socials has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.";
+    "Vibe Socials has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again in 9 hours.";
   const freeRuns = () => store.events.filter((event) => event.kind === "send" && (event.pool === "main" || event.pool === "new")).length;
 
   it("30 throwaway confirmed, day-old accounts posting 3 each: 30 runs go and the rest are refused", async () => {
@@ -1189,7 +1189,7 @@ describe("a new account, day by day", () => {
     }
     expect(store.events.map((event) => event.pool)).toEqual(["new", "new", "new", "new", "new"]);
     expect((await nowCheck(at("2026-11-16T21:30:00Z"), "maria"))?.error).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from Monday, 7:00 PM EST (00:00 UTC).",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again from Monday, 7:00 PM EST (00:00 UTC). The limit is 15 from Monday, 7:00 PM EST (00:00 UTC).",
     );
 
     // Monday evening she schedules 10 for Tuesday 08:00 to 17:00: Tuesday's number is 15.
@@ -1220,7 +1220,7 @@ describe("a new account, day by day", () => {
       await recordSend({ workspaceId: "ws-maria", postJobIds: [`now-${p}`], at: at("2026-11-17T19:00:00Z") });
     }
     expect((await nowCheck(at("2026-11-17T19:30:00Z")))?.error).toBe(
-      "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow.",
+      "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again in 5 hours.",
     );
   });
 
@@ -1230,14 +1230,14 @@ describe("a new account, day by day", () => {
     vi.setSystemTime(wed);
     for (let p = 1; p <= 5; p += 1) await expect(due("ws-maria", `w-${p}`, wed)).resolves.toBeNull();
     expect((await nowCheck(wed, "maria"))?.error).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 once you confirm your email address.",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again in 14 hours. The limit is 15 once you confirm your email address.",
     );
     expect(store.events.every((event) => event.pool === "new")).toBe(true);
 
     // On an account's first day, unconfirmed: both conditions.
     ws.owners = [owner("maria", { createdAt: at("2026-11-18T08:00:00Z"), emailVerifiedAt: null })];
     expect((await nowCheck(wed, "maria"))?.error).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from 00:00 UTC tomorrow, once you confirm your email address.",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again in 14 hours. The limit is 15 from 00:00 UTC tomorrow, once you confirm your email address.",
     );
 
     // She confirms at noon on a later day: the main pool and 15 from then on.
@@ -1396,7 +1396,7 @@ describe("a plan in its card trial counts like a free workspace", () => {
       const refused = await reserveNow("ws-u-16", ["u-16"]);
       expect(refused.ok).toBe(false);
       expect(!refused.ok && refused.refusal.error).toBe(
-        "This workspace's owner has reached the limit of 15 posts a day across their workspaces not yet paid for, and retries count toward it. Schedule this post for another day, or try again tomorrow.",
+        "This workspace's owner has reached the limit of 15 posts a day across their workspaces not yet paid for, and retries count toward it. Schedule this post for another day, or try again in 9 hours.",
       );
       const [mine] = await ownersPersonalUsage("ws-u-1", NOW, "unpaid-owner");
       expect(mine).toMatchObject({ isViewer: true, used: 15, limit: 15 });
@@ -1462,7 +1462,7 @@ describe("one reservation under one lock", () => {
       ceiling: true,
       refusal: {
         code: "SERVICE_DAILY_POST_LIMIT",
-        error: "Vibe Socials has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.",
+        error: "Vibe Socials has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again in 9 hours.",
       },
     });
     expect(sendsOf("feed")).toHaveLength(0);

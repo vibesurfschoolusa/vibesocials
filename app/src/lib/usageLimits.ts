@@ -6,6 +6,7 @@ import { formatDisplayDate } from "./displayDate";
 import { isPlanKey, PLANS, type PlanLimits } from "./plans";
 import { countWord } from "./plural";
 import { PRODUCT_NAME } from "./siteInfo";
+import { waitText } from "./tooManyTriesText";
 
 /**
  * Per-workspace usage limits (2026-11-10). Pure: no database. The numbers, the
@@ -199,9 +200,28 @@ export const STORAGE_FULL_CODE = "WORKSPACE_STORAGE_FULL";
 /** `now`: a post going out now. `schedule`: a post given a day (scheduled, moved, approved for later). */
 export type DailyPostLimitMode = "now" | "schedule";
 
-export function dailyPostLimitMessage(limit: number, mode: DailyPostLimitMode): string {
+/**
+ * Who reads a refusal and when: `now` defaults to the moment it is built,
+ * `timeZone` is the reader's own when it is known.
+ */
+export type ResetTime = { now?: Date; timeZone?: string | null };
+
+/**
+ * R46 pages-a L2: when the daily post limits start again, for "try again …"
+ * and "Retry …". They reset at 00:00 UTC, so "tomorrow" was untrue for most
+ * readers: in the reader's zone when it is known ("from Thursday, 7:00 PM EST
+ * (00:00 UTC)"), else the wait to it, rounded up ("in 9 hours").
+ */
+export function dailyLimitResetText(time: ResetTime = {}): string {
+  const now = time.now ?? new Date();
+  const resets = utcDayRange(now).end;
+  const local = firstDayEndsLocal({ firstDayEnds: resets, timeZone: time.timeZone });
+  return local ? `from ${local} (00:00 UTC)` : `in ${waitText((resets.getTime() - now.getTime()) / 1000)}`;
+}
+
+export function dailyPostLimitMessage(limit: number, mode: DailyPostLimitMode, time: ResetTime = {}): string {
   return mode === "now"
-    ? `This workspace has reached its limit of ${limit} ${countWord(limit, "post", "posts")} for today. Schedule this post for another day, or try again tomorrow.`
+    ? `This workspace has reached its limit of ${limit} ${countWord(limit, "post", "posts")} for today. Schedule this post for another day, or try again ${dailyLimitResetText(time)}.`
     : `That day already has ${limit} ${countWord(limit, "post", "posts")}, which is this workspace's daily limit. Pick another day.`;
 }
 
@@ -419,7 +439,7 @@ export function personLabel(user: { name?: string | null; email: string }, reade
  * When the first day ends, for the sentence: 00:00 UTC, and the same moment
  * in the reader's own zone when it is known (R8-new-customer L2).
  */
-export type ReducedNoteTime = { firstDayEnds?: Date; timeZone?: string | null };
+export type ReducedNoteTime = ResetTime & { firstDayEnds?: Date };
 
 /** The first day's end in the reader's own zone ("Monday, 7:00 PM EST"), or null when either is unknown. */
 export function firstDayEndsLocal(time: ReducedNoteTime): string | null {
@@ -485,9 +505,9 @@ export function ownerDailyPostLimitMessage(
   const who = named ? `${holder.name}, an owner of this workspace,` : "This workspace's owner";
   const sentence =
     mode === "now"
-      ? `${who} has reached the limit of ${posts} a day across ${ownedWorkspaces(env, true)}, and retries count toward it. Schedule this post for another day, or try again tomorrow.`
+      ? `${who} has reached the limit of ${posts} a day across ${ownedWorkspaces(env, true)}, and retries count toward it. Schedule this post for another day, or try again ${dailyLimitResetText(time)}.`
       : mode === "retry"
-        ? `${who} has reached the limit of ${posts} a day across ${ownedWorkspaces(env, false)}, and retries count toward it. Retry tomorrow, or schedule the post again for another day.`
+        ? `${who} has reached the limit of ${posts} a day across ${ownedWorkspaces(env, false)}, and retries count toward it. Retry ${dailyLimitResetText(time)}, or schedule the post again for another day.`
         : named
           ? `${who} already has ${posts} that day across ${ownedWorkspaces(env, false)}, which is the daily limit for one person (retries count toward it). Pick another day.`
           : `That day already has ${posts} across ${ownedWorkspaces(env, true, "owner")}, which is the daily limit for one person (retries count toward it). Pick another day.`;
@@ -555,12 +575,12 @@ export function stillTodayText(
   };
 }
 
-export function serviceDailyPostLimitMessage(mode: CrossWorkspaceLimitMode): string {
+export function serviceDailyPostLimitMessage(mode: CrossWorkspaceLimitMode, time: ResetTime = {}): string {
   if (mode === "now") {
-    return `${PRODUCT_NAME} has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.`;
+    return `${PRODUCT_NAME} has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again ${dailyLimitResetText(time)}.`;
   }
   if (mode === "retry") {
-    return `${PRODUCT_NAME} has reached its daily limit of posts for the whole service, and retries count toward it. Retry tomorrow.`;
+    return `${PRODUCT_NAME} has reached its daily limit of posts for the whole service, and retries count toward it. Retry ${dailyLimitResetText(time)}.`;
   }
   return `That day is full: ${PRODUCT_NAME} has reached its daily limit of posts for the whole service. Pick another day.`;
 }
@@ -575,13 +595,13 @@ const LEAVE_NEW_ACCOUNT_POOL =
 const NEW_ACCOUNT_POOL_WHO = "shared by accounts made today (UTC) or with an unconfirmed email address";
 
 /** R7-security M1: the new-account pool, when posting, scheduling or retrying. */
-export function newAccountPoolMessage(mode: CrossWorkspaceLimitMode): string {
+export function newAccountPoolMessage(mode: CrossWorkspaceLimitMode, time: ResetTime = {}): string {
   const posts = `${NEW_ACCOUNT_POOL_DAILY_LIMIT} ${countWord(NEW_ACCOUNT_POOL_DAILY_LIMIT, "post", "posts")}`;
   if (mode === "now") {
-    return `${PRODUCT_NAME} has reached today's limit of ${posts} ${NEW_ACCOUNT_POOL_WHO}. Schedule this post for another day, or try again tomorrow. ${LEAVE_NEW_ACCOUNT_POOL}`;
+    return `${PRODUCT_NAME} has reached today's limit of ${posts} ${NEW_ACCOUNT_POOL_WHO}. Schedule this post for another day, or try again ${dailyLimitResetText(time)}. ${LEAVE_NEW_ACCOUNT_POOL}`;
   }
   if (mode === "retry") {
-    return `${PRODUCT_NAME} has reached today's limit of ${posts} ${NEW_ACCOUNT_POOL_WHO}, and retries count toward it. Retry tomorrow. ${LEAVE_NEW_ACCOUNT_POOL}`;
+    return `${PRODUCT_NAME} has reached today's limit of ${posts} ${NEW_ACCOUNT_POOL_WHO}, and retries count toward it. Retry ${dailyLimitResetText(time)}. ${LEAVE_NEW_ACCOUNT_POOL}`;
   }
   return `That day is full: ${PRODUCT_NAME} has reached the limit of ${posts} a day ${NEW_ACCOUNT_POOL_WHO}. Pick another day. ${LEAVE_NEW_ACCOUNT_POOL}`;
 }
@@ -597,8 +617,8 @@ export function newAccountPoolAtSendMessage(): string {
  * which is one run, only when the post's card has the button: it covers 2 or
  * more failed platforms (R8-publishing L3, R8-pages L6).
  */
-export function postRetryLimitMessage(limit: number, retryAllPlatforms: number): string {
-  const sentence = `This post has been retried ${limit} ${countWord(limit, "time", "times")} today, the most for one day. Try again tomorrow.`;
+export function postRetryLimitMessage(limit: number, retryAllPlatforms: number, time: ResetTime = {}): string {
+  const sentence = `This post has been retried ${limit} ${countWord(limit, "time", "times")} today, the most for one day. Try again ${dailyLimitResetText(time)}.`;
   return retryAllPlatforms >= 2
     ? `${sentence} Retry all failed retries every failed platform of a post at once and counts as one retry.`
     : sentence;

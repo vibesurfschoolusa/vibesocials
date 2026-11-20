@@ -173,14 +173,18 @@ describe("checkDailyPostLimit", () => {
 
   it("refuses at the limit with the publish-now sentence and code", async () => {
     db.postJobCount.mockResolvedValue(20);
+    // R46 pages-a L2: the sentence names the wait to 00:00 UTC, read at NOW.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
 
     await expect(
       checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" }),
     ).resolves.toEqual({
       code: "WORKSPACE_DAILY_POST_LIMIT",
       error:
-        "This workspace has reached its limit of 20 posts for today. Schedule this post for another day, or try again tomorrow.",
+        "This workspace has reached its limit of 20 posts for today. Schedule this post for another day, or try again in 9 hours.",
     });
+    vi.useRealTimers();
   });
 
   it("refuses at the limit with the scheduling sentence", async () => {
