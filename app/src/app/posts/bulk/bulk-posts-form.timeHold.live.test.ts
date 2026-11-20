@@ -257,7 +257,8 @@ describe("R45 lead review: the batch controls end a time hold", () => {
     expect(container.textContent).toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
 
     await run(() => props(byId("bulk-first-day")).onChange({ target: { value: "2030-06-11" } }));
-    expect(rowTimes()).toEqual(["2030-06-11T12:00", "2030-06-11T12:00", "2030-06-12T12:00"]);
+    // Rows 2 and 3 hold 11 and 12 June, so row 1 takes the next free slot (R50 publishing-flow L2).
+    expect(rowTimes()).toEqual(["2030-06-13T12:00", "2030-06-11T12:00", "2030-06-12T12:00"]);
     expect(container.textContent).not.toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
   });
 });
@@ -281,7 +282,8 @@ describe("R49 pages-a L1: the server's too-soon line goes when the row moves", (
     expect(container.textContent).toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
 
     await run(() => props(byId("bulk-first-day")).onChange({ target: { value: "2030-06-11" } }));
-    expect(rowTimes()).toEqual(["2030-06-11T12:00", "2030-06-11T12:00", "2030-06-12T12:00"]);
+    // Rows 2 and 3 hold 11 and 12 June, so row 1 takes the next free slot (R50 publishing-flow L2).
+    expect(rowTimes()).toEqual(["2030-06-13T12:00", "2030-06-11T12:00", "2030-06-12T12:00"]);
     expect(container.textContent).not.toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
   });
 

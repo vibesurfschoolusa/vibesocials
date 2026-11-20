@@ -178,7 +178,8 @@ describe("applySchedule keeps the sent time of a row whose post may exist", () =
       CONTROLS,
     );
     expect(whenOf(rows, "r2")).toBe(SENT);
-    expect(whenOf(rows, "r3")).toBe("2026-11-12T18:00");
+    // r3's slot is the one r2 holds, so it takes the next (R50 publishing-flow L2).
+    expect(whenOf(rows, "r3")).toBe("2026-11-13T18:00");
   });
 
   it("after another row is moved", () => {
@@ -302,6 +303,58 @@ describe("a row confirmed in the Queue after no answer", () => {
   it("until confirmed, an uncertain row stays locked at its time", () => {
     const rows = applySchedule(sentWithoutAnswer("draft"), { ...CONTROLS, firstDay: "2026-11-20" });
     expect(rows.map((r) => r.when)).toEqual(["2026-11-11T18:00", "2026-11-12T18:00", "2026-11-13T18:00"]);
+  });
+});
+
+// R50 publishing-flow L2: a free row never takes a slot a locked or created
+// row already holds, in either mode, so two rows never share a minute.
+describe("applySchedule skips the slots locked rows hold", () => {
+  const JUNE: BulkScheduleControls = { firstDay: "2030-06-10", timeOfDay: "12:00", everyDays: 1 };
+
+  it("after a partial send, moving First day puts the unsent row on the next free slot", () => {
+    // Row 1 was refused as too soon; rows 2 and 3 were scheduled.
+    const sent = applySchedule(autoRows(3), JUNE).map((r) => (r.id === "r1" ? r : { ...r, postId: `job-${r.id}` }));
+
+    const rows = applySchedule(sent, { ...JUNE, firstDay: "2030-06-11" });
+
+    expect(rows.map((r) => r.when)).toEqual(["2030-06-13T12:00", "2030-06-11T12:00", "2030-06-12T12:00"]);
+    expect(new Set(rows.map((r) => r.when)).size).toBe(3);
+  });
+
+  it("skips a slot a hand-set row holds, and the rows after it keep their own days", () => {
+    const start = autoRows(3).map((r) => (r.id === "r3" ? { ...r, when: "2030-06-10T12:00", whenSetByHand: true } : r));
+
+    const rows = applySchedule(start, JUNE);
+
+    expect(rows.map((r) => r.when)).toEqual(["2030-06-11T12:00", "2030-06-12T12:00", "2030-06-10T12:00"]);
+  });
+
+  it("counts a time within five minutes of a slot as holding it, as the slot mode does", () => {
+    const start = autoRows(2).map((r) => (r.id === "r2" ? { ...r, when: "2030-06-10T12:04", whenSetByHand: true } : r));
+
+    expect(applySchedule(start, JUNE).map((r) => r.when)).toEqual(["2030-06-11T12:00", "2030-06-10T12:04"]);
+  });
+
+  it("with nothing locked, the spread is as before", () => {
+    expect(applySchedule(autoRows(4), { ...JUNE, everyDays: 2 }).map((r) => r.when)).toEqual([
+      "2030-06-10T12:00",
+      "2030-06-12T12:00",
+      "2030-06-14T12:00",
+      "2030-06-16T12:00",
+    ]);
+  });
+
+  it("the slot mode still skips the locked rows' times", () => {
+    // Monday 10 June 2030, 08:00; slots every day at 12:00.
+    const now = new Date(2030, 5, 10, 8, 0);
+    const slots = [0, 1, 2, 3, 4, 5, 6].map((day) => ({ day, time: "12:00" }));
+    const start = autoRows(3).map((r) => (r.id === "r1" ? { ...r, when: "2030-06-10T12:00", postId: "job-1" } : r));
+
+    expect(applySlotSchedule(start, slots, [], now).map((r) => r.when)).toEqual([
+      "2030-06-10T12:00",
+      "2030-06-11T12:00",
+      "2030-06-12T12:00",
+    ]);
   });
 });
 

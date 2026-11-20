@@ -2,7 +2,7 @@ import type { Platform } from "@prisma/client";
 
 import { composerSubmitOutcome } from "@/lib/composerSubmitOutcome";
 import { platformAcceptsMedia } from "@/lib/platformLimits";
-import { nextFreeSlots, type PostingSlot } from "@/lib/postingSlots";
+import { nextFreeSlots, SLOT_TAKEN_WITHIN_MS, type PostingSlot } from "@/lib/postingSlots";
 import { SCHEDULE_BUFFER_MS, SCHEDULED_TIME_TOO_SOON_MESSAGE, toDateTimeLocalValue } from "@/lib/scheduling";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
 
@@ -124,32 +124,60 @@ export function rowHoldsNoTime(row: { postId: string | null; when: string }): bo
 }
 
 /**
+ * The times locked rows (rowTimeLocked) hold. A created draft holds none
+ * (rowHoldsNoTime). Both spreads below skip a slot within
+ * SLOT_TAKEN_WITHIN_MS of one of these, so two rows never share a minute
+ * (R50 publishing-flow L2).
+ */
+function heldTimes(rows: readonly ({ when: string } & TimeLockState)[]): Date[] {
+  return rows
+    .filter((row) => rowTimeLocked(row) && !rowHoldsNoTime(row) && row.when)
+    .map((row) => new Date(row.when))
+    .filter((date) => !Number.isNaN(date.getTime()));
+}
+
+function slotHeld(slot: string, held: readonly Date[]): boolean {
+  const at = new Date(slot).getTime();
+  return held.some((date) => Math.abs(date.getTime() - at) <= SLOT_TAKEN_WITHIN_MS);
+}
+
+/**
  * Give each row whose time is not locked (rowTimeLocked) the slot of its place
  * in the list. A locked row keeps its time (and its slot stays unused), so
- * changing one row never shifts the others. A created draft (rowHoldsNoTime)
- * has no place in the list. Rows are returned unchanged when the controls are
- * invalid.
+ * changing one row never shifts the others. A slot a locked row's time holds
+ * (heldTimes) is skipped, and that row and the ones after it move on by one
+ * slot. A created draft (rowHoldsNoTime) has no place in the list. Rows are
+ * returned unchanged when the controls are invalid.
  */
 export function applySchedule<T extends { when: string } & TimeLockState>(
   rows: T[],
   controls: BulkScheduleControls,
 ): T[] {
   const placed = rows.filter((row) => !rowHoldsNoTime(row)).length;
-  const slots = spreadSchedule({ ...controls, count: placed });
-  if (placed === 0 || slots.length !== placed) return rows;
+  const held = heldTimes(rows);
+  // Each held time blocks at most one slot: slots are at least a day apart.
+  const count = placed + held.length;
+  const slots = spreadSchedule({ ...controls, count });
+  if (placed === 0 || slots.length !== count) return rows;
   let place = 0;
   return rows.map((row) => {
     if (rowHoldsNoTime(row)) return row;
+    if (rowTimeLocked(row)) {
+      place++;
+      return row;
+    }
+    while (slotHeld(slots[place], held)) place++;
     const slot = slots[place++];
-    return rowTimeLocked(row) || row.when === slot ? row : { ...row, when: slot };
+    return row.when === slot ? row : { ...row, when: slot };
   });
 }
 
 /**
  * "Use my posting times" (brief 11): give each row whose time is not locked
  * (rowTimeLocked) the next free posting slot, in list order. A locked row
- * keeps its time, and that time counts as taken, as do `taken` (the times the
- * workspace's posts hold). Rows past the free slots found keep their time.
+ * keeps its time, and that time counts as taken (heldTimes), as do `taken`
+ * (the times the workspace's posts hold). Rows past the free slots found keep
+ * their time.
  */
 export function applySlotSchedule<T extends { when: string } & TimeLockState>(
   rows: T[],
@@ -157,13 +185,8 @@ export function applySlotSchedule<T extends { when: string } & TimeLockState>(
   taken: readonly Date[],
   now: Date,
 ): T[] {
-  // A created draft holds no time (rowHoldsNoTime), so it takes no slot.
-  const lockedTimes = rows
-    .filter((row) => rowTimeLocked(row) && !rowHoldsNoTime(row) && row.when)
-    .map((row) => new Date(row.when))
-    .filter((date) => !Number.isNaN(date.getTime()));
   const open = rows.filter((row) => !rowTimeLocked(row)).length;
-  const free = nextFreeSlots(slots, [...taken, ...lockedTimes], now, open).map(toDateTimeLocalValue);
+  const free = nextFreeSlots(slots, [...taken, ...heldTimes(rows)], now, open).map(toDateTimeLocalValue);
   let next = 0;
   return rows.map((row) => {
     if (rowTimeLocked(row)) return row;
