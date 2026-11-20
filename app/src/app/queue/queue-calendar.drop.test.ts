@@ -55,7 +55,7 @@ function job(scheduledFor: Date): QueueCard {
   } as QueueCard;
 }
 
-let onRescheduled: ReturnType<typeof vi.fn>;
+const onRescheduled = vi.fn<(card: QueueCard, patch: unknown, answer: unknown) => void>();
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -69,7 +69,7 @@ beforeEach(() => {
   vi.stubGlobal("document", made.doc);
   fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }));
   vi.stubGlobal("fetch", fetchMock);
-  onRescheduled = vi.fn();
+  onRescheduled.mockClear();
   root = createRoot(container as unknown as HTMLElement);
 });
 
