@@ -363,6 +363,11 @@ function deferredUntil(job: OutcomeJob): number {
   return times.length > 0 ? Math.max(...times) : 0;
 }
 
+/** A half that failed with no result at all: no platform was tried. */
+function givenUpUnsent(job: OutcomeJob): boolean {
+  return job.status === "failed" && job.results.length === 0;
+}
+
 /**
  * Which email this half sends: "wait" (until `until`), "alone", or "together"
  * (one email for the pair).
@@ -374,6 +379,10 @@ function pairDecision(
   afterPairWait: boolean,
 ): { send: "alone" | "together" } | { send: "wait"; until: number } {
   if (!partner) return { send: "alone" };
+  // R46 publishing part-A L1: a half given up with no results was never sent.
+  // The pair's email would hold only the other half's rows and say it all
+  // worked, so each half sends its own (the empty one: "use Send again").
+  if (givenUpUnsent(job) || givenUpUnsent(partner)) return { send: "alone" };
   const mine = finishedAt(job);
   if (PUBLISHING_STATUSES.includes(partner.status)) {
     const deadline = mine + PAIR_EMAIL_WAIT_MS;

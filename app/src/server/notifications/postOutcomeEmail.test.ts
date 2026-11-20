@@ -874,6 +874,46 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     expect(sent(0).html).toContain("<p>Caption: Dawn patrol tomorrow at 6</p>");
   });
 
+  // R46 publishing part-A L1: a half given up with no results was never sent;
+  // the pair's email held only the other half's rows and said it all worked.
+  describe("a half given up with no results", () => {
+    const givenUp = (job: Record<string, unknown>, finishedAt: Date) => ({ ...job, status: "failed", results: [], updatedAt: finishedAt });
+
+    it("a feed that succeeded beside a Story given up: two emails, success and not published", async () => {
+      const gaveUpAt = at(2 * HOUR);
+      pair(feedJob(), givenUp(storyJob({}, gaveUpAt), gaveUpAt));
+      vi.setSystemTime(gaveUpAt);
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+      vi.setSystemTime(at(PAIR_EMAIL_WAIT_MS));
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID, afterPairWait: true });
+
+      expect(sendEmailMock).toHaveBeenCalledTimes(2);
+      expect(sent(0).subject).toBe("Surf Co: your scheduled post couldn't be published");
+      expect(sent(0).html).toContain("use Send again");
+      expect(sent(1).subject).toBe("Surf Co: your post published successfully to all 2 platforms");
+      expect(keyOf(0)).not.toBe(keyOf(1));
+    });
+
+    it("the mirror: a Story that worked beside a feed given up: two emails too", async () => {
+      pair(givenUp(feedJob(), T0), storyJob());
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID });
+
+      expect(sendEmailMock).toHaveBeenCalledTimes(2);
+      expect(sent(0).subject).not.toContain("couldn't be published");
+      expect(sent(0).html).toContain("Instagram Story");
+      expect(sent(1).subject).toBe("Surf Co: your scheduled post couldn't be published");
+      expect(keyOf(0)).not.toBe(keyOf(1));
+    });
+
+    it("a normal pair still sends one email", async () => {
+      pair(feedJob(), storyJob());
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID, afterPairWait: true });
+      expect(new Set([keyOf(0), keyOf(1)]).size).toBe(1);
+    });
+  });
+
   it("NORMAL PAIR, replayed: the first half's delivery after its wait sends under the pair's key too, so Resend delivers it once", async () => {
     pair(feedJob(), storyJob());
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
