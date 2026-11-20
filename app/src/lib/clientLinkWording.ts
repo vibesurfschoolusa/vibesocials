@@ -22,4 +22,4 @@ export function copiesWorkAgainWhen(kind: ClientLinkBlockKind | null | undefined
  * again where it lives shows the truth either way.
  */
 export const CLIENT_LINKS_NOT_MADE_MESSAGE =
-  "Couldn't make new client links. Reload this page and copy the links again before you send one: the upload link is on the Media page, the review link on the Queue page and the connect link on this page. Then press Make new client links again if you still need new ones.";
+  "We couldn't confirm the new client links were made. Reload this page and copy the links again before you send one: the upload link is on the Media page, the review link on the Queue page and the connect link on this page. Then press Make new client links again if you still need new ones.";

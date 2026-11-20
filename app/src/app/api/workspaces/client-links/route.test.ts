@@ -307,7 +307,7 @@ describe("POST /api/workspaces/client-links", () => {
     const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
     for (const source of [read("./route.ts"), read("../../../../components/team-section.tsx")]) {
       expect(source).toContain("CLIENT_LINKS_NOT_MADE_MESSAGE");
-      expect(source).not.toMatch(/Couldn't make new client links\./);
+      expect(source).not.toMatch(/Couldn't make new client links\.|couldn't confirm the new client links/);
     }
   });
 });
