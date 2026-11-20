@@ -259,7 +259,8 @@ describe("Add many row: Write again", () => {
 
   it("focuses the caption box after the press", () => {
     expect(source).toMatch(/onClick=\{\(event\) => \{\s*focusAfterPress\(event\.currentTarget, \(\) => captionRef\.current\);\s*onWriteAgain\(\);/);
-    expect(source).toMatch(/<Textarea\s+ref=\{captionRef\}\s+id=\{captionId\}/);
+    // R52: the box's ref also hands the field to the form, for a refused long caption.
+    expect(source).toMatch(/<Textarea\s+ref=\{\(field\) => \{\s*captionRef\.current = field;\s*captionFieldRef\?\.\(field\);\s*\}\}\s+id=\{captionId\}/);
   });
 
   it("a status line under the caption, there from the first render, says a new caption is being written", () => {

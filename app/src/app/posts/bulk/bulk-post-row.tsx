@@ -55,6 +55,8 @@ interface BulkPostRowProps {
   sendLine: string | null;
   /** R45 lead review: the description field, so a press refused for its length can focus it. */
   altFieldRef?: (field: HTMLInputElement | null) => void;
+  /** R52: the caption box, so a press refused for its length can focus it. */
+  captionFieldRef?: (field: HTMLTextAreaElement | null) => void;
   /** This video row's cover picker is the one open (one at a time: the picker's ids are fixed). */
   coverOpen: boolean;
   /** "Write captions with AI" is on (F7). Off, no Write again: it would send the file to the AI. */
@@ -173,6 +175,7 @@ export function BulkPostRow({
   storyRefusal,
   sendLine,
   altFieldRef,
+  captionFieldRef,
   coverOpen,
   aiCaptions = true,
   onConfirmInQueue,
@@ -261,7 +264,10 @@ export function BulkPostRow({
         <div className="flex flex-col gap-1">
           <Label htmlFor={captionId}>Caption</Label>
           <Textarea
-            ref={captionRef}
+            ref={(field) => {
+              captionRef.current = field;
+              captionFieldRef?.(field);
+            }}
             id={captionId}
             rows={3}
             value={row.caption}

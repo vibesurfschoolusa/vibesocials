@@ -17,6 +17,7 @@ import { useConnections } from "@/hooks/useConnections";
 import { generateBlobKey, uploadSizePayload } from "@/lib/blobKey";
 import { focusAfterPress } from "@/lib/focusAfter";
 import {
+  BULK_CAPTION_TOO_LONG_MESSAGE,
   BULK_DRAFTS_NOTE,
   BULK_MAX_FILES,
   BULK_NO_TIME_MESSAGE,
@@ -346,18 +347,19 @@ export function BulkPostsForm({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [duplicateNote, setDuplicateNote] = useState(0);
   const [sendingMode, setSendingMode] = useState<BulkFinishMode | null>(null);
-  // R45 second review: the description a refused press sends the focus to.
+  // R45 second review: the description (R52: or caption) too long that a
+  // refused press sends the focus to.
   // The rows are locked (their fields disabled) while the press sends, and a
   // disabled field loses the focus, so it moves once the press has ended and
   // the fields are enabled again (the effect below); `altFocusAsked` makes
   // that render happen even when nothing was sent.
-  const altFocusRef = useRef<string | null>(null);
+  const altFocusRef = useRef<{ id: string; field: "alt" | "caption" } | null>(null);
   const [altFocusAsked, setAltFocusAsked] = useState(0);
   useEffect(() => {
     if (sendingMode !== null || !altFocusRef.current) return;
-    const id = altFocusRef.current;
+    const { id, field } = altFocusRef.current;
     altFocusRef.current = null;
-    altFieldsRef.current.get(id)?.focus();
+    (field === "alt" ? altFieldsRef : captionFieldsRef).current.get(id)?.focus();
   }, [sendingMode, altFocusAsked]);
   // R33 pages L7: the rows the last press's own checks refused (rowSendLine).
   const [refusedPresses, setRefusedPresses] = useState<ReadonlyMap<string, RefusedPress>>(() => new Map());
@@ -399,6 +401,8 @@ export function BulkPostsForm({
   const timeHeldRef = useRef<ReadonlySet<string>>(new Set());
   // R45 lead review: each photo row's description field, by row id.
   const altFieldsRef = useRef(new Map<string, HTMLInputElement>());
+  // R52: each row's caption box, by row id, for a caption over the cap.
+  const captionFieldsRef = useRef(new Map<string, HTMLTextAreaElement>());
   // Raw text of the "every N days" box, so it can be cleared while typing.
   const [everyDaysText, setEveryDaysText] = useState("1");
   // Once the user picks a first day it is theirs; until then it follows "tomorrow".
@@ -933,22 +937,23 @@ export function BulkPostsForm({
       const ready: string[] = [];
       const refused = new Map<string, RefusedPress>();
       const timeHeld = new Set<string>();
-      let altTooLong: string | null = null;
+      let altTooLong: { id: string; field: "alt" | "caption" } | null = null;
       for (const row of rowsToSend(rowsRef.current)) {
         const block = rowLocalBlock(row, mode, pressedAt, batchCheck);
         if (block) {
           refused.set(row.id, { mode, at: pressedAt.getTime() });
           updateRow(row.id, { sendError: null });
           if (block === SCHEDULED_TIME_TOO_SOON_MESSAGE) timeHeld.add(row.id);
-          if (block === ALT_TEXT_TOO_LONG_TEXT) altTooLong ??= row.id;
+          if (block === ALT_TEXT_TOO_LONG_TEXT) altTooLong ??= { id: row.id, field: "alt" };
+          if (block === BULK_CAPTION_TOO_LONG_MESSAGE) altTooLong ??= { id: row.id, field: "caption" };
         } else {
           ready.push(row.id);
         }
       }
       setRefusedPresses(refused);
       timeHeldRef.current = timeHeld;
-      // R45 lead review: a description over its limit is the person's to
-      // shorten, so the press takes them to the first one (rows in order).
+      // R45 lead review: a description (R52: or caption) over its limit is the
+      // person's to shorten, so the press takes them to the first one (rows in order).
       altFocusRef.current = altTooLong;
 
       // One after another. A created row, or one whose post may exist, is never sent again here.
@@ -1411,6 +1416,10 @@ export function BulkPostsForm({
               altFieldRef={(field) => {
                 if (field) altFieldsRef.current.set(row.id, field);
                 else altFieldsRef.current.delete(row.id);
+              }}
+              captionFieldRef={(field) => {
+                if (field) captionFieldsRef.current.set(row.id, field);
+                else captionFieldsRef.current.delete(row.id);
               }}
               coverOpen={coverOpenId === row.id}
               onConfirmInQueue={() => markInQueue(row.id)}

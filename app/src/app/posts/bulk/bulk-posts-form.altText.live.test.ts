@@ -249,5 +249,35 @@ describe("Add many: a caption longer than 10,000 characters", () => {
     expect(container.textContent).toContain(BULK_CAPTION_TOO_LONG_MESSAGE);
     expect(container.textContent).not.toContain("baseCaption");
     expect(props(rowInput(1, "TEXTAREA")).value).toBe(long);
+    // As for a long description: the press takes the person to the caption to shorten.
+    expect(doc.activeElement).toBe(rowInput(1, "TEXTAREA"));
+  });
+
+  it("with nothing else to send, the first long caption takes the focus at once", async () => {
+    await mountWithThreePhotos();
+    for (const index of [0, 1, 2]) {
+      await run(() => props(rowInput(index, "TEXTAREA")).onChange({ target: { value: "a".repeat(10_001) } }));
+    }
+    await saveAllAsDrafts();
+    expect(posts).toBe(0);
+    expect(doc.activeElement).toBe(rowInput(0, "TEXTAREA"));
+  });
+
+  it("a long caption in an earlier row than a long description: the caption takes the focus", async () => {
+    await mountWithThreePhotos();
+    await run(() => props(rowInput(0, "TEXTAREA")).onChange({ target: { value: "a".repeat(10_001) } }));
+    await run(() => props(altField(2)).onChange({ target: { value: LONG } }));
+    await saveAllAsDrafts();
+    expect(sentBodies.map((b) => b.baseCaption)).toEqual(["Two"]);
+    expect(doc.activeElement).toBe(rowInput(0, "TEXTAREA"));
+  });
+
+  it("at the cap: sent as before, and the focus stays", async () => {
+    await mountWithThreePhotos();
+    await run(() => props(rowInput(1, "TEXTAREA")).onChange({ target: { value: "a".repeat(10_000) } }));
+    await saveAllAsDrafts();
+    expect(posts).toBe(3);
+    expect(container.textContent).not.toContain(BULK_CAPTION_TOO_LONG_MESSAGE);
+    expect(doc.activeElement).not.toBe(rowInput(1, "TEXTAREA"));
   });
 });
