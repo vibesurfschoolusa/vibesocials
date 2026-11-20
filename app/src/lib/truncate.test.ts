@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { textUnits, truncateGraphemes, truncateUnits } from "./truncate";
+import { textUnits, trimLinkTrailing, truncateGraphemes, truncateUnits } from "./truncate";
 
 // Grapheme count via the same primitive the implementation uses, so assertions
 // about "<= max graphemes" are measured the way the helper measures.
@@ -154,5 +154,40 @@ describe("truncateUnits", () => {
 
   it("drops a link that does not fit whole", () => {
     expect(truncateUnits("ab https://example.com/x", 20, bytes, "")).toBe("ab ");
+  });
+});
+
+// R47 pages-a L5: the link-trailing trim runs in linear time. The old
+// /[^A-Za-z0-9=_#/\-+&]+$/ rescanned to the end from each stripped character,
+// so a long run of them before one kept character cost seconds on every
+// keystroke of X's preview. A missing fix is a quick red test.
+describe("trimLinkTrailing", () => {
+  const OLD_LINK_TRAILING = /[^A-Za-z0-9=_#/\-+&]+$/;
+
+  it.each([10_000, 40_000])("a link with %i stripped characters before one kept one: under 20 ms", (n) => {
+    const text = `example.com/${"!".repeat(n)}a`;
+    const started = performance.now();
+    const units = textUnits(text);
+    expect(performance.now() - started).toBeLessThan(20);
+    expect(units.map((unit) => unit.text).join("")).toBe(text);
+  }, 5_000);
+
+  it("strips exactly what the old pattern stripped, on a few hundred varied links", () => {
+    const bases = ["example.com", "https://example.com/a", "www.surf.co/path?q=1", "a.io/x#top", "b.dev/p+q&r"];
+    const tails = [".", ")", "!", "%", "&", ",", ";", ":", "~", "@", "'", "?", "-", "_", "=", "/", "#", "+", "a", "9", "é", "…"];
+    let compared = 0;
+    for (const base of bases) {
+      for (const first of tails) {
+        for (const second of ["", ...tails.slice(0, 12)]) {
+          const link = `${base}${first}${second}`;
+          expect(trimLinkTrailing(link)).toBe(link.replace(OLD_LINK_TRAILING, ""));
+          compared += 1;
+        }
+      }
+    }
+    for (const edge of ["", "!!!", "a", "...a...", "x.co/!!&!!", "x.co/%%%", "x.co/a)."]) {
+      expect(trimLinkTrailing(edge)).toBe(edge.replace(OLD_LINK_TRAILING, ""));
+    }
+    expect(compared).toBeGreaterThan(300);
   });
 });

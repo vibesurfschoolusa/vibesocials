@@ -139,8 +139,21 @@ export interface TextUnit {
 // follow a word character, "@" (an email address), ".", "-" or "/".
 const LINK =
   /(?<![\w@.\-/])(?:https?:\/\/)?(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?::\d+)?(?:[/?#][A-Za-z0-9\-._~:/?#@!$&*+,;=%]*)?/gi;
-// Punctuation that ends a sentence is not part of the link before it.
-const LINK_TRAILING = /[^A-Za-z0-9=_#/\-+&]+$/;
+// Punctuation that ends a sentence is not part of the link before it: a link
+// keeps only up to its last letter, digit or one of = _ # / - + &.
+const LINK_KEEPS = /[A-Za-z0-9=_#/\-+&]/;
+
+/**
+ * `link` without its trailing punctuation. R47 pages-a L5: a backward walk to
+ * the last kept character, linear in the link. The pattern it replaces
+ * (/[^A-Za-z0-9=_#/\-+&]+$/) rescanned to the end from each stripped character,
+ * so a long run of them before one kept character cost seconds.
+ */
+export function trimLinkTrailing(link: string): string {
+  let end = link.length;
+  while (end > 0 && !LINK_KEEPS.test(link[end - 1])) end -= 1;
+  return link.slice(0, end);
+}
 
 function linkOf(text: string): TextLink {
   const hasScheme = /^https?:\/\//i.test(text);
@@ -166,7 +179,7 @@ export function textUnits(text: string): TextUnit[] {
     for (const grapheme of toGraphemes(part)) units.push({ text: grapheme, link: null });
   };
   for (const match of text.matchAll(LINK)) {
-    const link = match[0].replace(LINK_TRAILING, "");
+    const link = trimLinkTrailing(match[0]);
     // A match trimmed down to a bare "a.b" with no letters left is not a link.
     if (!/\.[A-Za-z]{2,}/.test(link)) continue;
     pushGraphemes(text.slice(at, match.index));
