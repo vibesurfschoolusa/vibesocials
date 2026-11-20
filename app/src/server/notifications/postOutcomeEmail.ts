@@ -96,6 +96,11 @@ export interface BuildPostOutcomeEmailParams {
   scanNotice?: boolean;
   /** Who reads it: a member is told the owner can reconnect (R9-client-journey L4). */
   recipientRole?: "owner" | "member";
+  /**
+   * The email is about a Story half alone (R47 publishing L1): with no results
+   * to label, the zero-results email says "Story" itself.
+   */
+  story?: boolean;
 }
 
 export interface PostOutcomeEmail {
@@ -216,6 +221,7 @@ export function buildPostOutcomeEmail({
   caption,
   scanNotice = false,
   recipientRole = "owner",
+  story = false,
 }: BuildPostOutcomeEmailParams): PostOutcomeEmail {
   const base = appBaseUrl || null;
   // Omitted cleanly (no dead link, no crash) when no base URL is available.
@@ -246,7 +252,8 @@ export function buildPostOutcomeEmail({
   // keeps that pre-existing neutral copy; only `failed` gets this dedicated
   // subject/body.
   if (results.length === 0 && status === "failed") {
-    const headline = "Your scheduled post couldn't be published";
+    const what = story ? "Story" : "post";
+    const headline = `Your scheduled ${what} couldn't be published`;
     const html = [
       "<div>",
       `<h1>${escapeHtml(headline)}</h1>`,
@@ -254,7 +261,7 @@ export function buildPostOutcomeEmail({
       // F1 review: no platform was tried, because no connection could take the
       // post or because our side gave up after 2 h. The job records neither
       // cause, so this says what is true for both, like the Activity card.
-      "<p>This post was not sent. Open it in Activity and use Send again to try once more.</p>",
+      `<p>This ${what} was not sent. Open it in Activity and use Send again to try once more.</p>`,
       onceADay,
       link,
       optOut,
@@ -363,6 +370,15 @@ function deferredUntil(job: OutcomeJob): number {
   return times.length > 0 ? Math.max(...times) : 0;
 }
 
+/**
+ * The Story half of a Feed and Story pair (it names its feed job). Not judged
+ * by storyPlatformsOf: a single job can send a Story to Instagram and a feed
+ * post elsewhere, and with no results the email can't tell which went where.
+ */
+function isStoryHalf(job: OutcomeJob): boolean {
+  return Boolean(job.storyOfPostJobId);
+}
+
 /** A half that failed with no result at all: no platform was tried. */
 function givenUpUnsent(job: OutcomeJob): boolean {
   return job.status === "failed" && job.results.length === 0;
@@ -380,9 +396,11 @@ function pairDecision(
 ): { send: "alone" | "together" } | { send: "wait"; until: number } {
   if (!partner) return { send: "alone" };
   // R46 publishing part-A L1: a half given up with no results was never sent.
-  // The pair's email would hold only the other half's rows and say it all
-  // worked, so each half sends its own (the empty one: "use Send again").
-  if (givenUpUnsent(job) || givenUpUnsent(partner)) return { send: "alone" };
+  // Beside a half that was sent, the pair's email would hold only that half's
+  // rows and say it all worked, so each sends its own (the empty one: "use
+  // Send again"). R47 publishing L1: only when exactly one is empty; two empty
+  // halves stay together, one "couldn't be published" email for the post.
+  if (givenUpUnsent(job) !== givenUpUnsent(partner)) return { send: "alone" };
   const mine = finishedAt(job);
   if (PUBLISHING_STATUSES.includes(partner.status)) {
     const deadline = mine + PAIR_EMAIL_WAIT_MS;
@@ -676,6 +694,8 @@ export async function deliverPostOutcomeNotification({
       caption: feed.baseCaption ?? feed.mediaItem?.baseCaption ?? "",
       scanNotice,
       recipientRole: role,
+      // The Story half emailed on its own.
+      story: story === null && isStoryHalf(feed),
     });
 
     await sendEmail(

@@ -888,10 +888,24 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
       await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID, afterPairWait: true });
 
       expect(sendEmailMock).toHaveBeenCalledTimes(2);
-      expect(sent(0).subject).toBe("Surf Co: your scheduled post couldn't be published");
+      // R47 publishing L1: the unsent half's email says it is the Story.
+      expect(sent(0).subject).toBe("Surf Co: your scheduled Story couldn't be published");
+      expect(sent(0).html).toContain("<h1>Your scheduled Story couldn&#39;t be published</h1>");
+      expect(sent(0).html).toContain("This Story was not sent.");
       expect(sent(0).html).toContain("use Send again");
       expect(sent(1).subject).toBe("Surf Co: your post published successfully to all 2 platforms");
       expect(keyOf(0)).not.toBe(keyOf(1));
+    });
+
+    it("both halves given up: ONE couldn't-be-published email for the post, under the pair's key", async () => {
+      pair(givenUp(feedJob(), T0), givenUp(storyJob(), T0));
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID });
+
+      expect(new Set(sendEmailMock.mock.calls.map((_call, index) => keyOf(index))).size).toBe(1);
+      expect(keyOf(0)).toBe("post-outcome-pair/job-feed/first/first");
+      expect(sent(0).subject).toBe("Surf Co: your scheduled post couldn't be published");
+      expect(sent(0).html).not.toContain("Story");
     });
 
     it("the mirror: a Story that worked beside a feed given up: two emails too", async () => {
@@ -903,6 +917,8 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
       expect(sent(0).subject).not.toContain("couldn't be published");
       expect(sent(0).html).toContain("Instagram Story");
       expect(sent(1).subject).toBe("Surf Co: your scheduled post couldn't be published");
+      // The feed half is the post: its email never says Story.
+      expect(sent(1).html).not.toContain("Story");
       expect(keyOf(0)).not.toBe(keyOf(1));
     });
 
