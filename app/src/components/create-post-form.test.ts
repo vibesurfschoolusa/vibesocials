@@ -44,6 +44,7 @@ import {
   isTextPostMode,
   needsSubmitConfirm,
   nextFileLostNotice,
+  nextLostFile,
   nextRefusedFile,
   refusedFileLine,
   nextPreparingPick,
@@ -640,6 +641,33 @@ describe("a file that went away leaves a notice that stays", () => {
     expect(fileLostBlocksSubmit(afterPress)).toBe(false);
     expect(fileLostBlocksSubmit("none")).toBe(false);
     expect(nextFileLostNotice("none", { type: "pressed" })).toBe("none");
+  });
+});
+
+// R52 fix review: the failed photo's line belongs to the lost-file notice, so
+// it clears exactly when the notice does, and nothing else touches it.
+describe("nextLostFile: the failed file's line beside the notice", () => {
+  const file = { name: "IMG_0042.jpg", message: "This file is empty (0 bytes). Choose another file." };
+
+  it("a loss that names a file sets it; a loss with none clears it", () => {
+    expect(nextLostFile(null, { type: "lost", reason: "photos-failed", file })).toEqual(file);
+    expect(nextLostFile(file, { type: "lost", reason: "library-failed" })).toBeNull();
+  });
+
+  it("a press keeps it", () => {
+    expect(nextLostFile(file, { type: "pressed" })).toEqual(file);
+  });
+
+  it("everything that clears the notice clears it", () => {
+    for (const event of [
+      { type: "attached" },
+      { type: "dismissed" },
+      { type: "reset" },
+      { type: "refused", file: { name: "big.mp4", message: "This file is over 512 MB." } },
+    ] as const) {
+      expect(nextLostFile(file, event)).toBeNull();
+      expect(nextFileLostNotice("fresh", event)).toBe("none");
+    }
   });
 });
 
@@ -1505,8 +1533,7 @@ describe("a refused press shows its reason where the person is", () => {
     const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
     const submit = raw.slice(raw.indexOf("async function handleUploadSubmit("), raw.indexOf("async function handleEnhanceCaption("));
     // Counted with the clear, before any refusal, so the same sentence twice is shown twice.
-    // R52 fix review L2: the clear keeps only the failed photo's line, while its notice shows.
-    expect(submit).toMatch(/setUploadError\(\(current\) => \(current !== null && current === keepLostLine \? current : null\)\);\s*setPressRefusal\(null\);\s*setShowSuccess\(false\);\s*setPressCount\(\(count\) => count \+ 1\);\s*const pressedAt = pressClock\(\);\s*if \(first\.stop === "wait"\)/);
+    expect(submit).toMatch(/setUploadError\(null\);\s*setPressRefusal\(null\);\s*setShowSuccess\(false\);\s*setPressCount\(\(count\) => count \+ 1\);\s*const pressedAt = pressClock\(\);\s*if \(first\.stop === "wait"\)/);
     expect(raw).toMatch(/if \(pressCount === 0\) return;[\s\S]{0,200}revealRefusal\(uploadErrorRef\.current, reduce\);\s*\}, \[pressCount\]\);/);
     expect(raw).toMatch(/<Alert ref=\{uploadErrorRef\} tabIndex=\{-1\} variant="danger" className="scroll-mt-24">\{shownUploadError\}<\/Alert>/);
   });
@@ -1526,7 +1553,10 @@ describe("a refused press shows its reason where the person is", () => {
   it("the phone bar's reason is the form's line, as shown", () => {
     const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
     const control = raw.slice(raw.indexOf("const control = submitControl({"), raw.indexOf("return (", raw.indexOf("const control = submitControl({")));
-    expect(control).toContain("pageError: shownUploadError ?? (refusedFile ? refusedFileLine(refusedFile) : null),");
+    // R52 fix review: then the failed photo's line, while its notice shows.
+    expect(control).toContain(
+      "pageError: shownUploadError ?? (refusedFile ? refusedFileLine(refusedFile) : null) ?? (fileLostShown && lostFile ? lostFileLine(lostFile) : null),",
+    );
   });
 });
 

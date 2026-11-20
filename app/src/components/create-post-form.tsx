@@ -711,8 +711,15 @@ export type FileLostReason = "prepare-failed" | "library-failed" | "photos-faile
  */
 export type RefusedFile = { name: string; message: string };
 
+/**
+ * R52 fix review: the failed file's own line, carried on a loss that has one
+ * (several photos where one could not be prepared). It belongs to the notice,
+ * not to the form's error line; name is null when the sentence names the file.
+ */
+export type LostFile = { name: string | null; message: string };
+
 export type FileLostEvent =
-  | { type: "lost"; reason: FileLostReason }
+  | { type: "lost"; reason: FileLostReason; file?: LostFile }
   /** A newer refusal replaces the lost-file notice, as a newer loss replaces the refusal. */
   | { type: "refused"; file: RefusedFile }
   | { type: "attached" }
@@ -738,6 +745,18 @@ export function nextRefusedFile(current: RefusedFile | null, event: FileLostEven
   if (event.type === "refused") return event.file;
   if (event.type === "pressed" || event.type === "dismissed") return current;
   return null;
+}
+
+/** The failed file's line: set by its loss, cleared exactly when the notice is; a press keeps it. */
+export function nextLostFile(current: LostFile | null, event: FileLostEvent): LostFile | null {
+  if (event.type === "lost") return event.file ?? null;
+  if (event.type === "pressed") return current;
+  return null;
+}
+
+/** The failed file's line as shown beside the notice. */
+export function lostFileLine(file: LostFile): string {
+  return file.name ? refusedFileLine({ name: file.name, message: file.message }) : file.message;
 }
 
 /** The refused file's line: what happened to which file, then the refusal's own step. */
@@ -1220,22 +1239,16 @@ function CreatePostFormInner({
   const [fileLost, setFileLost] = useState<FileLostNotice>("none");
   // R51: a pick refused for the file itself; its line is drawn from here, not uploadError.
   const [refusedFile, setRefusedFile] = useState<RefusedFile | null>(null);
-  // R52 fix review L2: the form line a loss set (the failed photo's own
-  // refusal). A press leaves it while the notice shows; only what clears the
-  // notice clears it, so the person still knows which photo to leave out.
-  const lostFileLineRef = useRef<string | null>(null);
-  /** Every change to the file comes here, so the notice and the refused line follow the same events. */
+  // R52 fix review: the failed photo's line, beside the notice (nextLostFile).
+  const [lostFile, setLostFile] = useState<LostFile | null>(null);
+  /** Every change to the file comes here, so the notice and the file lines follow the same events. */
   const fileEvent = (event: FileLostEvent) => {
     setFileLost((current) => nextFileLostNotice(current, event));
     setRefusedFile((current) => nextRefusedFile(current, event));
-    const lostLine = lostFileLineRef.current;
-    if (lostLine !== null && nextFileLostNotice("fresh", event) === "none") {
-      lostFileLineRef.current = null;
-      setUploadError((current) => (current === lostLine ? null : current));
-    }
+    setLostFile((current) => nextLostFile(current, event));
   };
   /** The file went away by itself: the notice and its one-press stop. */
-  const loseFile = (reason: FileLostReason) => fileEvent({ type: "lost", reason });
+  const loseFile = (reason: FileLostReason, file?: LostFile) => fileEvent({ type: "lost", reason, file });
   // Scrolled into view whenever the success banner appears (effect below) so
   // a submit from further down the form doesn't leave the confirmation
   // off-screen.
@@ -2124,13 +2137,20 @@ function CreatePostFormInner({
     setPreparingPhotos(true);
     if (replace && autoCaptionRef.current) setAutoCaptionLoading(true);
 
+    // The photo being prepared (preparePhotos asks isAttached first), so a failed one's line can name it.
+    let preparingName: string | null = null;
     try {
       const prepared = await preparePhotos(placeholders, {
         prepare: (file) => preparePickedPhoto(file),
         isStale,
-        isAttached: isPhotoAttached,
+        isAttached: (key) => {
+          preparingName = placeholders.find((photo) => photo.key === key)?.file.name ?? null;
+          return isPhotoAttached(key);
+        },
       });
       if (!prepared) return;
+      // Every photo prepared: a later refusal is the pick's, not one photo's.
+      preparingName = null;
 
       const typeProblem = photoPickProblem(attachedCount, prepared.map((entry) => entry.file));
       if (typeProblem) throw new Error(typeProblem);
@@ -2144,11 +2164,14 @@ function CreatePostFormInner({
       if (isStale()) return;
       // Attach nothing from this pick.
       changePhotoSet((prev) => prev.filter((photo) => !pickKeys.has(photo.key)));
-      const line = (err as Error).message || "Failed to prepare media for posting. Please try again.";
-      setUploadError(line);
+      const message = (err as Error).message || "Failed to prepare media for posting. Please try again.";
+      // Nothing stays attached: the line goes with the notice, so a press or
+      // Improve caption can't wipe it. Beside photos that stay, it is the form's line.
       if (photosFailureLosesFile({ attachedBefore: attachedCount })) {
-        loseFile("photos-failed");
-        lostFileLineRef.current = line;
+        const named: string | null = preparingName;
+        loseFile("photos-failed", { name: named && !message.includes(named) ? named : null, message });
+      } else {
+        setUploadError(message);
       }
       if (replace) {
         setFileInputKey((key) => key + 1);
@@ -2583,9 +2606,7 @@ function CreatePostFormInner({
       toast.error(FILE_LOST_PRESS_TOAST);
       return;
     }
-    // R52 fix review L2: the failed photo's line stays while its notice shows.
-    const keepLostLine = fileLostShown ? lostFileLineRef.current : null;
-    setUploadError((current) => (current !== null && current === keepLostLine ? current : null));
+    setUploadError(null);
     setPressRefusal(null);
     setShowSuccess(false);
     setPressCount((count) => count + 1);
@@ -2811,7 +2832,7 @@ function CreatePostFormInner({
     untouchedMessage,
     platformAlert,
     // The refused file's line is the form's too: on a phone the bar is where it is read.
-    pageError: shownUploadError ?? (refusedFile ? refusedFileLine(refusedFile) : null),
+    pageError: shownUploadError ?? (refusedFile ? refusedFileLine(refusedFile) : null) ?? (fileLostShown && lostFile ? lostFileLine(lostFile) : null),
     aiWait: captionBox.aiWait,
   });
   const postTextChanged = confirmPublishOpen ? postTextChangedSince(postTextAtConfirm, postTextNow()) : null;
@@ -2898,6 +2919,7 @@ function CreatePostFormInner({
 
         {shownUploadError && <Alert ref={uploadErrorRef} tabIndex={-1} variant="danger" className="scroll-mt-24">{shownUploadError}</Alert>}
         {refusedFile ? <Alert variant="danger">{refusedFileLine(refusedFile)}</Alert> : null}
+        {fileLostShown && lostFile ? <Alert variant="danger">{lostFileLine(lostFile)}</Alert> : null}
 
         <div className="space-y-1.5">
           {reuseItem ? (

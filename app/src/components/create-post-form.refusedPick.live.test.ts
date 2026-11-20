@@ -395,59 +395,93 @@ describe("R52: the lost-file stop only when something else can be sent", () => {
   });
 });
 
-// R52 fix review L2: a several-photo pick where one photo fails leaves that
-// photo's own line beside the lost-file notice. A press must not wipe it while
-// the notice shows; only what clears the notice (attach, dismiss, reset) does.
-describe("R52 fix review: the failed photo's line stays while the notice shows", () => {
+// R52 fix review: a several-photo pick where one photo fails on an empty page
+// leaves the lost-file notice and that photo's own line. The line belongs to
+// the notice: it clears exactly when the notice does (attach, Dismiss, a saved
+// post, a newer refusal or loss). A press, Improve caption or another refusal
+// sets the form's own line without touching it.
+describe("R52 fix review: the failed photo's line belongs to the lost-file notice", () => {
   const placeholder = () => new File([], "IMG_0042.jpg", { type: "image/jpeg" });
   const good = (name: string) => new File(["x"], name, { type: "image/jpeg" });
-  // The failed photo's own refusal (photoPickProblem / prepareUploadFile).
-  const PHOTO_LINE = EMPTY;
+  const PHOTO_LINE = `IMG_0042.jpg wasn't added. ${EMPTY}`;
+  /** Times the page (outside the toasts) says the photo's line. */
+  const photoLines = () => textOutsideToasts(body).split(PHOTO_LINE).length - 1;
   async function failedPick() {
     await pick(good("a.jpg"), placeholder(), good("b.jpg"));
     expect(lineSays(FILE_LOST_MESSAGE)).toBe(true);
     expect(lineSays(PHOTO_LINE)).toBe(true);
   }
 
-  it("untouched page: the line stays, press after press", async () => {
+  it("empty page: press, press, Improve caption, text and press (the stop), press again (posts, the line clears)", async () => {
     await failedPick();
+    await submit();
     await submit();
     expect(lineSays(UNTOUCHED_SUBMIT_MESSAGE)).toBe(true);
     expect(lineSays(PHOTO_LINE)).toBe(true);
+
+    // Improve with no text refuses with its own line; the photo's stays beside it.
+    await run(() => props(button("Improve caption")).onClick());
+    expect(lineSays("Please enter some text first to enhance.")).toBe(true);
+    expect(lineSays(PHOTO_LINE)).toBe(true);
+
+    await typeCaption("Surf lesson today");
     await submit();
+    expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(true);
+    expect(dialogShown()).toBe(false);
+    expect(lineSays(PHOTO_LINE)).toBe(true);
+
+    await submit();
+    expect(dialogShown()).toBe(true);
+    await run(() => props(dialogButton("Publish without a photo")).onClick());
+    expect(postBodies).toHaveLength(1);
+    expect(lineSays(PHOTO_LINE)).toBe(false);
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
+  });
+
+  it("Improve caption with text keeps the line", async () => {
+    await failedPick();
+    await typeCaption("Surf lesson today");
+    await run(() => props(button("Improve caption")).onClick());
     expect(lineSays(PHOTO_LINE)).toBe(true);
     expect(lineSays(FILE_LOST_MESSAGE)).toBe(true);
   });
 
-  it("text page: press, press again: the line stays until the post is saved", async () => {
-    await failedPick();
-    await typeCaption("Surf lesson today");
-    await submit();
-    expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(true);
-    expect(lineSays(PHOTO_LINE)).toBe(true);
-    await submit();
-    expect(dialogShown()).toBe(true);
-    expect(lineSays(PHOTO_LINE)).toBe(true);
-    await run(() => props(dialogButton("Publish without a photo")).onClick());
-    expect(postBodies).toHaveLength(1);
-    expect(lineSays(PHOTO_LINE)).toBe(false);
-  });
-
-  it("dismissing the notice clears the line", async () => {
-    await failedPick();
-    await run(() => props(button("Dismiss")).onClick());
-    expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
-    expect(lineSays(PHOTO_LINE)).toBe(false);
-  });
-
-  it("attaching a file clears the line", async () => {
+  it("attaching a new file clears the line and the notice", async () => {
     await failedPick();
     await pick(good("c.jpg"));
     expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
     expect(lineSays(PHOTO_LINE)).toBe(false);
   });
 
-  it("no notice: a press clears a stale error as before", async () => {
+  it("Dismiss clears both", async () => {
+    await failedPick();
+    await run(() => props(button("Dismiss")).onClick());
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
+    expect(lineSays(PHOTO_LINE)).toBe(false);
+  });
+
+  it("a press refused for another reason: its sentence shows, and the photo's line stays, once", async () => {
+    await failedPick();
+    await typeCaption("Surf lesson today");
+    await chooseMode("Schedule");
+    await submit(); // the file-lost stop
+    await submit(); // refused: no time chosen
+    expect(lineSays("Please choose a valid date and time to schedule this post.")).toBe(true);
+    expect(lineSays(PHOTO_LINE)).toBe(true);
+    expect(photoLines()).toBe(1);
+    expect(calls).not.toContain("/api/posts");
+  });
+
+  it("unchanged: a ?mediaItemId load failure is a notice with no file line", async () => {
+    await act(async () => root.unmount());
+    nav.params = new URLSearchParams("mediaItemId=media-gone");
+    root = createRoot(container as unknown as HTMLElement);
+    await mount();
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(true);
+    expect(lineSays("wasn't added")).toBe(false);
+  });
+
+  it("unchanged: no notice, a press clears a stale line as before", async () => {
     await typeCaption("Surf lesson today");
     // A pick that breaks a rule says why and attaches nothing: no notice.
     await pick(new File(["x"], "notes.pdf", { type: "application/pdf" }), good("d.jpg"));
