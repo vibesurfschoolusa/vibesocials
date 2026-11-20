@@ -196,13 +196,13 @@ describe("photoPickProblem (the Create page's picker)", () => {
   // attached has no photos on screen to remove; one added to attached photos does.
   // Where several files were picked, it names the one it means.
   it("a mixed pick with nothing attached, video: choose it by itself, or only the photos", () => {
-    expect(photoPickProblem(0, [jpeg, { name: "clip.mp4", type: "video/mp4" }])).toBe(
+    expect(photoPickProblem(0, [jpeg, jpeg, { name: "clip.mp4", type: "video/mp4" }])).toBe(
       "clip.mp4: a video is posted on its own. Choose the video by itself, or choose only the photos.",
     );
   });
 
   it("a mixed pick with nothing attached, GIF: choose it by itself, or only the photos", () => {
-    expect(photoPickProblem(0, [jpeg, { name: "wave.gif", type: "image/gif" }])).toBe(
+    expect(photoPickProblem(0, [jpeg, jpeg, { name: "wave.gif", type: "image/gif" }])).toBe(
       "wave.gif: a GIF is posted on its own. Choose the GIF by itself, or choose only the photos.",
     );
   });
@@ -219,6 +219,31 @@ describe("photoPickProblem (the Create page's picker)", () => {
   it("a GIF added to attached photos: remove the photos, or post it separately", () => {
     expect(photoPickProblem(3, [{ name: "wave.gif", type: "image/gif" }])).toBe(
       "A GIF is posted on its own. Remove the photos to post it instead, or post it separately.",
+    );
+  });
+
+  // R47 lead review: the step counts what is on screen (lib/plural).
+  it("one attached photo: \"Remove the photo\"; three: \"Remove the photos\", for a video and a GIF", () => {
+    expect(photoPickProblem(1, [{ name: "clip.mp4", type: "video/mp4" }])).toBe(
+      "A video is posted on its own. Remove the photo to post it instead, or post it separately.",
+    );
+    expect(photoPickProblem(3, [{ name: "clip.mp4", type: "video/mp4" }])).toBe(
+      "A video is posted on its own. Remove the photos to post it instead, or post it separately.",
+    );
+    expect(photoPickProblem(1, [{ name: "wave.gif", type: "image/gif" }])).toBe(
+      "A GIF is posted on its own. Remove the photo to post it instead, or post it separately.",
+    );
+    expect(photoPickProblem(3, [{ name: "wave.gif", type: "image/gif" }])).toBe(
+      "A GIF is posted on its own. Remove the photos to post it instead, or post it separately.",
+    );
+  });
+
+  it("a mixed pick names the picked photo in the singular when there is one", () => {
+    expect(photoPickProblem(0, [jpeg, { name: "clip.mp4", type: "video/mp4" }])).toBe(
+      "clip.mp4: a video is posted on its own. Choose the video by itself, or choose only the photo.",
+    );
+    expect(photoPickProblem(0, [jpeg, jpeg, { name: "wave.gif", type: "image/gif" }])).toBe(
+      "wave.gif: a GIF is posted on its own. Choose the GIF by itself, or choose only the photos.",
     );
   });
 
@@ -265,7 +290,7 @@ describe("photoPickProblem (the Create page's picker)", () => {
 
   it("a typeless clip.mp4 is a video: the lone-video sentence", () => {
     expect(photoPickProblem(0, [jpeg, picked("clip.mp4", "")])).toBe(
-      "clip.mp4: a video is posted on its own. Choose the video by itself, or choose only the photos.",
+      "clip.mp4: a video is posted on its own. Choose the video by itself, or choose only the photo.",
     );
   });
 });

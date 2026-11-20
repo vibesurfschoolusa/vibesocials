@@ -4,6 +4,7 @@ import { cleanAltText } from "./altText";
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "./blobUrl";
 import { logoAddressRefusal } from "./workspaceLogo";
 import { parsePostMediaFields } from "./mediaInput";
+import { countWord } from "./plural";
 import { unknownTypeMessage } from "./prepareUploadFile";
 
 /**
@@ -142,12 +143,19 @@ export const PHOTO_LIMIT_MESSAGE = `You can attach up to ${MAX_POST_MEDIA} photo
  * screen to remove, so the step is to choose again; with photos attached, it
  * is to remove them. Where several files were picked, the file is named.
  */
-function aloneMessage(kind: "video" | "GIF", name: string, attachedCount: number, pickedCount: number): string {
+function aloneMessage(
+  kind: "video" | "GIF",
+  name: string,
+  attachedCount: number,
+  picked: readonly { type: string }[],
+): string {
+  // The step counts what is on screen: the photos picked with it, or the ones attached.
+  const pickedPhotos = picked.filter((file) => !file.type.startsWith("video/") && file.type !== "image/gif").length;
   const step =
     attachedCount === 0
-      ? `Choose the ${kind} by itself, or choose only the photos.`
-      : "Remove the photos to post it instead, or post it separately.";
-  return pickedCount > 1 ? `${name}: a ${kind} is posted on its own. ${step}` : `A ${kind} is posted on its own. ${step}`;
+      ? `Choose the ${kind} by itself, or choose only ${countWord(pickedPhotos, "the photo", "the photos")}.`
+      : `Remove ${countWord(attachedCount, "the photo", "the photos")} to post it instead, or post it separately.`;
+  return picked.length > 1 ? `${name}: a ${kind} is posted on its own. ${step}` : `A ${kind} is posted on its own. ${step}`;
 }
 export const PHOTO_TYPE_MESSAGE = "A post with several photos takes JPEG, PNG or WebP images only.";
 
@@ -159,9 +167,9 @@ export const PHOTO_TYPE_MESSAGE = "A post with several photos takes JPEG, PNG or
  */
 export function photoPickProblem(attachedCount: number, picked: readonly { type: string; name: string }[]): string | null {
   const video = picked.find((file) => file.type.startsWith("video/"));
-  if (video) return aloneMessage("video", video.name, attachedCount, picked.length);
+  if (video) return aloneMessage("video", video.name, attachedCount, picked);
   const gif = picked.find((file) => file.type === "image/gif");
-  if (gif) return aloneMessage("GIF", gif.name, attachedCount, picked.length);
+  if (gif) return aloneMessage("GIF", gif.name, attachedCount, picked);
   if (attachedCount + picked.length > MAX_POST_MEDIA) return PHOTO_LIMIT_MESSAGE;
   // R46 review: a type that can't be told gets the shared sentence, judged by the file's own
   // name (required, so no caller can leave it out and turn "clip.mkv" into "no extension").
