@@ -1829,3 +1829,25 @@ describe("the caption busy state", () => {
     expect(dismiss).toContain("captionBusy.stop();");
   });
 });
+
+// R46 publishing part-B L2: a pick of several photos is judged by the type each
+// will have once prepared (preparedTypeOf), so a photo the browser gave no type
+// counts by its name, as a single pick does.
+describe("a pick of several photos where one has no browser type", () => {
+  const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+  const body = raw.slice(raw.indexOf("async function attachPickedPhotos("), raw.indexOf("\n  }\n", raw.indexOf("async function attachPickedPhotos(")));
+
+  it("attachPickedPhotos judges the pick by preparedTypeOf", () => {
+    expect(body).toContain("picked.map((file) => ({ type: preparedTypeOf(file) }))");
+  });
+
+  it("b.jpg with no type plus a JPEG attaches", async () => {
+    const { photoPickProblem } = await import("@/lib/postMedia");
+    const { preparedTypeOf } = await import("@/lib/prepareUploadFile");
+    const picked = [
+      { name: "b.jpg", type: "", size: 1_000 },
+      { name: "a.jpg", type: "image/jpeg", size: 1_000 },
+    ];
+    expect(photoPickProblem(0, picked.map((file) => ({ type: preparedTypeOf(file) })))).toBeNull();
+  });
+});

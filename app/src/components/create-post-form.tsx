@@ -82,7 +82,7 @@ import {
   photoPickProblem,
   removePhoto,
 } from "@/lib/postMedia";
-import { isHeicFile, preparedTypeOf, prepareUploadFile } from "@/lib/prepareUploadFile";
+import { preparedTypeOf, prepareUploadFile } from "@/lib/prepareUploadFile";
 import { platformAcceptsTextOnly, textPostsEnabled } from "@/lib/platformLimits";
 import { shouldTakeSharedFile, takeSharedFile } from "@/lib/sharedFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
@@ -2009,7 +2009,7 @@ function CreatePostFormInner({
     // An iPhone photo counts as the JPEG it becomes; checked again after.
     const problem = photoPickProblem(
       attachedCount,
-      picked.map((file) => ({ type: isHeicFile(file) ? "image/jpeg" : file.type })),
+      picked.map((file) => ({ type: preparedTypeOf(file) })),
     );
     if (problem) {
       setUploadError(problem);
