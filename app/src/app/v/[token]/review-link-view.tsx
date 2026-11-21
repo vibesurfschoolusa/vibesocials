@@ -256,9 +256,10 @@ function formatWhen(iso: string | null): string {
  * listed as a Story (storyPlatformLabel), the server's own test for showing
  * that fixed line.
  */
-export function reviewCardName(post: Pick<ReviewPostDTO, "platforms" | "caption" | "scheduledFor">): string {
+export function reviewCardName(post: Pick<ReviewPostDTO, "platforms" | "caption" | "scheduledFor" | "state">): string {
   const storyOnly = post.platforms.length > 0 && post.platforms.every((label) => label.endsWith(" (Story)"));
-  return cardName(post.caption, post.scheduledFor, { story: storyOnly });
+  // R58 fix review L2: a card waiting on changes shows no time, so its old one reads "was".
+  return cardName(post.caption, post.scheduledFor, { story: storyOnly, was: post.state === "change_requested" });
 }
 
 function PostMedia({ post }: { post: ReviewPostDTO }) {

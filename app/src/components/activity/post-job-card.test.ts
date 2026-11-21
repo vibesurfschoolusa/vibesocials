@@ -790,6 +790,16 @@ describe("PostJobCard - repeated buttons name the post", () => {
     );
   });
 
+  // R58 fix review L1: the Story half is its own job with the same caption and time.
+  it("a Feed and Story pair: the Story card's name says Story, the Feed card's is as before", () => {
+    const nameOf = (out: string) => /aria-label="Send again &quot;([^"]*)&quot;"/.exec(out)?.[1];
+    const iso = "2026-11-11T15:00:00.000Z";
+    const feed = nameOf(html(job({ id: "f", status: "failed", scheduledFor: iso })));
+    const story = nameOf(html(job({ id: "s", status: "failed", scheduledFor: iso, storyOf: { id: "f", scheduledFor: iso }, storyHalf: true })));
+    expect(feed).toBe(`Two spots left today, ${at(iso)}`);
+    expect(story).toBe(`Two spots left today, Story, ${at(iso)}`);
+  });
+
   it("two posts of a series, same caption, different times, have different names", () => {
     const nameOf = (out: string) => /aria-label="Send again &quot;([^"]*)&quot;"/.exec(out)?.[1];
     const a = nameOf(html(job({ id: "a", status: "failed", scheduledFor: "2026-11-11T15:00:00.000Z" })));

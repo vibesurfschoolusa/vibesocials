@@ -448,7 +448,8 @@ export function PostJobCard({
   const time = cardTime(job);
   // R57 pages-b L1: the buttons repeat on every card, so each one's name carries the post's caption, as the Queue's do.
   // R58 pages-a L1: and the card's time, since a series shares one caption.
-  const name = cardName(job.caption, time?.iso);
+  // R58 fix review L1: a Story half shares its Feed job's caption and time, so its name says Story.
+  const name = cardName(job.caption, time?.iso, { storyHalf: Boolean(job.storyOf || job.storyHalf) });
   // 2026-11-10: platforms this post went to as a Story (labelled, and no link built from the id).
   const isStory = (platform: Platform) => job.storyPlatforms?.includes(platform) ?? false;
   const postUrl = (result: PostJobDTO["results"][number]) =>

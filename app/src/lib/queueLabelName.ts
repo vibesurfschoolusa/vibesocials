@@ -21,15 +21,19 @@ const CARD_TIME: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", 
  * a Repeat series makes posts with one caption, so the caption alone gave
  * every card of a series the same name; the time the card shows tells them
  * apart. Short: no weekday or year. `story`: a Story-only card on /v, whose
- * caption is one fixed line, is "Story" plus its time.
+ * caption is one fixed line, is "Story" plus its time. `storyHalf`: the Story
+ * job of a Feed and Story post, which shares the Feed job's caption and time,
+ * adds "Story" (R58 fix review L1). `was`: a time the card no longer shows as
+ * its own, such as a /v card waiting on changes (R58 fix review L2).
  */
 export function cardName(
   caption: string | null | undefined,
   iso: string | null | undefined,
-  options: { story?: boolean } = {},
+  options: { story?: boolean; storyHalf?: boolean; was?: boolean } = {},
 ): string {
   const head = options.story ? "Story" : labelName(caption);
   const date = iso ? new Date(iso) : null;
   if (!date || Number.isNaN(date.getTime())) return head;
-  return `${head}, ${date.toLocaleString(undefined, CARD_TIME)}`;
+  const when = `${options.was ? "was " : ""}${date.toLocaleString(undefined, CARD_TIME)}`;
+  return options.storyHalf ? `${head}, Story, ${when}` : `${head}, ${when}`;
 }

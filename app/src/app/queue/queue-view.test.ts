@@ -260,6 +260,17 @@ describe("queueCardName", () => {
   it("a post with no caption is Untitled post plus its time", () => {
     expect(queueCardName(job("u", { caption: "" }))).toBe(`Untitled post, ${at("2026-11-01T00:00:00.000Z")}`);
   });
+
+  // R58 fix review L1: the Story half is its own job with the same caption and time.
+  it("a Feed and Story pair: the Story card's name says Story, the Feed card's is as before", () => {
+    const iso = "2026-11-21T14:00:00.000Z";
+    const feed = series("f", iso);
+    const story = job("s", { caption: "Saturday surf lesson", status: "scheduled", scheduledFor: iso, storyOf: { id: "f", scheduledFor: iso }, storyHalf: true });
+    expect(queueCardName(feed)).toBe(`Saturday surf lesson, ${at(iso)}`);
+    expect(queueCardName(story)).toBe(`Saturday surf lesson, Story, ${at(iso)}`);
+    // Its feed half gone, the Story job is still a Story.
+    expect(queueCardName({ ...story, storyOf: undefined })).toBe(`Saturday surf lesson, Story, ${at(iso)}`);
+  });
 });
 
 // R16-pages L4: each of the Queue card's three "by" lines wraps a long label

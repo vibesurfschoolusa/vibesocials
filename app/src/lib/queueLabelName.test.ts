@@ -61,4 +61,17 @@ describe("cardName, a card's name in its buttons", () => {
       `Story, ${at("2026-11-21T14:00:00.000Z")}`,
     );
   });
+
+  // R58 fix review L1: a Feed and Story post is two jobs with one caption and time.
+  it("a Story half adds Story before its time; the Feed half is as before", () => {
+    const iso = "2026-11-21T14:00:00.000Z";
+    expect(cardName("Saturday surf lesson", iso, { storyHalf: true })).toBe(`Saturday surf lesson, Story, ${at(iso)}`);
+    expect(cardName("Saturday surf lesson", iso)).toBe(`Saturday surf lesson, ${at(iso)}`);
+  });
+
+  // R58 fix review L2: a /v card waiting on changes shows no time, so its old one is marked past.
+  it("a past time reads was", () => {
+    const iso = "2026-11-20T15:00:00.000Z";
+    expect(cardName("Sunday session", iso, { was: true })).toBe(`Sunday session, was ${at(iso)}`);
+  });
 });

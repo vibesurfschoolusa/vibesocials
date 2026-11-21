@@ -556,6 +556,12 @@ describe("reviewCardName", () => {
     expect(reviewCardName(post({ platforms: [], caption: "" }))).toBe(`Untitled post, ${at("2026-11-20T15:00:00.000Z")}`);
   });
 
+  // R58 fix review L2: a card waiting on changes shows no time, so its old one reads "was".
+  it("a card waiting on changes is named by its old time, marked was", () => {
+    expect(reviewCardName(post({ state: "change_requested" }))).toBe(`Sunday session, was ${at("2026-11-20T15:00:00.000Z")}`);
+    expect(reviewCardName(post({ state: "none" }))).toBe(`Sunday session, ${at("2026-11-20T15:00:00.000Z")}`);
+  });
+
   it("two cards of a series, same caption, different times, have different names", () => {
     const nameOf = (html: string) => /aria-label="Looks good &quot;([^"]*)&quot;"[^>]*>Looks good<\/button>/.exec(html)?.[1];
     const a = nameOf(render(post({ id: "a", scheduledFor: "2026-11-20T15:00:00.000Z" })));

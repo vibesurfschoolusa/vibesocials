@@ -300,11 +300,11 @@ interface QueueCardProps {
  * (Proposed for, Scheduled for, else Saved), through cardName.
  */
 export function queueCardName(
-  job: Pick<QueueCardPost, "caption" | "status" | "approvalState" | "scheduledFor" | "createdAt">,
+  job: Pick<QueueCardPost, "caption" | "status" | "approvalState" | "scheduledFor" | "createdAt" | "storyOf" | "storyHalf">,
 ): string {
   const shown =
     (job.approvalState === "pending" || job.status === "scheduled") && job.scheduledFor ? job.scheduledFor : job.createdAt;
-  return cardName(job.caption, shown);
+  return cardName(job.caption, shown, { storyHalf: Boolean(job.storyOf || job.storyHalf) });
 }
 
 function QueueCard({
