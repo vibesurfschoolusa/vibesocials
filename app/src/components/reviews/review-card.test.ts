@@ -216,3 +216,39 @@ describe("ReviewCard: a refused reply", () => {
     expect(html).toMatch(/role="status"[^>]*><p[^>]*>This review is no longer on Google\. Reload the page\.<\/p>/);
   });
 });
+
+// R57 pages-b L3 (#282's rule): every review card repeats these, so each
+// one's name starts with its text and names the reviewer.
+describe("ReviewCard: the repeated buttons name the reviewer", () => {
+  it("Reply to review and Draft AI response", () => {
+    const html = card("Maria Lopez");
+    expect(html).toMatch(/aria-label="Reply to review by Maria Lopez"[^>]*>.*Reply to review<\/button>/);
+    expect(html).toMatch(/aria-label="Draft AI response to the review by Maria Lopez"[^>]*>.*Draft AI response<\/button>/);
+  });
+
+  it("while drafting, the name starts with Generating…", () => {
+    const html = renderToStaticMarkup(
+      createElement(ReviewCard, {
+        review: {
+          name: "accounts/1/locations/2/reviews/r1",
+          reviewId: "r1",
+          reviewer: { displayName: "Maria Lopez", isAnonymous: false },
+          starRating: "FIVE",
+          createTime: "2026-11-01T00:00:00Z",
+          updateTime: "2026-11-01T00:00:00Z",
+        },
+        needsReply: true,
+        isReplyOpen: false,
+        isSubmitting: false,
+        isGeneratingAI: true,
+        replyValue: "",
+        onOpenReply: () => {},
+        onCloseReply: () => {},
+        onChangeReply: () => {},
+        onSubmitReply: () => {},
+        onDraftAI: () => {},
+      }),
+    );
+    expect(html).toContain('aria-label="Generating… a reply to the review by Maria Lopez"');
+  });
+});

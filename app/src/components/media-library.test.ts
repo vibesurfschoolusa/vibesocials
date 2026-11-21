@@ -78,6 +78,13 @@ describe("MediaCard at phone width", () => {
     expect(thumb).toMatch(/<span class="[^"]*absolute[^"]*">\(opens in a new tab\)<\/span><\/a>$/);
   });
 
+  // R57 pages-b L3 (#282's rule): every card repeats Use in new post, so its name names the file.
+  it("names Use in new post by its file, keeping its text", () => {
+    expect(html).toMatch(
+      /<button[^>]*aria-label="Use in new post a-very-long-file-name-from-the-camera-roll.jpg"[^>]*>.*<span class="truncate">Use in new post<\/span><\/button>/,
+    );
+  });
+
   it("keeps Delete in the card, with its word on a phone and its file in its name", () => {
     expect(html).toMatch(/<button[^>]*aria-label="Delete a-very-long-file-name-from-the-camera-roll.jpg"[^>]*>/);
     expect(html).toMatch(/<span class="sm:sr-only">Delete<\/span>/);

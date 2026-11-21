@@ -588,3 +588,16 @@ describe("hasTypedReply", () => {
     expect(hasTypedReply({ a: "", b: "Thanks!" })).toBe(true);
   });
 });
+
+// R57 pages-b L3: the card's Draft AI response names its reviewer; the one
+// inside the open reply form sits under that review's own "Your reply".
+describe("DraftAIButton's name", () => {
+  it("names the reviewer when given one, starting with its text", () => {
+    const html = renderToStaticMarkup(createElement(DraftAIButton, { drafting: false, onDraft: () => {}, reviewer: "Maria Lopez" }));
+    expect(html).toContain('aria-label="Draft AI response to the review by Maria Lopez"');
+  });
+
+  it("has no name of its own without one", () => {
+    expect(renderToStaticMarkup(createElement(DraftAIButton, { drafting: false, onDraft: () => {} }))).not.toContain("aria-label");
+  });
+});
