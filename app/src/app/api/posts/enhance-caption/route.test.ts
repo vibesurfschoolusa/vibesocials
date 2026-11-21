@@ -118,27 +118,51 @@ describe("POST /api/posts/enhance-caption", () => {
     await expect(response.json()).resolves.toEqual({ error: "Caption is required" });
   });
 
+  // R61 pages-a-4 L1: Adapt for X exists to shorten long captions, so the cap
+  // is the caption's own (MAX_CAPTION_CHARS, 10,000), counted as the
+  // on-screen counter counts (captionCounter), never 2,200.
   describe("caption cap", () => {
-    it("accepts exactly 2200 characters", async () => {
-      const response = await post({ caption: "c".repeat(2200) });
+    const TOO_LONG =
+      "This caption is too long for the AI (10,000 characters at most). Your caption is unchanged. Shorten it, or edit it yourself.";
+
+    it("accepts a 2,600-character Adapt for X", async () => {
+      const response = await post({ caption: "c".repeat(2600), platform: "x", maxLength: 280 });
 
       expect(response.status).toBe(200);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    it("rejects 2201 characters with 400 AI_INPUT_TOO_LONG and never calls the provider", async () => {
-      const response = await post({ caption: "c".repeat(2201) });
+    it("accepts a 2,200-character caption with an emoji", async () => {
+      const response = await post({ caption: `${"c".repeat(2199)}🌊`, platform: "instagram" });
+
+      expect(response.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("accepts exactly 10,000 characters", async () => {
+      const response = await post({ caption: "c".repeat(10_000), platform: "x", maxLength: 280 });
+
+      expect(response.status).toBe(200);
+    });
+
+    it("refuses over 10,000 with 400 AI_INPUT_TOO_LONG, naming 10,000, and never calls the provider", async () => {
+      const response = await post({ caption: "c".repeat(10_001), platform: "x", maxLength: 280 });
 
       expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({
-        code: "AI_INPUT_TOO_LONG",
-        error: "This caption is too long for the AI (2,200 characters at most). Your caption is unchanged. Shorten it, or edit it yourself.",
-      });
+      await expect(response.json()).resolves.toEqual({ code: "AI_INPUT_TOO_LONG", error: TOO_LONG });
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
+    it("Improve: a 2,600-character caption is accepted, and over 10,000 is refused the same way", async () => {
+      expect((await post({ caption: "c".repeat(2600) })).status).toBe(200);
+
+      const refused = await post({ caption: "c".repeat(10_001) });
+      expect(refused.status).toBe(400);
+      await expect(refused.json()).resolves.toEqual({ code: "AI_INPUT_TOO_LONG", error: TOO_LONG });
+    });
+
     it("rejects before any rate-limit counter is spent (length check precedes the limits)", async () => {
-      await post({ caption: "c".repeat(2201) });
+      await post({ caption: "c".repeat(10_001) });
 
       expect(checkRateLimitMock).not.toHaveBeenCalled();
     });
@@ -557,8 +581,8 @@ describe("POST /api/posts/enhance-caption - failures a person reads", () => {
     await expect(limited.json()).resolves.toMatchObject({ error: "Too many tries. Wait a minute, then try again." });
 
     checkRateLimitMock.mockResolvedValue({ allowed: true });
-    const tooLong = await post({ caption: "a".repeat(2300) });
-    await expect(tooLong.json()).resolves.toMatchObject({ error: "This caption is too long for the AI (2,200 characters at most). Your caption is unchanged. Shorten it, or edit it yourself." });
+    const tooLong = await post({ caption: "a".repeat(10_001) });
+    await expect(tooLong.json()).resolves.toMatchObject({ error: "This caption is too long for the AI (10,000 characters at most). Your caption is unchanged. Shorten it, or edit it yourself." });
   });
 });
 
