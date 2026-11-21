@@ -123,3 +123,12 @@ describe("Pick a frame: the slider", () => {
     expect(container.textContent).toContain("Frame at 0:03.4");
   });
 });
+
+// R54 publishing-flow L2: Pinterest always sends its own key frame, never the
+// chosen cover, so the line names it beside X and TikTok.
+describe("the line under a chosen cover", () => {
+  it("names Pinterest among the platforms that pick their own", async () => {
+    await show({ kind: "frame", timeMs: 3400 });
+    expect(container.textContent).toContain("X, TikTok and Pinterest pick their own.");
+  });
+});

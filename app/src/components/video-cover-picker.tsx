@@ -169,7 +169,7 @@ export function VideoCoverPicker({ videoUrl, durationSec, value, onChange }: Vid
       {selected !== "default" && (
         <p className="text-xs text-muted-foreground">
           Used on YouTube, Instagram Reels, Facebook and LinkedIn. YouTube shows a custom cover only on
-          verified channels. X and TikTok pick their own.
+          verified channels. X, TikTok and Pinterest pick their own.
         </p>
       )}
     </fieldset>
