@@ -96,6 +96,14 @@ const TRUE_WHATEVER_ARRIVED: Array<{ file: string; constant?: string; text?: str
     text: "Failed to prepare media for posting.",
     why: `${UPLOAD_STEP} Create uploads the picked file for the caption step; the post is made only by Publish.`,
   },
+  // R62 fix review L1: only the named helper, which only the SingleUploadAbortedError
+  // branch of the submit catch calls; any other "nothing was posted" is still flagged.
+  {
+    file: "components/create-post-form.tsx",
+    constant: "singleUploadStoppedText",
+    usedIn: "components/create-post-form.tsx",
+    why: "The upload was stopped in the browser before the post request was sent, so nothing reached the server.",
+  },
   {
     file: "components/plan-actions.tsx",
     text: "Vibe Socials didn't answer, so nothing was charged.",
