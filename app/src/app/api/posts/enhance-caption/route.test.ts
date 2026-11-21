@@ -90,6 +90,27 @@ describe("POST /api/posts/enhance-caption", () => {
     });
   });
 
+  // R60 new-customer L2: only a tag with a letter or mark loses its "#", so
+  // "Cocoa Beach's #1 surf school" keeps its "#1" (brandVoice's rule).
+  it("keeps \"#1\" in the answer and still strips \"#surf\"", async () => {
+    fetchMock.mockImplementation(async () => providerOk("Ride with Cocoa Beach's #1 surf school #surf"));
+
+    const response = await post({ caption: "fresh bread" });
+
+    await expect(response.json()).resolves.toEqual({ enhancedCaption: "Ride with Cocoa Beach's #1 surf school surf" });
+  });
+
+  it("asks for no hashtags, not for no '#' at all", async () => {
+    await post({ caption: "fresh bread" });
+    await post({ caption: "fresh bread", platform: "instagram" });
+
+    for (const call of fetchMock.mock.calls) {
+      const system = JSON.parse((call[1] as RequestInit).body as string).messages[0].content as string;
+      expect(system).toContain("NO hashtags");
+      expect(system).not.toContain("'#'");
+    }
+  });
+
   it("still requires a caption", async () => {
     const response = await post({ caption: "   " });
 
@@ -367,7 +388,7 @@ describe("POST /api/posts/enhance-caption - brand voice", () => {
   // Today's prompts, for { caption } and for { caption, platform: "x", maxLength: 254 }.
   const TODAY_ENHANCE_PROMPT = `You are a social media expert specializing in creating engaging, SEO-optimized captions for social media posts. Your captions should be:
 - Short and concise (1-2 sentences, max 150 characters)
-- Use plain text only with NO hashtags (no '#' characters at all)
+- Use plain text only with NO hashtags
 - Be engaging and call-to-action oriented
 - SEO-friendly with keywords naturally integrated
 - Suitable for platforms like Instagram, TikTok, YouTube, and X (Twitter)
@@ -379,7 +400,7 @@ ${OUTPUT_RULES}`;
   const TODAY_ADAPT_X_PROMPT = `You are a social media expert who rewrites a caption so it suits one platform. The caption should be:
 - Written for X: One or two short sentences. Must fit 254 characters.
 - At most 254 characters
-- Use plain text only with NO hashtags (no '#' characters at all)
+- Use plain text only with NO hashtags
 
 ${OUTPUT_RULES}`;
 

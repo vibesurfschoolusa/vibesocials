@@ -103,6 +103,23 @@ describe("POST /api/posts/auto-caption", () => {
     await expect(response.json()).resolves.toEqual({ caption: "Fresh bread, warm smiles." });
   });
 
+  // R60 new-customer L2: only a tag with a letter or mark loses its "#".
+  it("keeps \"#1\" in the caption and still strips \"#surf\"", async () => {
+    fetchMock.mockImplementation(async () => providerOk("Voted #1 surf school #surf"));
+
+    const response = await post(validBody);
+
+    await expect(response.json()).resolves.toEqual({ caption: "Voted #1 surf school surf" });
+  });
+
+  it("asks for no hashtags, not for no '#' at all", async () => {
+    await post(validBody);
+
+    const system = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string).messages[0].content as string;
+    expect(system).toContain("NO hashtags");
+    expect(system).not.toContain("'#'");
+  });
+
   describe("prompt field caps", () => {
     it.each(["platform", "language", "tone"])(
       "rejects an over-long %s with 400 AI_INPUT_TOO_LONG and never calls the provider",
@@ -476,7 +493,7 @@ describe("POST /api/posts/auto-caption - brand voice", () => {
   // Today's system prompt for a workspace with no website and no voice.
   const TODAY_SYSTEM_PROMPT = `You are a social media expert creating short, engaging captions for photos and videos.
 Your captions must:
-- Be plain text only with NO hashtags (do not use the '#' character at all)
+- Be plain text only with NO hashtags
 - Be engaging and call-to-action oriented
 - Be suitable for platforms like Instagram, TikTok, YouTube, LinkedIn, X, and Facebook
 - Feel professional yet approachable
@@ -721,6 +738,15 @@ Return ONLY the description.`;
     expect(altText.length).toBeLessThanOrEqual(250);
   });
 
+  // R60 new-customer L2: a sign that reads "#1 Surf Shop" keeps its "#1".
+  it("keeps \"#1\" in a description and still strips \"#beach\"", async () => {
+    fetchMock.mockImplementation(async () => providerOk("A sign that reads #1 Surf Shop on a #beach."));
+
+    const response = await post(altBody);
+
+    await expect(response.json()).resolves.toEqual({ altText: "A sign that reads #1 Surf Shop on a beach." });
+  });
+
   it("an empty answer is a 500 that says so", async () => {
     fetchMock.mockImplementation(async () => providerOk("  #  "));
 
@@ -833,7 +859,7 @@ Return ONLY the description.`;
       role: "system",
       content: `You are a social media expert creating short, engaging captions for photos and videos.
 Your captions must:
-- Be plain text only with NO hashtags (do not use the '#' character at all)
+- Be plain text only with NO hashtags
 - Be engaging and call-to-action oriented
 - Be suitable for platforms like Instagram, TikTok, YouTube, LinkedIn, X, and Facebook
 - Feel professional yet approachable
