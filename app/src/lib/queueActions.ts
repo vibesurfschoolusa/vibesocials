@@ -117,9 +117,12 @@ export function queueStatusBadge(job: JobFacts): { label: string; tone: QueueBad
  * dialog names the ones the post lists; "connected" is only for a post with
  * no targets, which goes to every connected platform. R59 publishing-flow L3:
  * a Story is labelled as the card labels it (storyPlatformLabel, storyChoiceSuffix).
+ * R62 pages-a-3 L1: only a scheduled post is waiting for anything; a draft,
+ * even one the client sent back with a time, never goes out by itself.
  */
 export function publishConfirmCopy(
   kind: QueuePrimaryAction["kind"],
+  status: JobFacts["status"],
   targets: readonly Platform[] | null = null,
   storyPlatforms: readonly Platform[] = [],
 ): {
@@ -136,7 +139,9 @@ export function publishConfirmCopy(
   }
   return {
     title: "Publish this post now?",
-    description: `It will be sent to ${targetNames(targets, storyPlatforms)} right away instead of waiting.`,
+    description: `It will be sent to ${targetNames(targets, storyPlatforms)} right away${
+      status === "scheduled" ? " instead of waiting for its scheduled time" : ""
+    }.`,
     confirmText: "Publish now",
   };
 }

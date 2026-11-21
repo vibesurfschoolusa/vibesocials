@@ -1634,6 +1634,7 @@ export function QueueView({
 
   const publishCopy = publishConfirmCopy(
     publishKind,
+    publishTarget?.status ?? "draft",
     publishTarget?.publish?.targetPlatforms ?? null,
     publishTarget?.storyPlatforms ?? [],
   );
