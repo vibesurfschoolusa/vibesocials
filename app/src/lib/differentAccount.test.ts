@@ -61,7 +61,7 @@ describe("different account on reconnect", () => {
 
   // R7-pages M2: LinkedIn reuses the browser's signed-in account, so signing in to the right one needs a sign-out first.
   // R8-client-journey L2: the stored name is the company page, which nobody signs in to.
-  it("Settings, LinkedIn: names the sign-out step, then an account that manages the page", () => {
+  it("Settings, LinkedIn: names the sign-out step, then an account that is a Super admin of the page", () => {
     expect(reconnectDifferentAccountMessage("linkedin", "Surf Co page")).toBe(
       "LinkedIn connected a different page than Surf Co page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that is a Super admin of Surf Co page. To use the other page instead, use Switch account.",
     );

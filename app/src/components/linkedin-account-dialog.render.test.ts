@@ -40,7 +40,7 @@ describe("LinkedIn Reconnect dialog", () => {
   }
 
   // R8-client-journey L2: the name is the company page, which nobody signs in to.
-  it("says to sign out first, then sign in with an account that manages the page", () => {
+  it("says to sign out first, then sign in with an account that is a Super admin of the page", () => {
     const html = render("Surf Co page");
     expect(html).toContain("Reconnect LinkedIn");
     expect(html).toContain("Open LinkedIn sign-out");

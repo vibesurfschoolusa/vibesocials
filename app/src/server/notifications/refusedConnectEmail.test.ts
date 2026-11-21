@@ -57,10 +57,11 @@ describe("buildRefusedConnectEmail", () => {
 
   // R8-client-journey L2 / pages L1: a page is not signed in to; an account that manages it is.
   // R52 client-journey L1: Facebook's step also ticks the Page in Facebook's list.
+  // R57 pages-a-3 L1: LinkedIn connects only a page the account is a Super admin of.
   it.each([
-    ["linkedin", "LinkedIn", ""],
-    ["facebook_page", "Facebook", " and tick it when Facebook lists the Pages"],
-  ] as const)("%s: a page, managed by an account", (platform, account, tick) => {
+    ["linkedin", "LinkedIn", "is a Super admin of", ""],
+    ["facebook_page", "Facebook", "manages", " and tick it when Facebook lists the Pages"],
+  ] as const)("%s: a page, and the account that can sign in for it", (platform, account, role, tick) => {
     const email = buildRefusedConnectEmail({
       platform,
       workspaceId: "ws_1",
@@ -74,7 +75,7 @@ describe("buildRefusedConnectEmail", () => {
       `<p>Your client used your connect link for <strong>Surf Co</strong> and signed in with a ${account} account for a different page than the one connected (<strong>Surf Co Page</strong>). Nothing was changed.</p>`,
     );
     expect(email.html).toContain(
-      `<p>If your client should post to their own page, disconnect Surf Co Page in Settings, Connections; then they can connect theirs through the link. If Surf Co Page is the right page, use Reconnect in Settings, Connections, or ask your client to sign in with a ${account} account that manages ${tick ? "it" : "Surf Co Page"}${tick}.</p>`,
+      `<p>If your client should post to their own page, disconnect Surf Co Page in Settings, Connections; then they can connect theirs through the link. If Surf Co Page is the right page, use Reconnect in Settings, Connections, or ask your client to sign in with a ${account} account that ${role} ${tick ? "it" : "Surf Co Page"}${tick}.</p>`,
     );
     expect(email.html).not.toContain("sign in to Surf Co Page");
   });

@@ -963,7 +963,7 @@ describe("POST: a refused choice, by whether the connected one was on the list",
 
     expect(response.status).toBe(409);
     expect((await response.json()).error).toBe(
-      // R8-client-journey L2: a LinkedIn page is managed, not signed in to.
+      // R8-client-journey L2: a LinkedIn page is not signed in to; R57: a Super admin of it signs in.
       "LinkedIn connected a different page than Old Page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that is a Super admin of Old Page. To use the other page instead, use Switch account.",
     );
   });
