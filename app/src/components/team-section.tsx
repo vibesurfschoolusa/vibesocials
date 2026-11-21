@@ -1267,72 +1267,76 @@ function OwnerView({
           accounts.
         </p>
 
-        <AnnouncedText className="sr-only" text={inviteLoading ? "Loading invite link…" : ""} />
-        {inviteLoading ? (
-          <Skeleton className="mt-1 h-9 w-full max-w-sm" />
-        ) : invite ? (
-          <div className="mt-2 flex flex-col gap-2">
-            {freshUrl ? (
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <Input readOnly value={freshUrl} aria-label="New invite link" className="font-mono text-xs sm:max-w-md" />
-                <Button ref={copyInviteRef} size="sm" variant="outline" className="shrink-0" onClick={copyInviteUrl}>
-                  <Copy aria-hidden className="h-4 w-4" />
-                  Copy link
+        {/* R59 second look L1: one holder keeps the loading line and whichever state shows,
+            so after Try again the focus watch (focusThroughRetry) finds what took the Alert's place. */}
+        <div className="flex flex-col gap-2">
+          <AnnouncedText className="sr-only" text={inviteLoading ? "Loading invite link…" : ""} />
+          {inviteLoading ? (
+            <Skeleton className="mt-1 h-9 w-full max-w-sm" />
+          ) : invite ? (
+            <div className="mt-2 flex flex-col gap-2">
+              {freshUrl ? (
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input readOnly value={freshUrl} aria-label="New invite link" className="font-mono text-xs sm:max-w-md" />
+                  <Button ref={copyInviteRef} size="sm" variant="outline" className="shrink-0" onClick={copyInviteUrl}>
+                    <Copy aria-hidden className="h-4 w-4" />
+                    Copy link
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Link created {formatDate(invite.createdAt)} — for security it can&apos;t be shown
+                  again. If you&apos;ve lost it, create a new one. That turns this one off.
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Expires {formatDate(invite.expiresAt)}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" loading={inviteBusy} onClick={createInvite}>
+                  Create new invite link
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => setRevokeOpen(true)}
+                >
+                  Revoke
                 </Button>
               </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Link created {formatDate(invite.createdAt)} — for security it can&apos;t be shown
-                again. If you&apos;ve lost it, create a new one. That turns this one off.
-              </p>
-            )}
-            <p className="text-xs text-muted-foreground">
-              Expires {formatDate(invite.expiresAt)}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" loading={inviteBusy} onClick={createInvite}>
-                Create new invite link
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                onClick={() => setRevokeOpen(true)}
-              >
-                Revoke
-              </Button>
             </div>
-          </div>
-        ) : inviteReadFailure ? (
-          <div className="mt-2 flex flex-col gap-2">
-            <Alert variant="danger">
-              {/* A workspace refusal and a changed role make LoadError's step Reload page. */}
-              {inviteReadFailure.retry || loadErrorAsksReload(inviteReadFailure.text) ? (
-                <LoadError
-                  message={inviteReadFailure.text}
-                  retryLabel="Try again"
-                  onRetry={() => {
-                    setInviteLoading(true);
-                    setInviteAttempt((attempt) => attempt + 1);
-                  }}
-                />
-              ) : (
-                <p>{inviteReadFailure.text}</p>
-              )}
-            </Alert>
+          ) : inviteReadFailure ? (
+            <>
+              <Alert variant="danger" className="mt-2">
+                {/* A workspace refusal and a changed role make LoadError's step Reload page. */}
+                {inviteReadFailure.retry || loadErrorAsksReload(inviteReadFailure.text) ? (
+                  <LoadError
+                    message={inviteReadFailure.text}
+                    retryLabel="Try again"
+                    onRetry={() => {
+                      setInviteLoading(true);
+                      setInviteAttempt((attempt) => attempt + 1);
+                    }}
+                  />
+                ) : (
+                  <p>{inviteReadFailure.text}</p>
+                )}
+              </Alert>
+              <div>
+                <Button size="sm" variant="outline" loading={inviteBusy} onClick={createInvite}>
+                  Create new invite link
+                </Button>
+              </div>
+            </>
+          ) : (
             <div>
               <Button size="sm" variant="outline" loading={inviteBusy} onClick={createInvite}>
-                Create new invite link
+                Create invite link
               </Button>
             </div>
-          </div>
-        ) : (
-          <div>
-            <Button size="sm" variant="outline" loading={inviteBusy} onClick={createInvite}>
-              Create invite link
-            </Button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Members */}
