@@ -2489,6 +2489,22 @@ describe("buildYouTubeVideoResource — text YouTube accepts", () => {
     expect(resourceFor({ caption: "www.site.com/#book" }).snippet.tags).toBeUndefined();
   });
 
+  // R58 fix review: only a real link is left out. A word, a number or a tag
+  // just before "www." or "name.tld/" doesn't make one.
+  it.each([
+    ["Awww.#cute #puppy", ["cute", "puppy"]],
+    ["Awww...#cute", ["cute"]],
+    ["Sunset 6.30pm/#surf", ["surf"]],
+    ["#surf.school/#lessons", ["surf", "lessons"]],
+  ])("%s keeps its tags", (caption, expected) => {
+    expect(resourceFor({ caption }).snippet.tags).toEqual(expected);
+  });
+
+  it("a real link's #fragment still drops", () => {
+    expect(resourceFor({ caption: "site.com/#book" }).snippet.tags).toBeUndefined();
+    expect(resourceFor({ caption: "Book at site.com/#book #surf" }).snippet.tags).toEqual(["surf"]);
+  });
+
   it("keeps a plain #surf as it was", () => {
     expect(resourceFor({ caption: "Morning session #surf" }).snippet.tags).toEqual(["surf"]);
   });

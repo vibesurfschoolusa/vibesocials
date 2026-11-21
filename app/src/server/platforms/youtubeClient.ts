@@ -239,7 +239,11 @@ const YOUTUBE_TAGS_MAX_CHARS = 500;
  * hashtag rule reads the caption. (Instagram keeps every #word: Instagram
  * itself makes one a hashtag.)
  */
-const LINK_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S+|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+\/\S*/giu;
+// R58 fix review: a link starts after a character that cannot be part of
+// one, so "Awww.#cute" and "#surf.school/#lessons" are not links, and its
+// last name before the "/" is letters, so "6.30pm/#surf" is not one either.
+const LINK_PATTERN =
+  /(?<![\p{L}\p{N}_#@.-])(?:(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S+|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}\/\S*)/giu;
 
 /** The caption's hashtags as tags, without the "#", links left out. */
 function youtubeHashtags(caption: string): string[] {
