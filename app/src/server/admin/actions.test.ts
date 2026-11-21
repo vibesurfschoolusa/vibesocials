@@ -116,8 +116,26 @@ describe("validatePauseBody", () => {
     expect(validatePauseBody({ reason: "  Unpaid invoice.  " })).toEqual({ ok: true, reason: "Unpaid invoice." });
     expect(validatePauseBody({ reason: "a".repeat(300) }).ok).toBe(true);
     expect(validatePauseBody({ reason: "a".repeat(301) }).ok).toBe(false);
-    expect(validatePauseBody({ reason: "two\nlines" }).ok).toBe(false);
-    expect(validatePauseBody({ reason: "bell\u0007" }).ok).toBe(false);
+  });
+
+  // R56 security-billing-2 L1: the field turned only line breaks into spaces,
+  // so a pasted tab was refused with "Write the reason on one line." and the
+  // field showed nothing to fix. Both sides now turn every control character
+  // into a space, a run of them into one.
+  it("saves a tab inside the reason as a space", () => {
+    expect(validatePauseBody({ reason: "Unpaid\tinvoice" })).toEqual({ ok: true, reason: "Unpaid invoice" });
+    expect(validatePauseBody({ reason: "bell\u0007 rang" })).toEqual({ ok: true, reason: "bell  rang" });
+  });
+
+  it("turns line breaks into one space, as the field does", () => {
+    expect(validatePauseBody({ reason: "two\r\nlines\n" })).toEqual({ ok: true, reason: "two lines" });
+  });
+
+  it("refuses a reason of only control characters as empty", () => {
+    expect(validatePauseBody({ reason: "\t\r\n\u0007\u007f" })).toEqual({
+      ok: false,
+      error: "Give a reason. The workspace's members will read it.",
+    });
   });
 });
 

@@ -67,20 +67,24 @@ export function validateLimitsBody(body: unknown): { ok: true; limits: LimitChan
   return { ok: true, limits };
 }
 
-/** Control characters, including line breaks: the reason is one line of plain text. */
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+/**
+ * Control characters, including line breaks and tabs: the reason is one line
+ * of plain text. A run of them becomes one space, the same rule the reason
+ * field applies as it is typed (admin-controls.tsx), so the route refuses
+ * nothing the field let through (R56 security-billing-2 L1).
+ */
+const CONTROL_CHARACTER_RUNS = /[\u0000-\u001f\u007f]+/g;
 
 /** The pause body: a reason the workspace's members will read, required. */
 export function validatePauseBody(body: unknown): { ok: true; reason: string } | Invalid {
   if (!isPlainObject(body) || typeof body.reason !== "string") {
     return { ok: false, error: "Give a reason. The workspace's members will read it." };
   }
-  const reason = body.reason.trim();
+  const reason = body.reason.replace(CONTROL_CHARACTER_RUNS, " ").trim();
   if (!reason) return { ok: false, error: "Give a reason. The workspace's members will read it." };
   if (reason.length > PAUSE_REASON_MAX_LENGTH) {
     return { ok: false, error: `Keep the reason to ${PAUSE_REASON_MAX_LENGTH} characters.` };
   }
-  if (CONTROL_CHARACTERS.test(reason)) return { ok: false, error: "Write the reason on one line." };
   return { ok: true, reason };
 }
 

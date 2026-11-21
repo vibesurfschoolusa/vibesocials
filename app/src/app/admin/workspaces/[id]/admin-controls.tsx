@@ -109,6 +109,12 @@ export function AdminLimitsForm({ workspaceId, fields }: { workspaceId: string; 
  */
 const PAUSE_REASON_MAX = 300;
 const PAUSE_REASON_TOO_LONG = `Keep the reason to ${PAUSE_REASON_MAX} characters.`;
+/**
+ * R56 security-billing-2 L1: validatePauseBody's rule, a run of control
+ * characters (line breaks, a pasted tab) becomes one space, so the route
+ * refuses nothing this field let through. A test holds the two alike.
+ */
+const CONTROL_CHARACTER_RUNS = /[\u0000-\u001f\u007f]+/g;
 
 /** Pause with a reason, or resume. */
 export function AdminPauseControls({ workspaceId, paused }: { workspaceId: string; paused: boolean }) {
@@ -174,7 +180,7 @@ export function AdminPauseControls({ workspaceId, paused }: { workspaceId: strin
             id="pause-reason"
             rows={2}
             value={reason}
-            onChange={(event) => setReason(event.target.value.replace(/[\r\n]+/g, " "))}
+            onChange={(event) => setReason(event.target.value.replace(CONTROL_CHARACTER_RUNS, " "))}
             disabled={busy}
             aria-describedby="pause-reason-count"
           />

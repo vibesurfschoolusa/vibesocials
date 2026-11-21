@@ -126,3 +126,22 @@ describe("the pause reason is never cut short", () => {
     expect(props(reason).value).toBe(pasted);
   });
 });
+
+// R56 security-billing-2 L1: the field and validatePauseBody share one rule,
+// so the route refuses nothing the field let through.
+describe("the pause reason field", () => {
+  it("turns a pasted tab into a space, and line breaks into one space as before", async () => {
+    await act(async () => root.render(createElement(AdminPauseControls, { workspaceId: "ws-1", paused: false })));
+    const reason = find(container, (n) => n.nodeName === "TEXTAREA")!;
+    await act(async () => {
+      props(reason).onChange({ target: { value: "Spam\treports" } });
+    });
+    expect(props(reason).value).toBe("Spam reports");
+    await act(async () => {
+      props(reason).onChange({ target: { value: "Spam\r\nreports\u0007" } });
+    });
+    expect(props(reason).value).toBe("Spam reports ");
+    const { validatePauseBody } = await import("@/server/admin/actions");
+    expect(validatePauseBody({ reason: "Spam\r\nreports\u0007" })).toEqual({ ok: true, reason: "Spam reports" });
+  });
+});
