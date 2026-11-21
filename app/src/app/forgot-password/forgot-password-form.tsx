@@ -34,6 +34,7 @@ export function ForgotPasswordForm() {
   const [error, setError] = useState<string | null>(null);
   const emailRef = useRef<HTMLInputElement>(null);
   const sendRef = useRef<HTMLButtonElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const tryAgainRef = useRef<HTMLButtonElement>(null);
   // Set by Try again only, so the field is not focused on the first render.
   const focusEmail = useRef(false);
@@ -51,6 +52,10 @@ export function ForgotPasswordForm() {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+    // R55 fix review: Enter in the email field is the usual path, so the
+    // control that had focus is the one watched (submitter would name Send).
+    const active = document.activeElement as HTMLElement | null;
+    const pressed = active && formRef.current?.contains(active) ? active : sendRef.current;
     setError(null);
     setLoading(true);
     let status: number | null = null;
@@ -70,7 +75,7 @@ export function ForgotPasswordForm() {
     if (outcome.kind === "sent") {
       // R55 pages-a L2: the confirmation replaces the form and its focused
       // button; focus goes to the Try again button it names.
-      focusAfterPress(sendRef.current, () => tryAgainRef.current);
+      focusAfterPress(pressed, () => tryAgainRef.current);
       setSubmitted(true);
     } else {
       setError(outcome.message);
@@ -95,7 +100,7 @@ export function ForgotPasswordForm() {
           Try again
         </Button>
       ) : (
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form ref={formRef} onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="email">Email</Label>
             <Input

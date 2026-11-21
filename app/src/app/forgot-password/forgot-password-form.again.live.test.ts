@@ -41,10 +41,23 @@ function props(node: FakeNode): Record<string, (arg?: unknown) => unknown> {
   return node[key as string] as Record<string, (arg?: unknown) => unknown>;
 }
 
+/**
+ * The next frame's callbacks, run once React has settled, as a browser frame
+ * comes after the render. A setTimeout(0) frame could run before the commit,
+ * leaving the focus watch to its 1-second recheck after the test had looked.
+ */
+const frames: (() => void)[] = [];
+
 async function settle() {
   for (let i = 0; i < 5; i += 1) {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+  while (frames.length > 0) {
+    const due = frames.splice(0);
+    await act(async () => {
+      for (const run of due) run();
     });
   }
 }
@@ -78,6 +91,12 @@ async function pressSend() {
   await send();
 }
 
+/** Focuses the email field and submits, as Enter in the field does. */
+async function enterInField() {
+  (field()!.focus as () => void)();
+  await send();
+}
+
 /** Focuses Try again and presses it, as a keyboard press does. */
 async function pressTryAgain() {
   const node = tryAgain() as FakeNode;
@@ -98,7 +117,8 @@ beforeEach(async () => {
   makeFocusable(doc);
   stopKeeper = installKeeperOnFakePage(made as never).stop;
   const view = made.doc.defaultView as unknown as Record<string, unknown>;
-  view.requestAnimationFrame = (run: () => void) => setTimeout(run, 0);
+  frames.length = 0;
+  view.requestAnimationFrame = (run: () => void) => frames.push(run);
   view.setTimeout = setTimeout;
   vi.stubGlobal("window", view);
   vi.stubGlobal("document", made.doc);
@@ -237,3 +257,47 @@ describe("Forgot password: focus after Send reset link", () => {
     }
   });
 });
+
+// R55 fix review: Enter in the email field is the usual path (and Try again
+// focuses the field). The watch was on Send only, so the keeper moved focus
+// from the removed field to "Log in" first. The control that had focus is watched.
+describe("Forgot password: focus after Enter in the email field", () => {
+  it("Enter in the field, success: focus is on Try again", async () => {
+    fetchMock.mockReturnValueOnce(ok());
+    await type("someone@example.test");
+    await enterInField();
+    expect(status().textContent).toBe(CONFIRMATION);
+    expect(active()).toBe(tryAgain());
+  });
+
+  it("after Try again, a second Enter in the field: focus is on Try again", async () => {
+    fetchMock.mockReturnValueOnce(ok()).mockReturnValueOnce(ok());
+    await type("someone@example.test");
+    await enterInField();
+    await pressTryAgain();
+    expect(active()).toBe(field());
+    await send();
+    expect(active()).toBe(tryAgain());
+  });
+
+  it("the button pressed: focus is on Try again, as before", async () => {
+    fetchMock.mockReturnValueOnce(ok());
+    await type("someone@example.test");
+    await pressSend();
+    expect(active()).toBe(tryAgain());
+  });
+
+  it("a refused send from the field (429, failure, no answer): focus stays in the field", async () => {
+    fetchMock
+      .mockReturnValueOnce(Promise.resolve(Response.json({ error: "Too many requests." }, { status: 429 })))
+      .mockReturnValueOnce(Promise.resolve(Response.json({ error: "Internal" }, { status: 500 })))
+      .mockImplementationOnce(() => Promise.reject(new TypeError("Failed to fetch")));
+    await type("someone@example.test");
+    for (const expected of [TOO_MANY, GENERIC, "the request may have gone through"]) {
+      await enterInField();
+      expect(pageText()).toContain(expected);
+      expect(active()).toBe(field());
+    }
+  });
+});
+
