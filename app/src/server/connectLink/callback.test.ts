@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
   linkFind: vi.fn(),
   linkUpdate: vi.fn(),
   connectionFind: vi.fn(),
-  pendingUpdateMany: vi.fn(),
+  pendingCount: vi.fn(),
   isOwner: vi.fn(),
   getCurrentUser: vi.fn(),
   notifyConnect: vi.fn(),
@@ -25,7 +25,7 @@ vi.mock("@/lib/db", () => ({
     oAuthHandshake: { findUnique: h.handshakeFind },
     workspaceConnectLink: { findUnique: h.linkFind, update: h.linkUpdate },
     socialConnection: { findUnique: h.connectionFind },
-    pendingConnection: { updateMany: h.pendingUpdateMany },
+    pendingConnection: { count: h.pendingCount },
   },
 }));
 vi.mock("@/lib/workspace", () => ({ isWorkspaceOwner: h.isOwner }));
@@ -120,7 +120,7 @@ beforeEach(() => {
   h.isOwner.mockResolvedValue(true);
   h.connectionFind.mockResolvedValue(null);
   h.linkUpdate.mockResolvedValue({});
-  h.pendingUpdateMany.mockResolvedValue({ count: 1 });
+  h.pendingCount.mockResolvedValue(1);
 });
 
 afterEach(() => {
@@ -315,7 +315,7 @@ describe("withConnectLink: running the callback with the link", () => {
     await withConnectLink("tiktok", handlerAnswering("/settings?success=tiktok_connected"))(
       stateRequest(linkState(), cookieFor(), { error: "access_denied" }),
     );
-    h.pendingUpdateMany.mockResolvedValue({ count: 1 });
+    h.pendingCount.mockResolvedValue(1);
     await withConnectLink("facebook_page", handlerAnswering("/settings?choose=pending-1"))(
       stateRequest(linkState(), cookieFor()),
     );
@@ -365,15 +365,15 @@ describe("withConnectLink: running the callback with the link", () => {
     );
 
     expect(location(res).toString()).toBe(`${ORIGIN}/c/${TOKEN}?choose=pending-1`);
-    expect(h.pendingUpdateMany).toHaveBeenCalledWith({
-      where: { id: "pending-1", workspaceId: WORKSPACE, userId: CREATOR },
-      data: { connectLinkId: "link-1" },
+    // R56 client-journey-2 L2: the row is made with the link's id; this checks it.
+    expect(h.pendingCount).toHaveBeenCalledWith({
+      where: { id: "pending-1", workspaceId: WORKSPACE, userId: CREATOR, connectLinkId: "link-1" },
     });
     expect(setCookie(res)).toBe("");
   });
 
   it("a choice whose row cannot be stamped is a failure, and the cookie is cleared", async () => {
-    h.pendingUpdateMany.mockResolvedValue({ count: 0 });
+    h.pendingCount.mockResolvedValue(0);
     const res = await withConnectLink("facebook_page", handlerAnswering("/settings?choose=pending-1"))(
       stateRequest(linkState(), cookieFor()),
     );

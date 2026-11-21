@@ -18,7 +18,7 @@ const h = vi.hoisted(() => ({
   connectionFind: vi.fn(),
   pendingCreate: vi.fn(),
   pendingDeleteMany: vi.fn(),
-  pendingUpdateMany: vi.fn(),
+  pendingCount: vi.fn(),
   linkFind: vi.fn(),
   linkUpdate: vi.fn(),
   handshakeFind: vi.fn(),
@@ -32,7 +32,7 @@ vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: 
 vi.mock("@/lib/db", () => ({
   prisma: {
     socialConnection: { create: h.create, updateMany: h.updateMany, findUnique: h.connectionFind },
-    pendingConnection: { create: h.pendingCreate, deleteMany: h.pendingDeleteMany, updateMany: h.pendingUpdateMany },
+    pendingConnection: { create: h.pendingCreate, deleteMany: h.pendingDeleteMany, count: h.pendingCount },
     workspaceConnectLink: { findUnique: h.linkFind, update: h.linkUpdate },
     oAuthHandshake: { findUnique: h.handshakeFind, delete: h.handshakeDelete },
     $transaction: (operations: Array<Promise<unknown>>) => Promise.all(operations),
@@ -191,7 +191,7 @@ beforeEach(() => {
   h.linkUpdate.mockResolvedValue({});
   h.pendingCreate.mockResolvedValue({ id: "pending-1" });
   h.pendingDeleteMany.mockResolvedValue({ count: 0 });
-  h.pendingUpdateMany.mockResolvedValue({ count: 1 });
+  h.pendingCount.mockResolvedValue(1);
   h.handshakeFind.mockResolvedValue(handshake());
   h.handshakeDelete.mockResolvedValue({});
 });
@@ -255,6 +255,52 @@ describe("a link flow without its cookie, in a browser signed in as the creator"
 });
 
 describe("a choice at the end of a link flow", () => {
+  // R56 client-journey-2 L2: the row is made with its link, and replaces only
+  // that link's earlier choice, never the owner's open one.
+  const SEVERAL: Record<"facebook_page" | "instagram" | "linkedin" | "pinterest", (url: string) => Response> = {
+    facebook_page: (url) => provider(url, 2),
+    instagram: (url) => (url.includes("/ig-2") ? json({ username: "cafe" }) : provider(url, 2)),
+    linkedin: (url) => {
+      if (url.includes("/rest/organizationAcls")) {
+        return json({
+          elements: [
+            { role: "ADMINISTRATOR", organization: "urn:li:organization:101", state: "APPROVED" },
+            { role: "ADMINISTRATOR", organization: "urn:li:organization:102", state: "APPROVED" },
+          ],
+        });
+      }
+      if (url.includes("/rest/organizations/102")) return json({ id: 102, localizedName: "Org 2" });
+      return provider(url);
+    },
+    pinterest: (url) =>
+      url.includes("/v5/boards")
+        ? json({ items: [{ id: "555", name: "Board" }, { id: "556", name: "Board 2" }], bookmark: null })
+        : provider(url),
+  };
+  it.each(Object.keys(SEVERAL) as Array<keyof typeof SEVERAL>)(
+    "%s: the choice is made with the link's id and replaces only that link's earlier choice",
+    async (platform) => {
+      h.fetch.mockImplementation(async (input: string | URL) => SEVERAL[platform](String(input)));
+
+      const res = await CALLBACKS[platform](linkRequest(platform));
+
+      expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?choose=pending-1`);
+      expect(h.pendingCreate.mock.calls[0][0].data).toMatchObject({
+        workspaceId: WORKSPACE,
+        userId: CREATOR,
+        platform,
+        connectLinkId: "link-1",
+      });
+      expect(h.pendingDeleteMany).toHaveBeenCalledWith({
+        where: {
+          workspaceId: WORKSPACE,
+          userId: CREATOR,
+          OR: [{ platform, connectLinkId: "link-1" }, { expiresAt: { lte: NOW } }],
+        },
+      });
+    },
+  );
+
   it("facebook_page with several Pages: the pending row is the creator's, stamped with the link, and the visitor chooses on their page", async () => {
     h.fetch.mockImplementation(async (input: string | URL) => provider(String(input), 2));
 
@@ -262,9 +308,8 @@ describe("a choice at the end of a link flow", () => {
 
     expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?choose=pending-1`);
     expect(h.pendingCreate.mock.calls[0][0].data).toMatchObject({ workspaceId: WORKSPACE, userId: CREATOR });
-    expect(h.pendingUpdateMany).toHaveBeenCalledWith({
-      where: { id: "pending-1", workspaceId: WORKSPACE, userId: CREATOR },
-      data: { connectLinkId: "link-1" },
+    expect(h.pendingCount).toHaveBeenCalledWith({
+      where: { id: "pending-1", workspaceId: WORKSPACE, userId: CREATOR, connectLinkId: "link-1" },
     });
     expect(h.create).not.toHaveBeenCalled();
     expect(res.headers.get("set-cookie")).toBeNull();
@@ -299,9 +344,8 @@ describe("a link flow whose Page is on the second page of /me/accounts", () => {
     expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?choose=pending-1`);
     const pages = (h.fetch.mock.calls as Array<[string | URL]>).map((c) => String(c[0])).filter((u) => u.includes("/me/accounts"));
     expect(pages).toHaveLength(2);
-    expect(h.pendingUpdateMany).toHaveBeenCalledWith({
-      where: { id: "pending-1", workspaceId: WORKSPACE, userId: CREATOR },
-      data: { connectLinkId: "link-1" },
+    expect(h.pendingCount).toHaveBeenCalledWith({
+      where: { id: "pending-1", workspaceId: WORKSPACE, userId: CREATOR, connectLinkId: "link-1" },
     });
     expect(h.create).not.toHaveBeenCalled();
   });

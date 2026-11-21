@@ -30,7 +30,7 @@ import {
  *
  * A pending row belongs to the user who started the connect, in the workspace
  * it was started for, and lives 15 minutes. Starting another connect for the
- * same platform replaces it.
+ * same platform through the same flow replaces it.
  */
 
 export const PENDING_CONNECTION_TTL_MS = 15 * 60 * 1000;
@@ -101,16 +101,24 @@ export interface LoadedPendingConnection {
 /**
  * Stores a connect that is waiting for the user's choice and returns its id.
  * Replaces any earlier pending connect this user started for the same
- * platform in this workspace, and drops this user's expired rows here.
+ * platform in this workspace through the same flow, and drops this user's
+ * expired rows here.
+ *
+ * R56 client-journey-2 L2: a client link's flow saves its choice under the
+ * link creator's user id, the same as that owner's own Settings connect. So
+ * the flow is part of the key: `connectLinkId` is the link's id for a /c flow
+ * and null for the owner's, and a new choice replaces only its own flow's.
  */
 export async function createPendingConnection({
   workspaceId,
   userId,
   payload,
+  connectLinkId = null,
 }: {
   workspaceId: string;
   userId: string;
   payload: PendingConnectionPayload;
+  connectLinkId?: string | null;
 }): Promise<string> {
   const now = Date.now();
   const platform = payload.platform as Platform;
@@ -120,7 +128,7 @@ export async function createPendingConnection({
       where: {
         workspaceId,
         userId,
-        OR: [{ platform }, { expiresAt: { lte: new Date(now) } }],
+        OR: [{ platform, connectLinkId }, { expiresAt: { lte: new Date(now) } }],
       },
     }),
     prisma.pendingConnection.create({
@@ -128,6 +136,7 @@ export async function createPendingConnection({
         workspaceId,
         userId,
         platform,
+        connectLinkId,
         payload: sealSecret(JSON.stringify(payload)),
         expiresAt: new Date(now + PENDING_CONNECTION_TTL_MS),
       },

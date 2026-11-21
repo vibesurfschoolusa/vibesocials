@@ -191,6 +191,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       const pendingId = await createPendingConnection({
         workspaceId,
         userId,
+        connectLinkId: link?.id ?? null,
         payload: { platform: "instagram", expiresAt: expiresAt.toISOString(), accounts },
       });
       console.log("[Instagram OAuth] Several Instagram accounts found; waiting for the user to choose", {

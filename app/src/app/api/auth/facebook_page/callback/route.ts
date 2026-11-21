@@ -145,6 +145,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       const pendingId = await createPendingConnection({
         workspaceId,
         userId,
+        connectLinkId: link?.id ?? null,
         payload: { platform: "facebook_page", expiresAt: expiresAt.toISOString(), pages },
       });
       console.log("[FacebookPage OAuth] Several Pages found; waiting for the user to choose", {

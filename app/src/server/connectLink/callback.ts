@@ -202,8 +202,9 @@ async function toVisitorPage(
 
   const choose = page.searchParams.get("choose");
   if (choose) {
-    // The choice endpoints authorise by the token in the address and this
-    // stamp, so the cookie stays for nothing but is kept until the choice ends.
+    // The choice endpoints authorise by the token in the address and the
+    // row's link id, so the cookie stays for nothing but is kept until the
+    // choice ends.
     if (await stampPending(choose, flow, platform)) {
       return NextResponse.redirect(page, response.status);
     }
@@ -232,15 +233,19 @@ async function toVisitorPage(
   return ending(page, response.status);
 }
 
+/**
+ * R56 client-journey-2 L2: the callback makes the row with the link's id
+ * (createPendingConnection), so this only checks the choice it names is this
+ * link's.
+ */
 async function stampPending(pendingId: string, flow: ConnectLinkFlow, platform: Platform): Promise<boolean> {
   try {
-    const { count } = await prisma.pendingConnection.updateMany({
-      where: { id: pendingId, workspaceId: flow.workspaceId, userId: flow.userId },
-      data: { connectLinkId: flow.id },
+    const count = await prisma.pendingConnection.count({
+      where: { id: pendingId, workspaceId: flow.workspaceId, userId: flow.userId, connectLinkId: flow.id },
     });
     return count === 1;
   } catch (error) {
-    logger.error("[connect-link] Couldn't mark the waiting choice as the link's", { platform, connectLinkId: flow.id, error });
+    logger.error("[connect-link] Couldn't check the waiting choice is the link's", { platform, connectLinkId: flow.id, error });
     return false;
   }
 }

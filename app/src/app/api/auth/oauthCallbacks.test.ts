@@ -630,8 +630,10 @@ function useProvider(provider: FakeProvider) {
 function createdPending() {
   expect(pendingCreateMock).toHaveBeenCalledTimes(1);
   const { data } = pendingCreateMock.mock.calls[0][0] as {
-    data: { workspaceId: string; userId: string; platform: string; payload: string; expiresAt: Date };
+    data: { workspaceId: string; userId: string; platform: string; payload: string; expiresAt: Date; connectLinkId?: string | null };
   };
+  // R56 client-journey-2 L2: an owner's choice is made as the owner's (no link).
+  expect(data.connectLinkId).toBeNull();
   return { ...data, opened: JSON.parse(openSecret(data.payload)) as Record<string, unknown> };
 }
 
@@ -708,7 +710,8 @@ describe("choosing which account to connect", () => {
         where: {
           workspaceId: STATE_WORKSPACE,
           userId: STATE_USER,
-          OR: [{ platform: "facebook_page" }, { expiresAt: { lte: NOW } }],
+          // R56 client-journey-2 L2: only the owner's own earlier choice, never a link's.
+          OR: [{ platform: "facebook_page", connectLinkId: null }, { expiresAt: { lte: NOW } }],
         },
       });
     });

@@ -295,6 +295,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
       const pendingId = await createPendingConnection({
         workspaceId,
         userId,
+        connectLinkId: link?.id ?? null,
         payload: {
           platform: "linkedin",
           token: {
