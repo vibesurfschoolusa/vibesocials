@@ -51,14 +51,6 @@ function pastDayLimitMessage(leftMb: number): string {
   return `${PAST_DAY_LIMIT} A file under ${leftMb} MB can still go today; the limit resets at midnight UTC.`;
 }
 
-/**
- * The row's `count` holds the reason's number; a file past the day's limit
- * stores this plus the whole megabytes that were left, so the page's later
- * question names them too. What is left is under the 512 MB file that did not
- * fit, so it never reaches another reason's number.
- */
-const PAST_DAY_LIMIT_BASE = 1000;
-
 export type UploadRefusalReason =
   | "out-of-date"
   | "day-limit"
@@ -74,8 +66,8 @@ export type UploadRefusalReason =
 const REASONS: Record<UploadRefusalReason, { number: number; error: string; code: string }> = {
   "out-of-date": { number: 1, error: UPLOAD_PAGE_OUT_OF_DATE_MESSAGE, code: "UPLOAD_PAGE_OUT_OF_DATE" },
   "day-limit": { number: 2, error: UPLOAD_DAY_LIMIT_MESSAGE, code: "UPLOAD_DAY_LIMIT" },
-  // R62 pages-a-2 L1: only this file doesn't fit. Kept with what was left
-  // (PAST_DAY_LIMIT_BASE); this entry is for a refusal without it.
+  // R62 pages-a-2 L1: only this file doesn't fit. Remembered without a number:
+  // by the page's later question the day may have changed.
   "past-day-limit": { number: 10, error: PAST_DAY_LIMIT_UNKNOWN_MESSAGE, code: "UPLOAD_DAY_LIMIT" },
   empty: { number: 3, error: "This file is empty.", code: "UPLOAD_FILE_EMPTY" },
   "too-large": { number: 4, error: "File is too large (max 512 MB).", code: "UPLOAD_FILE_TOO_LARGE" },
@@ -108,27 +100,9 @@ export async function recordUploadRefusal(
   now: number = Date.now(),
   until?: Date,
 ): Promise<void> {
-  await writeRefusal(userId, REASONS[reason].number, until ?? new Date(now + UPLOAD_REFUSAL_MEMORY_MS));
-}
-
-/**
- * Remember a refusal at the day's 20 GB with what the day had left before
- * this file, so the page's sentence is dayLimitRefusalMessage's. Never throws.
- */
-export async function recordDayLimitRefusal(
-  userId: string,
-  leftBytes: number | undefined,
-  now: number = Date.now(),
-): Promise<void> {
-  const expiresAt = new Date(now + UPLOAD_REFUSAL_MEMORY_MS);
-  if (leftBytes === undefined) return writeRefusal(userId, REASONS["past-day-limit"].number, expiresAt);
-  const leftMb = wholeMbLeft(leftBytes);
-  if (leftMb < 1) return writeRefusal(userId, REASONS["day-limit"].number, expiresAt);
-  return writeRefusal(userId, PAST_DAY_LIMIT_BASE + leftMb, expiresAt);
-}
-
-async function writeRefusal(userId: string, count: number, expiresAt: Date): Promise<void> {
   const key = refusalKey(userId);
+  const count = REASONS[reason].number;
+  const expiresAt = until ?? new Date(now + UPLOAD_REFUSAL_MEMORY_MS);
   try {
     await prisma.rateLimitEntry.upsert({
       where: { key },
@@ -138,6 +112,19 @@ async function writeRefusal(userId: string, count: number, expiresAt: Date): Pro
   } catch (error) {
     console.error("[upload] Couldn't remember why an upload was refused (ignored)", error);
   }
+}
+
+/**
+ * Remember a refusal at the day's 20 GB: used up when under 1 MB was left,
+ * otherwise "a smaller file may still go" (no number). Never throws.
+ */
+export async function recordDayLimitRefusal(
+  userId: string,
+  leftBytes: number | undefined,
+  now: number = Date.now(),
+): Promise<void> {
+  const usedUp = leftBytes !== undefined && wholeMbLeft(leftBytes) < 1;
+  await recordUploadRefusal(userId, usedUp ? "day-limit" : "past-day-limit", now);
 }
 
 /** The sentence for this person's refusal while it is remembered, or null. Never throws. */
@@ -151,9 +138,6 @@ export async function readUploadRefusal(
     if (row.count === REASONS["rate-limited"].number) {
       const retryAfterSeconds = Math.ceil((new Date(row.expiresAt).getTime() - now) / 1000);
       return { error: tooManyTriesSentence(retryAfterSeconds), code: REASONS["rate-limited"].code, retryAfterSeconds };
-    }
-    if (row.count > PAST_DAY_LIMIT_BASE) {
-      return { error: pastDayLimitMessage(row.count - PAST_DAY_LIMIT_BASE), code: REASONS["past-day-limit"].code };
     }
     const reason = Object.values(REASONS).find((entry) => entry.number === row.count);
     return reason ? { error: reason.error, code: reason.code } : null;
