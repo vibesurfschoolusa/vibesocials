@@ -362,6 +362,9 @@ export function BulkPostsForm({
   const rowsRef = useRef<BulkRow[]>([]);
   const queueLinkRef = useRef<HTMLAnchorElement>(null);
   const filesRef = useRef(new Map<string, File>());
+  // R62 publishing-flow-2 L1: one per uploading row, so Remove stops its bytes
+  // and runWork moves on to the next row.
+  const uploadAbortsRef = useRef(new Map<string, AbortController>());
   const workingRef = useRef(false);
   const [fileInputKey, setFileInputKey] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -582,6 +585,10 @@ export function BulkPostsForm({
       });
       return;
     }
+    // Removed while it was prepared: no upload token is asked for.
+    if (!rowsRef.current.some((r) => r.id === id)) return;
+    const abort = new AbortController();
+    uploadAbortsRef.current.set(id, abort);
     try {
       filesRef.current.set(id, prepared);
       // A photo's thumbnail is the prepared file (a HEIC original would not show).
@@ -602,6 +609,7 @@ export function BulkPostsForm({
         access: "public",
         handleUploadUrl: uploadRouteUrl(workspaceId),
         clientPayload: uploadSizePayload(prepared),
+        abortSignal: abort.signal,
         onUploadProgress: (event) => {
           if (!settled) updateRow(id, { progress: event.percentage });
         },
@@ -612,6 +620,7 @@ export function BulkPostsForm({
         },
         async (error: unknown) => {
           settled = true;
+          if (abort.signal.aborted) throw error;
           // A full workspace storage reaches the user as its own sentence.
           throw await explainUploadFailure(error, workspaceId);
         },
@@ -622,6 +631,8 @@ export function BulkPostsForm({
         blob: { url: blob.url, filename: prepared.name, mimeType: prepared.type, sizeBytes: prepared.size },
       });
     } catch (error: unknown) {
+      // Removed: the row is gone, so there is nothing to say.
+      if (abort.signal.aborted) return;
       console.error("[Add many] Upload failed", error);
       updateRow(id, {
         upload: "failed",
@@ -629,6 +640,8 @@ export function BulkPostsForm({
         uploadErrorKind: "network",
         uploadError: errorMessage(error, "The upload failed. Retry it or remove it."),
       });
+    } finally {
+      if (uploadAbortsRef.current.get(id) === abort) uploadAbortsRef.current.delete(id);
     }
   }
 
@@ -915,6 +928,8 @@ export function BulkPostsForm({
   }
 
   function removeRow(id: string) {
+    uploadAbortsRef.current.get(id)?.abort();
+    uploadAbortsRef.current.delete(id);
     filesRef.current.delete(id);
     revokeThumbnail(id);
     setTooMany(false);
