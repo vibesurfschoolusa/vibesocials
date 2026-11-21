@@ -1785,7 +1785,7 @@ function CreatePostFormInner({
           setUploadProgress(null);
         }
         // Stopped on purpose: nothing to say about it.
-        // Only this file aborts it, always with a SingleUploadStop as the reason.
+        // Only this file aborts it, always with a SingleUploadStopReason as the reason.
         if (abort.signal.aborted) throw new SingleUploadAbortedError(abort.signal.reason as SingleUploadStopReason);
         // A full workspace storage reaches the user as its own sentence, not
         // as the blob client's generic token failure (lib/uploadFailure.ts).
@@ -1990,7 +1990,8 @@ function CreatePostFormInner({
       }
       setPreparingPick((current) => nextPreparingPick(current, { type: "settled", selection }));
       setPickJudgment((current) => nextPickJudgment(current, { type: "settled", selection }));
-      if (selection !== fileSelectionRef.current) {
+      // A newer pick replaced it, or the page was left: nothing is attached or uploaded.
+      if (selection !== fileSelectionRef.current || !mountedRef.current) {
         return;
       }
       setUploadFile(nextFile);
@@ -2309,7 +2310,6 @@ function CreatePostFormInner({
       queuePhotoUploads(prepared, isStale, replace);
     } catch (err: unknown) {
       if (isStale()) return;
-      // Nothing from this pick is attached.
       if (replace) settleDroppedUpload("removed");
       // Attach nothing from this pick.
       changePhotoSet((prev) => prev.filter((photo) => !pickKeys.has(photo.key)));
