@@ -126,11 +126,21 @@ describe("cardTime", () => {
     expect(cardTime({ status: "scheduled", createdAt: created, scheduledFor: scheduled })).toEqual({ label: "Scheduled for", iso: scheduled });
   });
   // Review: a cancelled post, or one retried days later, must not read as if it
-  // went out (or will go out) at an unlabelled time, so the label stays.
-  it("keeps Scheduled for once a scheduled post has gone out, was retried or was cancelled", () => {
+  // went out (or will go out) at an unlabelled time, so it keeps a label.
+  // R56 publishing-flow-2 L1: Publish now, Send again and approve-now write
+  // scheduledFor = the moment of sending, so once the post is no longer waiting
+  // the label is one that is true for a chosen time and a send-now time.
+  it("says Publishing time once a scheduled post has gone out, failed, was retried or was cancelled", () => {
     for (const status of ["completed", "partial", "failed", "in_progress", "cancelled"]) {
-      expect(cardTime({ status, createdAt: created, scheduledFor: scheduled })).toEqual({ label: "Scheduled for", iso: scheduled });
+      expect(cardTime({ status, createdAt: created, scheduledFor: scheduled })).toEqual({ label: "Publishing time", iso: scheduled });
     }
+  });
+  it("says Publishing time, not Scheduled for, for a post published straight away (scheduledFor = its send moment)", () => {
+    const sent = "2026-11-14T08:21:05.000Z";
+    expect(cardTime({ status: "completed", createdAt: created, scheduledFor: sent })).toEqual({ label: "Publishing time", iso: sent });
+  });
+  it("says Publishing time for a failed post", () => {
+    expect(cardTime({ status: "failed", createdAt: created, scheduledFor: scheduled })).toEqual({ label: "Publishing time", iso: scheduled });
   });
   it("shows the creation time for a post published straight away, and for a draft", () => {
     expect(cardTime({ status: "completed", createdAt: created, scheduledFor: null })).toEqual({ label: null, iso: created });

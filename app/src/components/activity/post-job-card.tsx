@@ -176,17 +176,22 @@ function orderResults(results: PostJobDTO["results"]): PostJobDTO["results"] {
  * files. A post whose file row is gone still counts one, so it is not one.
  */
 /**
- * The card's time line. A post that was scheduled always reads "Scheduled for
- * <time>", next to whatever its badge says (waiting, completed, failed,
- * retried or cancelled), never just its creation time, which could be days
- * earlier. Drafts and posts published straight away show when they were made.
+ * The card's time line. A post with a scheduledFor shows that time, labelled,
+ * next to whatever its badge says, never just its creation time, which could
+ * be days earlier. "Scheduled for" only while it waits to go out: Publish now,
+ * Send again and approve-now also write scheduledFor (the moment of sending),
+ * so once it has gone out, failed or was cancelled it reads "Publishing time",
+ * true of a chosen time and a send-now time alike (R56 publishing-flow-2 L1).
+ * Drafts, and posts with no scheduledFor, show when they were made.
  */
 export function cardTime(job: {
   status: string;
   createdAt: string | null;
   scheduledFor: string | null;
-}): { label: "Scheduled for" | null; iso: string } | null {
-  if (job.scheduledFor && job.status !== "draft") return { label: "Scheduled for", iso: job.scheduledFor };
+}): { label: "Scheduled for" | "Publishing time" | null; iso: string } | null {
+  if (job.scheduledFor && job.status !== "draft") {
+    return { label: job.status === "scheduled" ? "Scheduled for" : "Publishing time", iso: job.scheduledFor };
+  }
   return job.createdAt ? { label: null, iso: job.createdAt } : null;
 }
 
