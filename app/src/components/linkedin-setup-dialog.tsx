@@ -79,7 +79,7 @@ function keepAddress(address: string): void {
 /** `workspaceId`: the workspace this page was rendered for; the start route refuses any other (F3). */
 /**
  * The vanity name (or numeric id) from what the owner typed. Handles
- * https://www.linkedin.com/company/vibe-surf-school-usa/, its /admin/ address,
+ * https://www.linkedin.com/company/vibe-surf-school-usa/ (with or without more path after it),
  * linkedin.com/company/82188987, a bare vanity name, or a numeric id. R60
  * new-customer-2 L1: the host and path match whatever their case, and only
  * the name taken out is lowercased.
