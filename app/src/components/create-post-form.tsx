@@ -2762,14 +2762,15 @@ function CreatePostFormInner({
   // (aria-disabled, ui/button.tsx); focus anywhere else is left alone. Read in
   // a layout effect, before the browser lets go of the disabled control. Only
   // the lock disables a control while it holds focus, so no other check is needed.
-  const formSubmitRef = useRef<HTMLButtonElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const barSubmitRef = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => {
     if (!sendLocksFields) return;
     const focused = document.activeElement;
     if (!focused || focused === document.body || !focused.matches(":disabled")) return;
     // Only one of the two shows (md and up, or the phone's bar); a hidden one takes no focus.
-    for (const button of [formSubmitRef.current, barSubmitRef.current]) {
+    const formSubmit = formRef.current?.querySelector<HTMLButtonElement>('button[type="submit"]') ?? null;
+    for (const button of [formSubmit, barSubmitRef.current]) {
       button?.focus();
       if (button && document.activeElement === button) return;
     }
@@ -3071,7 +3072,7 @@ function CreatePostFormInner({
     {libraryStatus}
     {untouchedStatus}
     <Card className="p-6">
-      <form id="create-post-form" onSubmit={handleUploadSubmit} className="space-y-5">
+      <form id="create-post-form" ref={formRef} onSubmit={handleUploadSubmit} className="space-y-5">
         {showSuccess && dispatchFailed && (
           <div ref={successRef} className="scroll-mt-24">
             <Alert variant="warning" title="Publishing didn't start">
@@ -3633,7 +3634,7 @@ function CreatePostFormInner({
                 Below md the publish bar takes its place (hidden, not just
                 covered), so a screen reader meets one submit control. */}
             <span title={tiktokBlock ?? undefined} className="hidden md:inline">
-            <Button ref={formSubmitRef} type="submit" loading={control.loading} disabled={control.disabled}>
+            <Button type="submit" loading={control.loading} disabled={control.disabled}>
               {control.label}
             </Button>
             </span>
@@ -3699,8 +3700,8 @@ function CreatePostFormInner({
         }}
       />
       <PublishBar
-        formId="create-post-form"
         submitRef={barSubmitRef}
+        formId="create-post-form"
         control={control}
         dialogOpen={confirmPublishOpen}
         tiktokDeclaration={barTikTokDeclaration({

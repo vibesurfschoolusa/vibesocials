@@ -182,7 +182,10 @@ beforeEach(async () => {
           if (!disabledNow(node)) doc.activeElement = node;
         },
         matches: (selector: string) => selector === ":disabled" && disabledNow(node),
-        querySelector: () => null,
+        querySelector: (selector: string) =>
+          selector === 'button[type="submit"]'
+            ? find(node, (n) => n !== node && n.nodeName === "BUTTON" && n.attributes?.type === "submit")
+            : null,
         querySelectorAll: () => [],
         ...(tag === "select" ? { options: [] } : {}),
       });
@@ -404,6 +407,8 @@ describe("Create: the lock keeps keyboard focus (R65 new-customer L1, pages-b L1
     expect(disabledNow(byId("post-schedule"))).toBe(true);
 
     expect(isSubmitButton(active())).toBe(true);
+    // The form's own button, which shows from md up; the phone's bar takes it when that one is hidden.
+    expect(active()).toBe(formSubmit());
     expect(disabledNow(active())).toBe(false);
     await releaseUpload("enter1");
   }, 10_000);
