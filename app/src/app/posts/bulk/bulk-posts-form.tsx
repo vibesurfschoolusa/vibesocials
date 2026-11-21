@@ -51,6 +51,7 @@ import {
 } from "@/lib/bulkPosts";
 import { Select } from "@/components/ui/select";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
+import { YOUTUBE_PRIVACY_LABELS } from "@/components/youtube-post-settings";
 import type { UploadedBlob } from "@/lib/createPostRequest";
 import { requestPhotoDescription } from "@/components/composer/attached-photos";
 import { StoryPlacementSettings } from "@/components/story-placement";
@@ -319,6 +320,22 @@ export function NoPlatformConnectedLine({ isMember, onlyTikTok = false }: { isMe
       </Link>
       .
     </p>
+  );
+}
+
+/**
+ * R56 pages-a L2: the YouTube privacy options come from the map Create's
+ * select and the Queue card use, so the three can't differ.
+ */
+export function BulkYoutubePrivacyOptions() {
+  return (
+    <>
+      {(Object.keys(YOUTUBE_PRIVACY_LABELS) as YouTubePostMetadata["privacyStatus"][]).map((value) => (
+        <option key={value} value={value}>
+          {YOUTUBE_PRIVACY_LABELS[value]}
+        </option>
+      ))}
+    </>
   );
 }
 
@@ -1254,9 +1271,7 @@ export function BulkPostsForm({
                 disabled={sendingMode !== null}
                 onChange={(event) => setYoutubePrivacy(event.target.value as YouTubePostMetadata["privacyStatus"])}
               >
-                <option value="public">Public</option>
-                <option value="unlisted">Unlisted</option>
-                <option value="private">Private</option>
+                <BulkYoutubePrivacyOptions />
               </Select>
             </div>
           ) : null}

@@ -15,7 +15,7 @@ import { BULK_CAPTION_TOO_LONG_MESSAGE, BULK_EMPTY_CAPTION_MESSAGE, refreshedFir
 import { SCHEDULED_TIME_TOO_SOON_MESSAGE } from "@/lib/scheduling";
 import { localTimeZoneLabel } from "@/lib/scheduling";
 
-import { BulkPostsForm, NoPlatformConnectedLine, refusedPressesKept, rowLocalBlock, rowSendLine, type BulkBatchCheck } from "./bulk-posts-form";
+import { BulkPostsForm, BulkYoutubePrivacyOptions, NoPlatformConnectedLine, refusedPressesKept, rowLocalBlock, rowSendLine, type BulkBatchCheck } from "./bulk-posts-form";
 
 const ORIGINAL_TZ = process.env.TZ;
 
@@ -347,5 +347,16 @@ describe("Add many: rowLocalBlock and the caption's length", () => {
     const noPlatform = { ...row(long), sendError: null };
     expect(rowSendLine(noPlatform, press, { ...batch, selectedPlatforms: ["youtube"] as Platform[] })).not.toBeNull();
     expect(rowSendLine(noPlatform, press, { ...batch, selectedPlatforms: ["youtube"] as Platform[] })).not.toBe(BULK_CAPTION_TOO_LONG_MESSAGE);
+  });
+});
+
+// R56 pages-a L2: Add many's YouTube privacy options come from the same map as
+// Create's select and the Queue card, with the same values and texts as before.
+describe("BulkYoutubePrivacyOptions", () => {
+  it("lists Public, Unlisted and Private with the stored values", () => {
+    const html = renderToString(createElement("select", null, createElement(BulkYoutubePrivacyOptions)));
+    expect(html).toBe(
+      '<select><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select>',
+    );
   });
 });

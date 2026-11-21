@@ -23,6 +23,7 @@ import {
   saveQueueView,
   seriesLabel,
   sortQueue,
+  youtubePrivacyNote,
 } from "./queue-view";
 
 function job(id: string, overrides: Partial<PostJobDTO> = {}): PostJobDTO {
@@ -436,5 +437,21 @@ describe("Queue focus after a press", () => {
     expect(queueSource).toMatch(/async function handleCreate\(event\?: React\.MouseEvent<HTMLButtonElement>\) \{\s*const pressed = event\?\.currentTarget \?\? null;/);
     expect(queueSource).toMatch(/await makeLink\(\);\s*\/\/[^\n]*\n\s*focusAfterPress\(pressed, \(\) => copyRef\.current\);/);
     expect(queueSource).toMatch(/<Button ref=\{copyRef\} type="button" variant="outline" onClick=\{onCopy\}>/);
+  });
+});
+
+// R56 pages-a L2: the card's platform line names YouTube privacy as the select
+// and Create's confirmation do, not as the stored value.
+describe("youtubePrivacyNote", () => {
+  it("reads Public, Unlisted or Private for the three stored values", () => {
+    expect(youtubePrivacyNote("public")).toBe(" · YouTube: Public");
+    expect(youtubePrivacyNote("unlisted")).toBe(" · YouTube: Unlisted");
+    expect(youtubePrivacyNote("private")).toBe(" · YouTube: Private");
+  });
+
+  it("falls back to the raw value for one it doesn't know, and is empty for none", () => {
+    expect(youtubePrivacyNote("members")).toBe(" · YouTube: members");
+    expect(youtubePrivacyNote(null)).toBe("");
+    expect(youtubePrivacyNote(undefined)).toBe("");
   });
 });

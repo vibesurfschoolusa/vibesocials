@@ -68,6 +68,7 @@ import {
   TIKTOK_PRIVACY_LABELS,
 } from "@/lib/platforms";
 import { googleQueueLabel } from "@/lib/googlePostOptions";
+import { YOUTUBE_PRIVACY_LABELS } from "@/components/youtube-post-settings";
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
 import { queueEditorPlatforms, storyChoiceSuffix, storyListing } from "@/lib/storyPlacement";
 import { appendJobsPage } from "@/lib/postsPagination";
@@ -234,6 +235,15 @@ export function pairLabel(job: Pick<PostJobDTO, "storyOf" | "alsoAsStory">): str
   return job.alsoAsStory ? "Also as a Story" : null;
 }
 
+/**
+ * R56 pages-a L2: the card names YouTube privacy as the select and Create's
+ * confirmation do; a value the map doesn't know shows as stored, as TikTok's does.
+ */
+export function youtubePrivacyNote(privacy: string | null | undefined): string {
+  if (!privacy) return "";
+  return ` · YouTube: ${YOUTUBE_PRIVACY_LABELS[privacy as keyof typeof YOUTUBE_PRIVACY_LABELS] ?? privacy}`;
+}
+
 /** "Repeats: 3 of 8" for a post created as part of a series (brief 11), else null. */
 export function seriesLabel(job: PostJobDTO): string | null {
   if (!job.seriesId || !job.seriesPosition || !job.seriesCount) return null;
@@ -361,7 +371,7 @@ function QueueCard({
             {job.publish?.targetPlatforms?.length
               ? `Publishing to ${listing.platformLabels.join(", ")}`
               : `Publishing to all platforms connected at publish time${storyChoiceSuffix(stories)}`}
-            {job.publish?.youtubePrivacy ? ` · YouTube: ${job.publish.youtubePrivacy}` : ""}
+            {youtubePrivacyNote(job.publish?.youtubePrivacy)}
             {job.publish?.tiktokPrivacy ? ` · TikTok: ${TIKTOK_PRIVACY_LABELS[job.publish.tiktokPrivacy] ?? job.publish.tiktokPrivacy}` : ""}
             {googleLabel ? ` · Google: ${googleLabel}` : ""}
           </p>
