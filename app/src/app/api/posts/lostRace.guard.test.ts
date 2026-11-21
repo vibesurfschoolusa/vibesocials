@@ -177,17 +177,32 @@ function is409(node: ts.Node): node is ts.CallExpression {
   );
 }
 
-/** The local helpers that send a 409 (e.g. `const notCancelable = (status) => NextResponse.json(..., { status: 409 })`). */
+/**
+ * The helpers in a file that send a 409, at the top of the file or inside a
+ * handler, in either form: `function lost() {...}` or `const notCancelable =
+ * (status) => NextResponse.json(..., { status: 409 })`. A helper imported from
+ * lib is not read (a known limit, see AV1.md).
+ */
 function helpers409(file: ts.SourceFile): Set<string> {
   const names = new Set<string>();
   walk(file, (node) => {
-    if (!ts.isVariableDeclaration(node) || !ts.isIdentifier(node.name) || !node.initializer) return;
-    if (!ts.isArrowFunction(node.initializer) && !ts.isFunctionExpression(node.initializer)) return;
+    let name: string | null = null;
+    let body: ts.Node | null = null;
+    if (ts.isFunctionDeclaration(node) && node.name && node.body) [name, body] = [node.name.text, node.body];
+    else if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+    ) {
+      [name, body] = [node.name.text, node.initializer];
+    }
+    if (!name || !body) return;
     let sends = false;
-    walk(node.initializer, (inner) => {
+    walk(body, (inner) => {
       if (is409(inner)) sends = true;
     });
-    if (sends) names.add(node.name.text);
+    if (sends) names.add(name);
   });
   return names;
 }
@@ -213,11 +228,12 @@ function statementsAfter(pin: ts.Node): ts.Statement[] {
 
 /**
  * The 409s a handler sends after a pinned write that lostRaceAnswer did not
- * word, leaving out those `allowed` names by a piece of their text.
+ * word, leaving out those `allowed` names by a piece of their text. `source`
+ * is the handler's whole file, where its 409 helpers are looked for.
  */
-function handWrittenLostRaces(handler: string, allowed: readonly string[] = []): string[] {
+function handWrittenLostRaces(handler: string, allowed: readonly string[] = [], source: string = handler): string[] {
   const file = parse(handler);
-  const helpers = helpers409(file);
+  const helpers = helpers409(parse(source));
   const found = new Set<string>();
   for (const pin of pinsOf(file)) {
     for (const statement of statementsAfter(pin)) {
@@ -235,9 +251,9 @@ function handWrittenLostRaces(handler: string, allowed: readonly string[] = []):
   return [...found];
 }
 
-/** Every 409 after a pinned write, worded or not (to check that LATER_409 entries still exist). */
-function every409After(handler: string): string[] {
-  return handWrittenLostRaces(handler);
+/** Every 409 after a pinned write not worded by lostRaceAnswer (to check that LATER_409 entries still exist). */
+function every409After(handler: string, source: string): string[] {
+  return handWrittenLostRaces(handler, [], source);
 }
 
 describe("a lost race is worded by lostRaceAnswer alone", () => {
@@ -255,12 +271,12 @@ describe("a lost race is worded by lostRaceAnswer alone", () => {
     const source = handlers.get(key);
     expect(source, key).toBeDefined();
     expect(source, key).toMatch(/\blostRaceAnswer\(/);
-    expect(handWrittenLostRaces(source!, Object.keys(LATER_409[key] ?? {})), key).toEqual([]);
+    expect(handWrittenLostRaces(source!, Object.keys(LATER_409[key] ?? {}), all.get(key.split("#")[0])), key).toEqual([]);
   });
 
   it("each LATER_409 entry is still a 409 after a pinned write", () => {
     for (const [key, entries] of Object.entries(LATER_409)) {
-      const later = every409After(handlers.get(key) ?? "");
+      const later = every409After(handlers.get(key) ?? "", all.get(key.split("#")[0]) ?? "");
       for (const piece of Object.keys(entries)) expect(later.some((text) => text.includes(piece)), `${key}: ${piece}`).toBe(true);
     }
   });
