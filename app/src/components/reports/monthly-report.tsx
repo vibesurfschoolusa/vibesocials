@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { ExternalLink } from "@/components/external-link";
+import { ExternalLink, NEW_TAB_HINT } from "@/components/external-link";
 import { MediaThumb } from "@/components/media-thumb";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
@@ -18,6 +18,7 @@ import {
   type ReportPost,
 } from "@/lib/monthlyReport";
 import { formatNumber } from "@/lib/formatNumber";
+import { labelName } from "@/lib/queueLabelName";
 import { countWord } from "@/lib/plural";
 
 import { LocalDay } from "./local-day";
@@ -121,7 +122,11 @@ function PostRow({ post }: { post: ReportPost }) {
               {p.url ? (
                 <>
                   {" "}
-                  <ExternalLink href={p.url} className="text-primary underline">
+                  <ExternalLink
+                    href={p.url}
+                    aria-label={`View post on ${p.platform}${p.story ? " Story" : ""} "${labelName(post.caption)}" ${NEW_TAB_HINT}`}
+                    className="text-primary underline"
+                  >
                     View post
                   </ExternalLink>
                   <span data-report-url className="ml-1 hidden break-all text-xs">

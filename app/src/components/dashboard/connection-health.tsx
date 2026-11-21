@@ -116,6 +116,7 @@ export function ConnectionHealth({
                   // renewed: Settings has its Reconnect.
                   <Link
                     href={SETTINGS_CONNECTIONS_HREF}
+                    aria-label={`${connection.expiry === "ended" ? "Ended" : "Ends soon"}: ${platformLabel(connection.platform)}`}
                     className={buttonVariants({
                       variant: connection.expiry === "ended" ? "destructive" : "outline",
                       size: "sm",
@@ -140,6 +141,7 @@ export function ConnectionHealth({
                   // own Reconnect carries it.
                   <Link
                     href={SETTINGS_CONNECTIONS_HREF}
+                    aria-label={`Reconnect ${platformLabel(connection.platform)}`}
                     className={buttonVariants({
                       variant: "destructive",
                       size: "sm",
@@ -152,6 +154,7 @@ export function ConnectionHealth({
                 ) : (
                   <Link
                     href={SETTINGS_CONNECTIONS_HREF}
+                    aria-label={`Connect ${platformLabel(connection.platform)}`}
                     className={buttonVariants({
                       variant: "ghost",
                       size: "sm",
