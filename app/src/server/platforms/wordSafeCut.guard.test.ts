@@ -46,23 +46,39 @@ function plainCutsIn(source: string, fileName: string): string[] {
   return found;
 }
 
+/** How the walk reads files: the disk, or the disk with planted files on top (the planted tests). */
+interface Files {
+  read: (fileName: string) => string;
+  exists: (fileName: string) => boolean;
+}
+const DISK: Files = { read: (fileName) => readFileSync(fileName, "utf8"), exists: existsSync };
+
+/** The disk with `planted` (path relative to src, source) on top. */
+function withPlanted(planted: Record<string, string>): Files {
+  const byPath = new Map(Object.entries(planted).map(([file, source]) => [path.normalize(path.join(SRC, file)), source]));
+  return {
+    read: (fileName) => byPath.get(path.normalize(fileName)) ?? DISK.read(fileName),
+    exists: (fileName) => byPath.has(path.normalize(fileName)) || DISK.exists(fileName),
+  };
+}
+
 /** The source file an import names, or null for a package. */
-function resolveImport(specifier: string, fromFile: string): string | null {
+function resolveImport(specifier: string, fromFile: string, files: Files = DISK): string | null {
   let base: string;
   if (specifier.startsWith("@/")) base = path.join(SRC, specifier.slice(2));
   else if (specifier.startsWith(".")) base = path.resolve(path.dirname(fromFile), specifier);
   else return null;
   for (const candidate of [base, `${base}.ts`, `${base}.tsx`, path.join(base, "index.ts")]) {
     if (candidate.endsWith(".ts") || candidate.endsWith(".tsx")) {
-      if (existsSync(candidate)) return path.normalize(candidate);
+      if (files.exists(candidate)) return path.normalize(candidate);
     }
   }
   return null;
 }
 
 /** Every file imported by `fileName`, read as source (type-only imports too: harmless). */
-function importsOf(fileName: string): string[] {
-  const file = ts.createSourceFile(fileName, readFileSync(fileName, "utf8"), ts.ScriptTarget.Latest, true);
+function importsOf(fileName: string, files: Files): string[] {
+  const file = ts.createSourceFile(fileName, files.read(fileName), ts.ScriptTarget.Latest, true);
   const found: string[] = [];
   const visit = (node: ts.Node) => {
     const specifier =
@@ -77,7 +93,7 @@ function importsOf(fileName: string): string[] {
           ? node.arguments[0].text
           : null;
     if (specifier) {
-      const resolved = resolveImport(specifier, fileName);
+      const resolved = resolveImport(specifier, fileName, files);
       if (resolved) found.push(resolved);
     }
     ts.forEachChild(node, visit);
@@ -95,19 +111,26 @@ const ROOTS = [
 ];
 
 /** The roots and every file they reach through imports, truncate.ts left out. */
-function reachedFiles(): string[] {
+function reachedFiles(roots: string[] = ROOTS, files: Files = DISK): string[] {
   const seen = new Set<string>();
-  const queue = ROOTS.map((root) => path.normalize(root));
+  const queue = roots.map((root) => path.normalize(root));
   while (queue.length > 0) {
     const next = queue.pop() as string;
     if (seen.has(next) || next === TRUNCATE || /\.test\.tsx?$/.test(next)) continue;
     seen.add(next);
-    queue.push(...importsOf(next));
+    queue.push(...importsOf(next, files));
   }
   return [...seen].sort();
 }
 
 const relative = (fileName: string) => path.relative(SRC, fileName).split(path.sep).join("/");
+
+/** The reached files that use a plain cut and aren't allowed, with the cuts. */
+function offenders(roots: string[] = ROOTS, files: Files = DISK) {
+  return reachedFiles(roots, files)
+    .map((fileName) => ({ file: relative(fileName), cuts: plainCutsIn(files.read(fileName), fileName) }))
+    .filter(({ file, cuts }) => cuts.length > 0 && !(file in ALLOWED));
+}
 
 describe("every platform cut ends at a whole word (R64 platform-clients L1)", () => {
   it("reads every platform client and the preview", () => {
@@ -128,10 +151,7 @@ describe("every platform cut ends at a whole word (R64 platform-clients L1)", ()
   });
 
   it("no client, the preview or a module they import uses a plain cut", () => {
-    const offenders = reachedFiles()
-      .map((fileName) => ({ file: relative(fileName), cuts: plainCutsIn(readFileSync(fileName, "utf8"), fileName) }))
-      .filter(({ file, cuts }) => cuts.length > 0 && !(file in ALLOWED));
-    expect(offenders).toEqual([]);
+    expect(offenders()).toEqual([]);
   });
 
   it("every allowed exception still has a plain cut and a reason", () => {
@@ -157,5 +177,43 @@ describe("every platform cut ends at a whole word (R64 platform-clients L1)", ()
     expect(
       plainCutsIn('import { truncateGraphemesAtWord, truncateUnitsAtWord, fitTitle } from "@/lib/truncate";', fileName),
     ).toEqual([]);
+  });
+
+  // R64 fix review L1: a re-export or a dynamic import can't hide a plain cut.
+  const plantedClient = path.join(PLATFORMS, "plantedClient.ts");
+
+  it("fails on a planted lib file that re-exports truncateGraphemes, imported by a client", () => {
+    const files = withPlanted({
+      "server/platforms/plantedClient.ts": [
+        'import { truncateGraphemes } from "@/lib/plantedCuts";',
+        "export const cut = (text: string) => truncateGraphemes(text, 280);",
+      ].join("\n"),
+      "lib/plantedCuts.ts": 'export { truncateGraphemes } from "./truncate";',
+    });
+    expect(offenders([plantedClient], files)).toEqual([{ file: "lib/plantedCuts.ts", cuts: ["truncateGraphemes"] }]);
+  });
+
+  it("fails on a planted export * of lib/truncate.ts", () => {
+    const files = withPlanted({
+      "server/platforms/plantedClient.ts": ['import { truncateUnits } from "@/lib/plantedCuts";', "export { truncateUnits };"].join(
+        "\n",
+      ),
+      "lib/plantedCuts.ts": 'export * from "@/lib/truncate";',
+    });
+    expect(offenders([plantedClient], files)).toEqual([{ file: "lib/plantedCuts.ts", cuts: ["export *"] }]);
+  });
+
+  it("fails on a planted await import of lib/truncate.ts inside a client", () => {
+    const files = withPlanted({
+      "server/platforms/plantedClient.ts": [
+        "export async function cut(text: string) {",
+        '  const truncate = await import("@/lib/truncate");',
+        "  return truncate.truncateGraphemes(text, 280);",
+        "}",
+      ].join("\n"),
+    });
+    expect(offenders([plantedClient], files)).toEqual([
+      { file: "server/platforms/plantedClient.ts", cuts: ['import("@/lib/truncate")'] },
+    ]);
   });
 });
