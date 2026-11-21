@@ -63,6 +63,14 @@ const fetchMock = vi.fn(async (input: unknown) => {
         draft("job-a", "Instagram only", ["instagram"]),
         draft("job-b", "No targets", null),
         { ...draft("job-c", "Instagram Story", ["instagram"]), storyPlatforms: ["instagram"] },
+        { ...draft("job-d", "Scheduled one", ["instagram"]), status: "scheduled", scheduledFor: "2099-11-30T15:00:00.000Z" },
+        // R62 pages-a-3 L1: the client asked for a change, so it is a draft that keeps its time.
+        {
+          ...draft("job-e", "Sent back", ["instagram"]),
+          scheduledFor: "2099-11-30T15:00:00.000Z",
+          clientChangeRequestedAt: "2026-11-02T00:00:00.000Z",
+          clientNote: "Use the other photo.",
+        },
       ],
       workspaceId: "ws-1",
       workspaceMemberCount: 1,
@@ -102,8 +110,13 @@ const SAVED = new Date("2026-11-01T00:00:00.000Z").toLocaleString(undefined, {
 });
 
 async function pressPublish(caption: string) {
+  // A draft's card is named by its Saved time; a card with a time, by that time.
   const label = `Publish "${caption}, ${SAVED}" now`;
-  const button = findAll(container, (n) => n.tagName === "BUTTON" && n.attributes?.["aria-label"] === label)[0];
+  const named = (n: FakeNode) => {
+    const aria = String(n.attributes?.["aria-label"] ?? "");
+    return aria === label || (aria.startsWith(`Publish "${caption}, `) && aria.endsWith('" now'));
+  };
+  const button = findAll(container, (n) => n.tagName === "BUTTON" && named(n))[0];
   if (!button) throw new Error(`no button ${label}`);
   await act(async () => {
     void props(button).onClick({ currentTarget: null });
@@ -150,19 +163,40 @@ describe("Queue: the Publish now dialog names the post's platforms", () => {
   it("a draft that targets Instagram: the dialog names Instagram", async () => {
     await mount();
     await pressPublish("Instagram only");
-    expect(dialogText()).toContain("It will be sent to Instagram right away instead of waiting.");
+    expect(dialogText()).toContain("It will be sent to Instagram right away.");
   }, 10_000);
 
   // R59 publishing-flow L3: the dialog says Story, as the card does.
   it("a Story-only Instagram draft: the dialog says Instagram (Story)", async () => {
     await mount();
     await pressPublish("Instagram Story");
-    expect(dialogText()).toContain("It will be sent to Instagram (Story) right away instead of waiting.");
+    expect(dialogText()).toContain("It will be sent to Instagram (Story) right away.");
   }, 10_000);
 
   it("a draft with no targets: your connected platforms", async () => {
     await mount();
     await pressPublish("No targets");
-    expect(dialogText()).toContain("It will be sent to your connected platforms right away instead of waiting.");
+    expect(dialogText()).toContain("It will be sent to your connected platforms right away.");
+  }, 10_000);
+
+  // R62 pages-a-3 L1: only a scheduled post was waiting for anything.
+  it("a scheduled post: right away instead of waiting for its scheduled time", async () => {
+    await mount();
+    await pressPublish("Scheduled one");
+    expect(dialogText()).toContain("It will be sent to Instagram right away instead of waiting for its scheduled time.");
+  }, 10_000);
+
+  it("a draft: right away, with no waiting named", async () => {
+    await mount();
+    await pressPublish("Instagram only");
+    expect(dialogText()).toContain("It will be sent to Instagram right away.");
+    expect(dialogText()).not.toContain("instead of waiting");
+  }, 10_000);
+
+  it("a draft the client sent back with a time: right away, with no waiting named", async () => {
+    await mount();
+    await pressPublish("Sent back");
+    expect(dialogText()).toContain("It will be sent to Instagram right away.");
+    expect(dialogText()).not.toContain("instead of waiting");
   }, 10_000);
 });

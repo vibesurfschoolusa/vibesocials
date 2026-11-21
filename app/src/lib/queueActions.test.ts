@@ -157,55 +157,69 @@ describe("queueStatusBadge", () => {
 });
 
 describe("publishConfirmCopy", () => {
+  // R62 pages-a-3 L1: only a scheduled post was waiting; a draft never goes out by itself.
+  it("a scheduled post: right away instead of waiting for its scheduled time", () => {
+    expect(publishConfirmCopy("publish", "scheduled", ["instagram"]).description).toBe(
+      "It will be sent to Instagram right away instead of waiting for its scheduled time.",
+    );
+    expect(publishConfirmCopy("publish", "scheduled").description).toBe(
+      "It will be sent to your connected platforms right away instead of waiting for its scheduled time.",
+    );
+  });
+  it("a draft: right away, with no waiting named", () => {
+    expect(publishConfirmCopy("publish", "draft", ["instagram"]).description).toBe(
+      "It will be sent to Instagram right away.",
+    );
+  });
   it("publish kind keeps the existing confirmation", () => {
-    expect(publishConfirmCopy("publish")).toEqual({
+    expect(publishConfirmCopy("publish", "draft")).toEqual({
       title: "Publish this post now?",
-      description: "It will be sent to your connected platforms right away instead of waiting.",
+      description: "It will be sent to your connected platforms right away.",
       confirmText: "Publish now",
     });
   });
   // R58 publishing-flow L3: a draft can target some platforms only.
   it("publish kind with target platforms names them", () => {
-    expect(publishConfirmCopy("publish", ["instagram"]).description).toBe(
-      "It will be sent to Instagram right away instead of waiting.",
+    expect(publishConfirmCopy("publish", "draft", ["instagram"]).description).toBe(
+      "It will be sent to Instagram right away.",
     );
-    expect(publishConfirmCopy("publish", ["instagram", "facebook_page", "linkedin"]).description).toBe(
-      "It will be sent to Instagram, Facebook Page and LinkedIn right away instead of waiting.",
+    expect(publishConfirmCopy("publish", "draft", ["instagram", "facebook_page", "linkedin"]).description).toBe(
+      "It will be sent to Instagram, Facebook Page and LinkedIn right away.",
     );
   });
   it("publish kind with no target platforms keeps connected", () => {
     for (const targets of [null, []]) {
-      expect(publishConfirmCopy("publish", targets).description).toBe(
-        "It will be sent to your connected platforms right away instead of waiting.",
+      expect(publishConfirmCopy("publish", "draft", targets).description).toBe(
+        "It will be sent to your connected platforms right away.",
       );
     }
   });
   // R59 publishing-flow L3: the dialog labels a Story as the card does.
   it("a Story-only Instagram post: Instagram (Story)", () => {
-    expect(publishConfirmCopy("publish", ["instagram"], ["instagram"]).description).toBe(
-      "It will be sent to Instagram (Story) right away instead of waiting.",
+    expect(publishConfirmCopy("publish", "draft", ["instagram"], ["instagram"]).description).toBe(
+      "It will be sent to Instagram (Story) right away.",
     );
   });
   it("a post with a feed platform and a Story platform: the Story one says Story", () => {
-    expect(publishConfirmCopy("publish", ["instagram", "facebook_page"], ["facebook_page"]).description).toBe(
-      "It will be sent to Instagram and Facebook Page (Story) right away instead of waiting.",
+    expect(publishConfirmCopy("publish", "draft", ["instagram", "facebook_page"], ["facebook_page"]).description).toBe(
+      "It will be sent to Instagram and Facebook Page (Story) right away.",
     );
   });
   it("no targets but a Story choice: your connected platforms, with the Story named", () => {
-    expect(publishConfirmCopy("publish", null, ["instagram"]).description).toBe(
-      "It will be sent to your connected platforms (Instagram as a Story) right away instead of waiting.",
+    expect(publishConfirmCopy("publish", "draft", null, ["instagram"]).description).toBe(
+      "It will be sent to your connected platforms (Instagram as a Story) right away.",
     );
   });
   it("no Story: as before", () => {
-    expect(publishConfirmCopy("publish", ["instagram", "x"], []).description).toBe(
-      "It will be sent to Instagram and X right away instead of waiting.",
+    expect(publishConfirmCopy("publish", "draft", ["instagram", "x"], []).description).toBe(
+      "It will be sent to Instagram and X right away.",
     );
-    expect(publishConfirmCopy("publish", null, []).description).toBe(
-      "It will be sent to your connected platforms right away instead of waiting.",
+    expect(publishConfirmCopy("publish", "draft", null, []).description).toBe(
+      "It will be sent to your connected platforms right away.",
     );
   });
   it("submit kind says the post is held for review", () => {
-    expect(publishConfirmCopy("submit")).toEqual({
+    expect(publishConfirmCopy("submit", "draft")).toEqual({
       title: "Submit for approval?",
       description: "An owner will review this post before it publishes.",
       confirmText: "Submit for approval",
