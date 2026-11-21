@@ -36,6 +36,23 @@ describe("hashtagsIn", () => {
   it("a tag never starts right after a combining mark", () => {
     expect(tags("हि#न्दी")).toEqual([]);
   });
+
+  // R60 platform-clients L1: as twitter-text, a variation selector (U+FE0E,
+  // U+FE0F, which ends "☀️" and "❤️") may come right before the "#".
+  it.each([
+    ["☀️#summer", ["#summer"]],
+    ["🏄‍♂️#surf", ["#surf"]],
+    ["❤️#love #surf", ["#love", "#surf"]],
+    ["☀︎#summer", ["#summer"]],
+  ])("a tag right after an emoji is a tag: %s", (text, expected) => {
+    expect(tags(text)).toEqual(expected);
+  });
+
+  it("the keycap \"#️⃣\" is not a tag, nor a \"#\" before U+20E3", () => {
+    expect(tags("Press #️⃣ now")).toEqual([]);
+    expect(tags("#⃣")).toEqual([]);
+    expect(tags("#️⃣ #surf")).toEqual(["#surf"]);
+  });
 });
 
 describe("Instagram's hashtag limit with combining marks", () => {
@@ -44,5 +61,13 @@ describe("Instagram's hashtag limit with combining marks", () => {
     const { caption, droppedHashtags } = fitInstagramTags(`Waves ${thirty} #भारत`);
     expect(caption).toBe(`Waves ${thirty}`);
     expect(droppedHashtags).toEqual(["#भारत"]);
+  });
+
+  // R60 platform-clients L1: a tag right after an emoji counts towards the 30.
+  it("counts emoji-led tags, so a 31st is dropped", () => {
+    const thirty = Array.from({ length: 29 }, (_, i) => `#t${i}`).join(" ");
+    const { caption, droppedHashtags } = fitInstagramTags(`Waves ☀️#summer ${thirty} ❤️#love`);
+    expect(droppedHashtags).toEqual(["#love"]);
+    expect(caption).toBe(`Waves ☀️#summer ${thirty} ❤️`);
   });
 });
