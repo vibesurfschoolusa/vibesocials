@@ -1291,6 +1291,21 @@ describe("PATCH /api/posts/[postJobId]: an X text post edited down to mentions",
     expect(updateManyMock).toHaveBeenCalledTimes(1);
   });
 
+  // R63 fix review: Edit sends the caption trimmed, so a stored trailing space
+  // or newline is not a change.
+  it.each([["a trailing space", "@surfshop @wavecafe "], ["a trailing newline", "@surfshop\n"]])(
+    "accepts a time-only edit of a stored mentions-only caption with %s",
+    async (_label, stored) => {
+      findFirstMock.mockResolvedValue({ ...textPost, baseCaption: stored });
+      updateManyMock.mockResolvedValue({ count: 1 });
+      const res = await PATCH(
+        req({ baseCaption: stored.trim(), scheduledFor: "2099-01-02T09:00:00.000Z" }),
+        ctx("job-1"),
+      );
+      expect(res.status).toBe(200);
+    },
+  );
+
   it("accepts a time-only edit with no caption sent", async () => {
     findFirstMock.mockResolvedValue({ ...textPost, baseCaption: "@surfshop @wavecafe" });
     updateManyMock.mockResolvedValue({ count: 1 });
