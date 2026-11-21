@@ -721,3 +721,44 @@ describe("R55: a shared file that didn't arrive is said at once", () => {
     expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
   });
 });
+
+// R55 new-customer-2 L2: the publish confirmation showed YouTube privacy as
+// its raw value ("unlisted"); the select above says "Unlisted". One label map
+// feeds both.
+describe("R55: the publish confirmation names YouTube privacy as the select does", () => {
+  async function openYouTube() {
+    await act(async () => root.unmount());
+    conn.platforms = ["youtube"];
+    root = createRoot(container as unknown as HTMLElement);
+    await mount();
+  }
+  const dialogText = () => String(find(body, (n) => n.attributes?.role === "dialog")?.textContent ?? "");
+
+  it.each([
+    ["public", "Public"],
+    ["unlisted", "Unlisted"],
+    ["private", "Private"],
+  ])("%s shows as %s in the dialog", async (value, label) => {
+    await openYouTube();
+    await typeCaption("Surf lesson today");
+    await pick(new File(["x"], "clip.mp4", { type: "video/mp4" }));
+    await run(() => props(byId("youtube-privacy")).onChange({ target: { value } }));
+    await chooseMode("Publish now");
+    await submit();
+    expect(dialogShown()).toBe(true);
+    expect(dialogText()).toContain(`YouTube privacy: ${label}`);
+  });
+
+  it("the select's option texts are unchanged", async () => {
+    await openYouTube();
+    await pick(new File(["x"], "clip.mp4", { type: "video/mp4" }));
+    const select = byId("youtube-privacy");
+    const options = select.childNodes.filter((n) => n.nodeName === "OPTION");
+    expect(options.map((n) => [n.attributes.value, n.textContent])).toEqual([
+      ["public", "Public"],
+      ["unlisted", "Unlisted"],
+      ["private", "Private"],
+    ]);
+  });
+});
+

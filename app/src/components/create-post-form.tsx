@@ -33,7 +33,7 @@ import { GooglePostBox, googleBoxOpensOnSubmit } from "./composer/google-post-bo
 import { PlatformPreviewList } from "./composer/platform-preview";
 import { PublishBar, type SubmitControlView } from "./composer/publish-bar";
 import { TikTokConsentDeclaration, TikTokPostSettings } from "./tiktok-post-settings";
-import { YouTubePostSettings } from "./youtube-post-settings";
+import { YOUTUBE_PRIVACY_LABELS, YouTubePostSettings } from "./youtube-post-settings";
 import { StoryPlacementSettings } from "./story-placement";
 import { SetPostingTimesPrompt } from "./posting-times-prompt";
 import { VideoCoverPicker } from "./video-cover-picker";
@@ -3481,7 +3481,9 @@ function CreatePostFormInner({
             <span className="block">{confirmCopy.lead}</span>
             {confirmCopy.notice ? <span className="block font-medium">{confirmCopy.notice}</span> : null}
             {selectedPlatforms.includes("youtube") ? (
-              <span className="block">YouTube privacy: {youtubeMetadata.privacyStatus}</span>
+              <span className="block">
+                YouTube privacy: {YOUTUBE_PRIVACY_LABELS[youtubeMetadata.privacyStatus] ?? youtubeMetadata.privacyStatus}
+              </span>
             ) : null}
             {selectedPlatforms.includes("tiktok") && tiktokMetadata.privacyLevel ? (
               <span className="block">TikTok privacy: {TIKTOK_PRIVACY_LABELS[tiktokMetadata.privacyLevel] ?? tiktokMetadata.privacyLevel}</span>

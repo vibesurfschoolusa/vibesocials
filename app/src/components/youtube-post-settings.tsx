@@ -5,6 +5,16 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
 
+/**
+ * R55 new-customer-2 L2: the select's option texts, also used by Create's
+ * publish confirmation, so the two can't differ.
+ */
+export const YOUTUBE_PRIVACY_LABELS: Record<YouTubePostMetadata["privacyStatus"], string> = {
+  public: "Public",
+  unlisted: "Unlisted",
+  private: "Private",
+};
+
 interface YouTubePostSettingsProps {
   metadata: YouTubePostMetadata;
   onChange: (metadata: YouTubePostMetadata) => void;
@@ -29,9 +39,11 @@ export function YouTubePostSettings({ metadata, onChange }: YouTubePostSettingsP
             })
           }
         >
-          <option value="public">Public</option>
-          <option value="unlisted">Unlisted</option>
-          <option value="private">Private</option>
+          {(Object.keys(YOUTUBE_PRIVACY_LABELS) as YouTubePostMetadata["privacyStatus"][]).map((value) => (
+            <option key={value} value={value}>
+              {YOUTUBE_PRIVACY_LABELS[value]}
+            </option>
+          ))}
         </Select>
         <p className="text-xs text-muted-foreground">
           Unlisted: only people with the link can view &mdash; recommended.
