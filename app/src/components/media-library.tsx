@@ -781,6 +781,11 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     captionRef.current = baseCaption;
   }, [baseCaption]);
+  // The file as it is now, so the success reset clears only the file that was sent.
+  const fileRef = useRef(file);
+  useEffect(() => {
+    fileRef.current = file;
+  }, [file]);
   // 2026-11-01 scale audit (jobs, event size): over the 10,000-character cap, which
   // POST /api/media rejects - blocks Upload (lib/captionLimits.ts).
   const captionOver = captionCounter(baseCaption).over;
@@ -951,9 +956,13 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       // No re-fetch: the new upload is the newest item, so it goes on top.
       setItems((prev) => prependMediaItem(prev, created));
       // Only what was sent is cleared: a caption typed or a file picked since stays.
-      setFile((current) => (current === file ? null : current));
+      // R65 fix review L1: the input is rebuilt only with the sent file, so a
+      // file picked meanwhile keeps its input and the keyboard focus on it.
+      if (fileRef.current === file) {
+        setFile(null);
+        setFileInputKey((key) => key + 1);
+      }
       setBaseCaption((current) => (current === sentCaption ? "" : current));
-      setFileInputKey((key) => key + 1);
       toast.success("Media uploaded successfully.");
     } catch (err) {
       toast.error(uploadErrorMessage(err));
