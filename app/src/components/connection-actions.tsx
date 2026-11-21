@@ -191,7 +191,10 @@ export async function requestDisconnect(
  */
 export function switchScheduledSentence(platform: string): string {
   const label = platformLabel(platform as Platform);
-  return `Scheduled posts, and posts waiting for approval, that chose ${label} go to the new account once you finish signing in. If you stop before then, they fail on ${label} until you connect an account again.`;
+  // R63 client-journey L2: a new Google account has no location, and its posts fail until one is chosen.
+  const once =
+    platform === "google_business_profile" ? "once you sign in and choose its location" : "once you finish signing in";
+  return `Scheduled posts, and posts waiting for approval, that chose ${label} go to the new account ${once}. If you stop before then, they fail on ${label} until you connect an account again.`;
 }
 
 export function switchDescription(platform: string): string {
