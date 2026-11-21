@@ -15,6 +15,7 @@ import {
   emptyCaptionMessage,
   isTextPost,
   pairLabel,
+  queueCardName,
   queueListUrl,
   QUEUE_FAILED_TEXT,
   QUEUE_OFFLINE_TEXT,
@@ -230,6 +231,34 @@ describe("labelName, the caption in a Queue button's name", () => {
     const names = queueSource.match(/aria-label=\{`[^`]*`\}/g) ?? [];
     expect(names.length).toBeGreaterThanOrEqual(5);
     for (const name of names) expect(name).toContain("${name}");
+    expect(queueSource).toContain("const name = queueCardName(job);");
+  });
+});
+
+// R58 pages-a L1: a Repeat series gives every card one caption, so the name
+// is the caption and the time the card shows (cardName).
+describe("queueCardName", () => {
+  const at = (iso: string) =>
+    new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const series = (id: string, scheduledFor: string) =>
+    job(id, { caption: "Saturday surf lesson", status: "scheduled", scheduledFor });
+
+  it("two scheduled posts of a series, same caption, different times, have different names", () => {
+    const a = queueCardName(series("a", "2026-11-21T14:00:00.000Z"));
+    const b = queueCardName(series("b", "2026-11-28T14:00:00.000Z"));
+    expect(a).toBe(`Saturday surf lesson, ${at("2026-11-21T14:00:00.000Z")}`);
+    expect(b).toBe(`Saturday surf lesson, ${at("2026-11-28T14:00:00.000Z")}`);
+  });
+
+  it("uses the time the card shows: Proposed for, Scheduled for, else Saved", () => {
+    const proposed = job("p", { caption: "Dawn", approvalState: "pending", scheduledFor: "2026-11-21T14:00:00.000Z" });
+    expect(queueCardName(proposed)).toBe(`Dawn, ${at("2026-11-21T14:00:00.000Z")}`);
+    const draft = job("d", { caption: "Dawn", scheduledFor: "2026-11-21T14:00:00.000Z" });
+    expect(queueCardName(draft)).toBe(`Dawn, ${at("2026-11-01T00:00:00.000Z")}`);
+  });
+
+  it("a post with no caption is Untitled post plus its time", () => {
+    expect(queueCardName(job("u", { caption: "" }))).toBe(`Untitled post, ${at("2026-11-01T00:00:00.000Z")}`);
   });
 });
 

@@ -15,7 +15,7 @@ import {
 } from "@/lib/clientLinkLimit";
 import { focusAfterPress, focusFirstOf } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
-import { labelName } from "@/lib/queueLabelName";
+import { cardName } from "@/lib/queueLabelName";
 import { useRetryFocus } from "@/lib/useRetryFocus";
 import {
   REVIEW_ALREADY_APPROVED_MESSAGE,
@@ -249,14 +249,16 @@ function formatWhen(iso: string | null): string {
 }
 
 /**
- * The post in a card button's accessible name. R57 client-journey L2: a
- * Story-only post's caption is one fixed line for every such card, so it is
- * named by its time instead. Story-only is every platform listed as a Story
- * (storyPlatformLabel), the server's own test for showing that fixed line.
+ * The post in a card button's accessible name: its caption and its time
+ * (cardName; R58 client-journey L1, a series shares one caption). R57
+ * client-journey L2: a Story-only post's caption is one fixed line for every
+ * such card, so it is "Story" and its time. Story-only is every platform
+ * listed as a Story (storyPlatformLabel), the server's own test for showing
+ * that fixed line.
  */
 export function reviewCardName(post: Pick<ReviewPostDTO, "platforms" | "caption" | "scheduledFor">): string {
   const storyOnly = post.platforms.length > 0 && post.platforms.every((label) => label.endsWith(" (Story)"));
-  return storyOnly ? `Story, ${formatWhen(post.scheduledFor)}` : labelName(post.caption);
+  return cardName(post.caption, post.scheduledFor, { story: storyOnly });
 }
 
 function PostMedia({ post }: { post: ReviewPostDTO }) {

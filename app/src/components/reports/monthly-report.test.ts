@@ -424,9 +424,47 @@ describe("MonthlyReportView - a Feed and Story post", () => {
 // R57 pages-b sweep (#282's rule): every post repeats View post, so each
 // link's name starts with its text and names the platform and the post.
 describe("MonthlyReportView: View post names its post", () => {
+  // The report counts and dates its posts in UTC, so the name's day is UTC too.
+  const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
   it("names the platform, the Story and the caption, then the new-tab hint", () => {
     const html = render(report());
-    expect(html).toContain('aria-label="View post on Instagram Story &quot;Dawn patrol&quot; (opens in a new tab)"');
-    expect(html).toContain('aria-label="View post on LinkedIn &quot;Old one&quot; (opens in a new tab)"');
+    expect(html).toContain(`aria-label="View post on Instagram Story &quot;Dawn patrol, ${day("2026-10-12T10:00:00.000Z")}&quot; (opens in a new tab)"`);
+    expect(html).toContain(`aria-label="View post on LinkedIn &quot;Old one, ${day("2026-10-02T10:00:00.000Z")}&quot; (opens in a new tab)"`);
+  });
+
+  // R58 client-journey L1: a Repeat series publishes one caption many times,
+  // so each link names the post's day too (cardName).
+  it("two posts with the same caption on different days have different names", () => {
+    const post = (publishedAt: string) => ({
+      publishedAt,
+      caption: "Dawn patrol",
+      media: null,
+      mediaCount: 1,
+      platforms: [{ platform: "LinkedIn", story: false, url: "https://www.linkedin.com/feed/update/urn:li:share:1", numbers: {} }],
+    });
+    const html = render(report({ postCount: 2, posts: [post("2026-10-12T10:00:00.000Z"), post("2026-10-19T10:00:00.000Z")] }));
+    const names = [...html.matchAll(/aria-label="(View post on LinkedIn [^"]*)"/g)].map((m) => m[1]);
+    expect(names).toEqual([
+      `View post on LinkedIn &quot;Dawn patrol, ${day("2026-10-12T10:00:00.000Z")}&quot; (opens in a new tab)`,
+      `View post on LinkedIn &quot;Dawn patrol, ${day("2026-10-19T10:00:00.000Z")}&quot; (opens in a new tab)`,
+    ]);
+  });
+
+  it("a post with no caption is Untitled post plus its day", () => {
+    const html = render(
+      report({
+        postCount: 1,
+        posts: [
+          {
+            publishedAt: "2026-10-12T10:00:00.000Z",
+            caption: "",
+            media: null,
+            mediaCount: 1,
+            platforms: [{ platform: "LinkedIn", story: false, url: "https://www.linkedin.com/feed/update/urn:li:share:1", numbers: {} }],
+          },
+        ],
+      }),
+    );
+    expect(html).toContain(`aria-label="View post on LinkedIn &quot;Untitled post, ${day("2026-10-12T10:00:00.000Z")}&quot; (opens in a new tab)"`);
   });
 });

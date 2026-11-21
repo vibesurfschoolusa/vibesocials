@@ -71,9 +71,13 @@ describe("ReviewPostCard", () => {
   // R56 pages-b L2: up to 100 cards repeat these buttons, so each names its post.
   it("names the post on Looks good and Ask for a change, and keeps their text", () => {
     const html = render(post());
-    expect(html).toMatch(/<button[^>]*aria-label="Looks good &quot;Sunday session&quot;"[^>]*>Looks good<\/button>/);
-    expect(html).toMatch(/<button[^>]*aria-label="Ask for a change &quot;Sunday session&quot;"[^>]*>Ask for a change<\/button>/);
-    expect(render(post({ caption: "" }))).toContain('aria-label="Looks good &quot;Untitled post&quot;"');
+    const name = reviewCardName(post());
+    expect(html).toContain(`aria-label="Looks good &quot;${name}&quot;"`);
+    expect(html).toContain(`aria-label="Ask for a change &quot;${name}&quot;"`);
+    expect(html).toMatch(/<button[^>]*aria-label="Looks good &quot;Sunday session, [^"]*&quot;"[^>]*>Looks good<\/button>/);
+    expect(html).toMatch(/<button[^>]*aria-label="Ask for a change &quot;Sunday session, [^"]*&quot;"[^>]*>Ask for a change<\/button>/);
+    expect(render(post({ caption: "" }))).toContain(`aria-label="Looks good &quot;${reviewCardName(post({ caption: "" }))}&quot;"`);
+    expect(reviewCardName(post({ caption: "" }))).toMatch(/^Untitled post, /);
   });
 
   it("names the post on Send, Cancel and Dismiss too (states that need a press first)", async () => {
@@ -522,6 +526,8 @@ describe("ReviewPostCard: which cards are kept, and for how long", () => {
 // R57 client-journey L2: a Story-only post's caption is a fixed line, so its
 // cards' buttons are named by the card's time instead.
 describe("reviewCardName", () => {
+  const at = (iso: string) =>
+    new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const storyOnly = (over: Partial<ReviewPostDTO> = {}) =>
     post({ platforms: ["Instagram (Story)", "Facebook Page (Story)"], caption: "This goes out as a Story, with no caption.", ...over });
 
@@ -537,12 +543,24 @@ describe("reviewCardName", () => {
       expect(name).not.toContain("with no caption");
       expect((name as string).length).toBeLessThanOrEqual(60);
     }
-    expect(reviewCardName(storyOnly({ scheduledFor: "2026-11-20T15:00:00.000Z" }))).toContain("2026");
+    expect(reviewCardName(storyOnly({ scheduledFor: "2026-11-20T15:00:00.000Z" }))).toBe(`Story, ${at("2026-11-20T15:00:00.000Z")}`);
   });
 
-  it("a captioned card is named by its caption, as before", () => {
-    expect(reviewCardName(post())).toBe("Sunday session");
-    expect(reviewCardName(post({ platforms: ["Instagram (Story)", "Facebook Page"] }))).toBe("Sunday session");
-    expect(reviewCardName(post({ platforms: [], caption: "" }))).toBe("Untitled post");
+  // R58 client-journey L1: a Repeat series gives every card one caption, so a
+  // captioned card is named by its caption and its time (cardName).
+  it("a captioned card is named by its caption and its time", () => {
+    expect(reviewCardName(post())).toBe(`Sunday session, ${at("2026-11-20T15:00:00.000Z")}`);
+    expect(reviewCardName(post({ platforms: ["Instagram (Story)", "Facebook Page"] }))).toBe(
+      `Sunday session, ${at("2026-11-20T15:00:00.000Z")}`,
+    );
+    expect(reviewCardName(post({ platforms: [], caption: "" }))).toBe(`Untitled post, ${at("2026-11-20T15:00:00.000Z")}`);
+  });
+
+  it("two cards of a series, same caption, different times, have different names", () => {
+    const nameOf = (html: string) => /aria-label="Looks good &quot;([^"]*)&quot;"[^>]*>Looks good<\/button>/.exec(html)?.[1];
+    const a = nameOf(render(post({ id: "a", scheduledFor: "2026-11-20T15:00:00.000Z" })));
+    const b = nameOf(render(post({ id: "b", scheduledFor: "2026-11-27T15:00:00.000Z" })));
+    expect(a).toBe(`Sunday session, ${at("2026-11-20T15:00:00.000Z")}`);
+    expect(b).toBe(`Sunday session, ${at("2026-11-27T15:00:00.000Z")}`);
   });
 });

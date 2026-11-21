@@ -13,3 +13,27 @@ export function labelName(caption: string | null | undefined): string {
   if (!line) return "Untitled post";
   return truncateGraphemes(line, LABEL_NAME_MAX, { ellipsis: "…" });
 }
+
+const CARD_TIME: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+const CARD_DAY: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
+
+/**
+ * A card's name in its buttons and links. R58 client-journey L1, pages-a L1:
+ * a Repeat series makes posts with one caption, so the caption alone gave
+ * every card of a series the same name; the time the card shows tells them
+ * apart. Short: no weekday or year. `story`: a Story-only card on /v, whose
+ * caption is one fixed line, is "Story" plus its time. `day`: the report
+ * shows a post's day only.
+ */
+export function cardName(
+  caption: string | null | undefined,
+  iso: string | null | undefined,
+  options: { story?: boolean; day?: boolean; timeZone?: string } = {},
+): string {
+  const head = options.story ? "Story" : labelName(caption);
+  const date = iso ? new Date(iso) : null;
+  if (!date || Number.isNaN(date.getTime())) return head;
+  const form = options.day ? CARD_DAY : CARD_TIME;
+  const when = date.toLocaleString(undefined, options.timeZone ? { ...form, timeZone: options.timeZone } : form);
+  return `${head}, ${when}`;
+}

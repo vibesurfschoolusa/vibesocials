@@ -758,27 +758,43 @@ describe("PostJobCard - repeated buttons name the post", () => {
     vi.useRealTimers();
   });
 
+  // R58 pages-a L1: the name is the caption and the time the card shows (cardName).
+  const at = (iso: string) =>
+    new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const NAME = `Two spots left today, ${at("2026-11-10T10:00:00.000Z")}`;
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const button = (label: string, text: string) =>
+    new RegExp(`aria-label="${escape(label)} &quot;${escape(NAME)}&quot;"[^>]*>${escape(text)}</button>`);
+
   it("Retry <platform>, Retry all failed and Show N errors", () => {
     const out = html(job({ status: "failed", results: [failed("x"), failed("linkedin")] }));
-    expect(out).toMatch(/aria-label="Retry X &quot;Two spots left today&quot;"[^>]*>Retry X<\/button>/);
-    expect(out).toMatch(/aria-label="Retry LinkedIn &quot;Two spots left today&quot;"[^>]*>Retry LinkedIn<\/button>/);
-    expect(out).toMatch(/aria-label="Retry all failed &quot;Two spots left today&quot;"[^>]*>Retry all failed<\/button>/);
-    expect(out).toMatch(/aria-label="Show 2 errors &quot;Two spots left today&quot;"/);
+    expect(out).toMatch(button("Retry X", "Retry X"));
+    expect(out).toMatch(button("Retry LinkedIn", "Retry LinkedIn"));
+    expect(out).toMatch(button("Retry all failed", "Retry all failed"));
+    expect(out).toContain(`aria-label="Show 2 errors &quot;${NAME}&quot;"`);
   });
 
   it("Send again", () => {
     const out = html(job({ status: "failed", results: [], publish: null }));
-    expect(out).toMatch(/aria-label="Send again &quot;Two spots left today&quot;"[^>]*>Send again<\/button>/);
+    expect(out).toMatch(button("Send again", "Send again"));
   });
 
   it("View on <platform>, with its new-tab hint", () => {
     const out = html(job({ results: [result({ platform: "x", externalPostId: "123", externalPostUrl: "https://x.com/i/status/123" })] }));
-    expect(out).toContain('aria-label="View on X &quot;Two spots left today&quot; (opens in a new tab)"');
+    expect(out).toContain(`aria-label="View on X &quot;${NAME}&quot; (opens in a new tab)"`);
   });
 
-  it("a card with no caption is named Untitled post", () => {
+  it("a card with no caption is named Untitled post plus its time", () => {
     expect(html(job({ caption: "", status: "failed", results: [], publish: null }))).toContain(
-      'aria-label="Send again &quot;Untitled post&quot;"',
+      `aria-label="Send again &quot;Untitled post, ${at("2026-11-10T10:00:00.000Z")}&quot;"`,
     );
+  });
+
+  it("two posts of a series, same caption, different times, have different names", () => {
+    const nameOf = (out: string) => /aria-label="Send again &quot;([^"]*)&quot;"/.exec(out)?.[1];
+    const a = nameOf(html(job({ id: "a", status: "failed", scheduledFor: "2026-11-11T15:00:00.000Z" })));
+    const b = nameOf(html(job({ id: "b", status: "failed", scheduledFor: "2026-11-12T15:00:00.000Z" })));
+    expect(a).toBe(`Two spots left today, ${at("2026-11-11T15:00:00.000Z")}`);
+    expect(b).toBe(`Two spots left today, ${at("2026-11-12T15:00:00.000Z")}`);
   });
 });

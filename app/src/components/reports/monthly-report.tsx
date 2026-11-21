@@ -18,7 +18,7 @@ import {
   type ReportPost,
 } from "@/lib/monthlyReport";
 import { formatNumber } from "@/lib/formatNumber";
-import { labelName } from "@/lib/queueLabelName";
+import { cardName } from "@/lib/queueLabelName";
 import { countWord } from "@/lib/plural";
 
 import { LocalDay } from "./local-day";
@@ -91,6 +91,10 @@ function PostPicture({ post }: { post: ReportPost }) {
 }
 
 function PostRow({ post }: { post: ReportPost }) {
+  // R58 client-journey L1: a series shares one caption, so the links name the
+  // post's day too. UTC, as the report counts its months: this renders on the
+  // server, which knows no viewer zone.
+  const name = cardName(post.caption, post.publishedAt, { day: true, timeZone: "UTC" });
   return (
     <li data-report-post className="rounded-[var(--radius)] border border-border bg-card p-3 text-card-foreground">
       <div className="flex gap-3">
@@ -124,7 +128,7 @@ function PostRow({ post }: { post: ReportPost }) {
                   {" "}
                   <ExternalLink
                     href={p.url}
-                    aria-label={`View post on ${p.platform}${p.story ? " Story" : ""} "${labelName(post.caption)}" ${NEW_TAB_HINT}`}
+                    aria-label={`View post on ${p.platform}${p.story ? " Story" : ""} "${name}" ${NEW_TAB_HINT}`}
                     className="text-primary underline"
                   >
                     View post

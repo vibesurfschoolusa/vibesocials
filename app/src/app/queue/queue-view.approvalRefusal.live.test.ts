@@ -92,7 +92,17 @@ async function settle() {
   }
 }
 
-function buttonLabelled(label: string): FakeNode {
+// R58 pages-a L1: a card's name is its caption and the time it shows; these
+// drafts show their Saved time (queueCardName).
+const SAVED = new Date("2026-11-01T00:00:00.000Z").toLocaleString(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+function buttonLabelled(shortLabel: string): FakeNode {
+  const label = shortLabel.replace(/"([^"]*)"$/, `"$1, ${SAVED}"`);
   const button = findAll(container, (n) => n.tagName === "BUTTON" && n.attributes?.["aria-label"] === label)[0];
   if (!button) throw new Error(`no button ${label}`);
   return button;

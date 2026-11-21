@@ -15,7 +15,7 @@ import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
-import { labelName } from "@/lib/queueLabelName";
+import { cardName } from "@/lib/queueLabelName";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { answerLostText } from "@/lib/answerLost";
 import { dispatchFailedText } from "@/lib/composerSubmitOutcome";
@@ -447,7 +447,8 @@ export function PostJobCard({
   const results = orderResults(job.results);
   const time = cardTime(job);
   // R57 pages-b L1: the buttons repeat on every card, so each one's name carries the post's caption, as the Queue's do.
-  const name = labelName(job.caption);
+  // R58 pages-a L1: and the card's time, since a series shares one caption.
+  const name = cardName(job.caption, time?.iso);
   // 2026-11-10: platforms this post went to as a Story (labelled, and no link built from the id).
   const isStory = (platform: Platform) => job.storyPlatforms?.includes(platform) ?? false;
   const postUrl = (result: PostJobDTO["results"][number]) =>

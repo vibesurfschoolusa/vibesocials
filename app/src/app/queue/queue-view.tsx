@@ -57,7 +57,7 @@ import {
 } from "./pairActions";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { cn } from "@/lib/cn";
-import { labelName } from "@/lib/queueLabelName";
+import { cardName } from "@/lib/queueLabelName";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { queueOverridesToSend, type PlatformOverrides } from "@/lib/platformOverrides";
@@ -295,6 +295,18 @@ interface QueueCardProps {
   approveRefusal: string | null;
 }
 
+/**
+ * The card's name in its buttons: the caption and the time the card shows
+ * (Proposed for, Scheduled for, else Saved), through cardName.
+ */
+export function queueCardName(
+  job: Pick<QueueCardPost, "caption" | "status" | "approvalState" | "scheduledFor" | "createdAt">,
+): string {
+  const shown =
+    (job.approvalState === "pending" || job.status === "scheduled") && job.scheduledFor ? job.scheduledFor : job.createdAt;
+  return cardName(job.caption, shown);
+}
+
 function QueueCard({
   job,
   showAttribution,
@@ -312,7 +324,7 @@ function QueueCard({
   const actions = getQueueCardActions(job, viewer);
   const badge = queueStatusBadge(job);
   const title = job.caption?.trim() || "Untitled post";
-  const name = labelName(job.caption);
+  const name = queueCardName(job);
   // 2026-11-01 audit (M1): the per-platform texts that REPLACE the base caption
   // on publish. Shown on every card that has them, most importantly to the owner
   // deciding on a pending post - approving means approving these too.
