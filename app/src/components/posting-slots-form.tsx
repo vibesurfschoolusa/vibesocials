@@ -118,11 +118,11 @@ export function PostingSlotsForm({
         {rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">No posting times yet. Add the times you usually post.</p>
         ) : null}
-        {rows.map((row) => (
+        {rows.map((row, index) => (
           <div key={row.key} className="flex flex-wrap items-center gap-2">
             <div className="w-40">
               <Select
-                aria-label="Weekday"
+                aria-label={`Weekday, time ${index + 1}`}
                 value={String(row.day)}
                 onChange={(e) => update(row.key, { day: Number(e.target.value) })}
               >
@@ -135,7 +135,7 @@ export function PostingSlotsForm({
             </div>
             <Input
               type="time"
-              aria-label="Time"
+              aria-label={`Time, time ${index + 1}`}
               className="w-32"
               value={row.time}
               onChange={(e) => update(row.key, { time: e.target.value })}
@@ -144,6 +144,7 @@ export function PostingSlotsForm({
               type="button"
               variant="ghost"
               size="sm"
+              aria-label={`Remove ${WEEKDAYS[row.day]} at ${row.time || "no time"}`}
               onClick={() => setRows((current) => current.filter((r) => r.key !== row.key))}
             >
               Remove
