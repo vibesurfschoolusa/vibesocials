@@ -18,6 +18,10 @@ vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: toastSucce
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { makeFocusable, type FocusDoc } from "@/lib/focusDom.testkit";
 
+import { ROLE_CHANGED_MESSAGE } from "@/components/load-error";
+import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
+import { pageWorkspaceRefusalText, WORKSPACE_CHANGED_CODE } from "@/lib/workspaceChanged";
+
 import { INVITE_UNREAD_TEXT, TeamSection } from "./team-section";
 
 const REPLACED = "New invite link created. The old link no longer works, so send this one instead.";
@@ -164,4 +168,36 @@ describe("Team: an invite link that was read", () => {
     await press(button("Create new invite link"));
     expect(toastSuccess).toHaveBeenCalledWith(REPLACED);
   }, 5_000);
+});
+
+// R59 fix review L2: a refusal that asking again can't change (another tab's
+// workspace, signed out, the role changed) says the members list's sentence,
+// with Reload page where that sentence offers it, and no Try again. The link
+// is still unknown, so Create still says the old one is off.
+describe("Team: an invite read that was refused", () => {
+  const REFUSALS: Array<[string, () => Promise<Response>, string, string | null]> = [
+    [
+      "a 409 workspace refusal",
+      async () => Response.json({ error: "Workspace changed.", code: WORKSPACE_CHANGED_CODE }, { status: 409 }),
+      pageWorkspaceRefusalText(WORKSPACE_CHANGED_CODE) as string,
+      "Reload page",
+    ],
+    ["a 401", async () => Response.json({ error: "Unauthorized" }, { status: 401 }), SIGNED_OUT_ERROR, null],
+    ["a 403", async () => Response.json({ error: "Forbidden" }, { status: 403 }), ROLE_CHANGED_MESSAGE, "Reload page"],
+  ];
+
+  for (const [what, read, sentence, step] of REFUSALS) {
+    it(`${what}: its own sentence, no Try again, and Create replaces`, async () => {
+      inviteReads.push(read);
+      await mount();
+      expect(text()).toContain(sentence);
+      expect(text()).not.toContain(INVITE_UNREAD_TEXT);
+      expect(button("Try again")).toBeUndefined();
+      if (step) expect(button(step)).toBeDefined();
+      else expect(button("Reload page")).toBeUndefined();
+      expect(button("Create invite link")).toBeUndefined();
+      await press(button("Create new invite link"));
+      expect(toastSuccess).toHaveBeenCalledWith(REPLACED);
+    }, 5_000);
+  }
 });

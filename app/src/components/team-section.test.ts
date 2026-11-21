@@ -97,7 +97,9 @@ describe("readTeamList", () => {
     const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
     expect(source).toContain('readTeamList<RosterEntry>("/api/workspaces/members/roster", workspaceId)');
     expect(source).toContain('readTeamList<Member>("/api/workspaces/members", workspaceId, fetch, { forbidden: ROLE_CHANGED_MESSAGE })');
-    expect(source).toContain('fetch(withWorkspaceId("/api/workspaces/invites", workspaceId))');
+    // R59 fix review L2: the invite read is readInviteLink, with the members list's readers.
+    expect(source).toContain('fetchOrNoAnswer(withWorkspaceId("/api/workspaces/invites", workspaceId), { method: "GET" }, fetchImpl)');
+    expect(source).toContain("const read = await readInviteLink(workspaceId);");
   });
 });
 

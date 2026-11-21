@@ -22,7 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { LoadError, ROLE_CHANGED_MESSAGE } from "@/components/load-error";
+import { LoadError, loadErrorAsksReload, ROLE_CHANGED_MESSAGE } from "@/components/load-error";
 import { CharacterCount, refuseOverLimit } from "@/components/ui/character-count";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -163,6 +163,33 @@ interface RosterEntry {
 interface InviteMeta {
   expiresAt: string;
   createdAt: string;
+}
+
+/** Why the invite link couldn't be read; `retry` when asking again may work. */
+export type InviteReadFailure = { text: string; retry: boolean };
+
+/**
+ * The invite link read. R59 fix review L2: a refusal asking again can't change
+ * (another tab's workspace, signed out, the role changed) says the members
+ * list's sentence (readTeamList's readers) with no retry; a 5xx, an unreadable
+ * body or no answer says INVITE_UNREAD_TEXT, with Try again.
+ */
+export async function readInviteLink(
+  workspaceId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ invite: InviteMeta | null } | { failure: InviteReadFailure }> {
+  const unread = { failure: { text: INVITE_UNREAD_TEXT, retry: true } };
+  try {
+    const response = await fetchOrNoAnswer(withWorkspaceId("/api/workspaces/invites", workspaceId), { method: "GET" }, fetchImpl);
+    const refusal = await readWorkspaceRefusalText(response);
+    if (refusal) return { failure: { text: refusal, retry: false } };
+    if (response.status === 401) return { failure: { text: SIGNED_OUT_ERROR, retry: false } };
+    if (response.status === 403) return { failure: { text: ROLE_CHANGED_MESSAGE, retry: false } };
+    const data = (await response.json().catch(() => null)) as { invite?: InviteMeta | null } | null;
+    return response.ok && data && data.invite !== undefined ? { invite: data.invite } : unread;
+  } catch {
+    return unread;
+  }
 }
 
 /** The Team card's own sentence when its list can't be read. */
@@ -864,7 +891,8 @@ function OwnerView({
   const [freshUrl, setFreshUrl] = useState<string | null>(null);
   const [inviteLoading, setInviteLoading] = useState(true);
   // R59 new-customer L1: the read failed, so whether a link is live isn't known.
-  const [inviteUnknown, setInviteUnknown] = useState(false);
+  const [inviteReadFailure, setInviteReadFailure] = useState<InviteReadFailure | null>(null);
+  const inviteUnknown = inviteReadFailure !== null;
   // Bumped by Try again, so the read runs again.
   const [inviteAttempt, setInviteAttempt] = useState(0);
   const [inviteBusy, setInviteBusy] = useState(false);
@@ -873,24 +901,16 @@ function OwnerView({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        // R32: the page's workspace; a refusal leaves the link unknown, as any failure does.
-        const response = await fetch(withWorkspaceId("/api/workspaces/invites", workspaceId));
-        const data = (await response.json().catch(() => null)) as
-          | { invite?: InviteMeta | null }
-          | null;
-        if (cancelled) return;
-        if (response.ok && data && data.invite !== undefined) {
-          setInvite(data.invite);
-          setInviteUnknown(false);
-        } else {
-          setInviteUnknown(true);
-        }
-      } catch {
-        if (!cancelled) setInviteUnknown(true);
-      } finally {
-        if (!cancelled) setInviteLoading(false);
+      // R32: the page's workspace; a refusal leaves the link unknown, as any failure does.
+      const read = await readInviteLink(workspaceId);
+      if (cancelled) return;
+      if ("invite" in read) {
+        setInvite(read.invite);
+        setInviteReadFailure(null);
+      } else {
+        setInviteReadFailure(read.failure);
       }
+      setInviteLoading(false);
     })();
     return () => {
       cancelled = true;
@@ -921,7 +941,7 @@ function OwnerView({
       focusAfterPress(pressed, () => copyInviteRef.current);
       setFreshUrl(data.url);
       setInvite({ expiresAt: data.expiresAt, createdAt: new Date().toISOString() });
-      setInviteUnknown(false);
+      setInviteReadFailure(null);
       toast.success(inviteCreatedText(replaced));
     } catch (error) {
       const text = confirmFailureText(error, INVITE_MAYBE_MADE_MESSAGE);
@@ -947,7 +967,7 @@ function OwnerView({
     }
     setInvite(null);
     setFreshUrl(null);
-    setInviteUnknown(false);
+    setInviteReadFailure(null);
     toast.success("Invite link revoked.");
   }, [toast, workspaceId]);
 
@@ -1283,17 +1303,22 @@ function OwnerView({
               </Button>
             </div>
           </div>
-        ) : inviteUnknown ? (
+        ) : inviteReadFailure ? (
           <div className="mt-2 flex flex-col gap-2">
             <Alert variant="danger">
-              <LoadError
-                message={INVITE_UNREAD_TEXT}
-                retryLabel="Try again"
-                onRetry={() => {
-                  setInviteLoading(true);
-                  setInviteAttempt((attempt) => attempt + 1);
-                }}
-              />
+              {/* A workspace refusal and a changed role make LoadError's step Reload page. */}
+              {inviteReadFailure.retry || loadErrorAsksReload(inviteReadFailure.text) ? (
+                <LoadError
+                  message={inviteReadFailure.text}
+                  retryLabel="Try again"
+                  onRetry={() => {
+                    setInviteLoading(true);
+                    setInviteAttempt((attempt) => attempt + 1);
+                  }}
+                />
+              ) : (
+                <p>{inviteReadFailure.text}</p>
+              )}
             </Alert>
             <div>
               <Button size="sm" variant="outline" loading={inviteBusy} onClick={createInvite}>
