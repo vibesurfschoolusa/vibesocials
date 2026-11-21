@@ -7,7 +7,7 @@ import type { GoogleReview } from "./types";
 
 // R19 client-journey: an anonymous reviewer reaches the card as "A Google user"
 // (server/googleReviews.ts), so the card shows that name and its initial.
-function card(displayName: string, extra: Partial<GoogleReview> = {}): string {
+function card(displayName: string, extra: Partial<GoogleReview> = {}, position = 1): string {
   const review: GoogleReview = {
     name: "accounts/1/locations/2/reviews/r1",
     reviewId: "r1",
@@ -21,6 +21,7 @@ function card(displayName: string, extra: Partial<GoogleReview> = {}): string {
   return renderToStaticMarkup(
     createElement(ReviewCard, {
       review,
+      position,
       needsReply: true,
       isReplyOpen: false,
       isSubmitting: false,
@@ -122,6 +123,7 @@ describe("ReviewCard: small screens and screen readers", () => {
           createTime: "2026-11-12T12:00:00Z",
           updateTime: "2026-11-12T12:00:00Z",
         },
+        position: 1,
         needsReply: true,
         isReplyOpen: false,
         isSubmitting: false,
@@ -165,6 +167,7 @@ describe("ReviewCard: Undo after an AI draft", () => {
           createTime: "2026-11-01T00:00:00Z",
           updateTime: "2026-11-01T00:00:00Z",
         },
+        position: 1,
         needsReply: true,
         isReplyOpen: true,
         isSubmitting: false,
@@ -200,6 +203,7 @@ describe("ReviewCard: a refused reply", () => {
           createTime: "2026-11-01T00:00:00Z",
           updateTime: "2026-11-01T00:00:00Z",
         },
+        position: 1,
         needsReply: true,
         isReplyOpen: true,
         isSubmitting: false,
@@ -233,12 +237,12 @@ describe("ReviewCard: the repeated buttons name the reviewer", () => {
     const a = names(card("A Google user", { createTime: "2026-11-12T12:00:00Z" }));
     const b = names(card("A Google user", { createTime: "2026-11-14T12:00:00Z" }));
     expect(a).toEqual([
-      "Reply to review by A Google user, 5 stars, Nov 12, 2026",
-      "Draft AI response to the review by A Google user, 5 stars, Nov 12, 2026",
+      "Reply to review by A Google user, 5 stars, Nov 12, 2026, review 1",
+      "Draft AI response to the review by A Google user, 5 stars, Nov 12, 2026, review 1",
     ]);
     expect(b).toEqual([
-      "Reply to review by A Google user, 5 stars, Nov 14, 2026",
-      "Draft AI response to the review by A Google user, 5 stars, Nov 14, 2026",
+      "Reply to review by A Google user, 5 stars, Nov 14, 2026, review 1",
+      "Draft AI response to the review by A Google user, 5 stars, Nov 14, 2026, review 1",
     ]);
   });
 
@@ -249,13 +253,44 @@ describe("ReviewCard: the repeated buttons name the reviewer", () => {
     const a = names(card("A Google user", { createTime: "2026-11-12T12:00:00Z", starRating: "ONE" }));
     const b = names(card("A Google user", { createTime: "2026-11-12T12:00:00Z", starRating: "FOUR" }));
     expect(a).toEqual([
-      "Reply to review by A Google user, 1 star, Nov 12, 2026",
-      "Draft AI response to the review by A Google user, 1 star, Nov 12, 2026",
+      "Reply to review by A Google user, 1 star, Nov 12, 2026, review 1",
+      "Draft AI response to the review by A Google user, 1 star, Nov 12, 2026, review 1",
     ]);
     expect(b).toEqual([
-      "Reply to review by A Google user, 4 stars, Nov 12, 2026",
-      "Draft AI response to the review by A Google user, 4 stars, Nov 12, 2026",
+      "Reply to review by A Google user, 4 stars, Nov 12, 2026, review 1",
+      "Draft AI response to the review by A Google user, 4 stars, Nov 12, 2026, review 1",
     ]);
+  });
+
+  // R60 pages-b L2: same day and same rating is common; the card's place in the list tells them apart.
+  it("two nameless reviews on the same day with the same rating have different names, by their place", () => {
+    const names = (html: string) =>
+      [/aria-label="(Reply to review by [^"]*)"/, /aria-label="(Draft AI response to the review by [^"]*)"/].map((re) => re.exec(html)?.[1]);
+    const a = names(card("A Google user", { createTime: "2026-11-12T12:00:00Z" }, 1));
+    const b = names(card("A Google user", { createTime: "2026-11-12T12:00:00Z" }, 2));
+    expect(a).toEqual([
+      "Reply to review by A Google user, 5 stars, Nov 12, 2026, review 1",
+      "Draft AI response to the review by A Google user, 5 stars, Nov 12, 2026, review 1",
+    ]);
+    expect(b).toEqual([
+      "Reply to review by A Google user, 5 stars, Nov 12, 2026, review 2",
+      "Draft AI response to the review by A Google user, 5 stars, Nov 12, 2026, review 2",
+    ]);
+  });
+
+  it("a named reviewer's name has no place in it, as before", () => {
+    const html = card("Maria Lopez", { createTime: "2026-11-12T12:00:00Z" }, 3);
+    expect(html).toContain('aria-label="Reply to review by Maria Lopez, Nov 12, 2026"');
+    expect(html).toContain('aria-label="Draft AI response to the review by Maria Lopez, Nov 12, 2026"');
+  });
+
+  it("the Reviews page gives each card its place in the list it shows", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const view = readFileSync(fileURLToPath(new URL("../../app/reviews/reviews-view.tsx", import.meta.url)), "utf8");
+    expect(view).toContain("needsReplyReviews.map((review, index) => renderReviewCard(review, true, index + 1))");
+    expect(view).toContain("repliedReviews.map((review, index) => renderReviewCard(review, false, index + 1))");
+    expect(view).toContain("position={position}");
   });
 
   it("a named reviewer's name has no rating, as before", () => {
@@ -280,6 +315,7 @@ describe("ReviewCard: the repeated buttons name the reviewer", () => {
           createTime: "2026-11-12T12:00:00Z",
           updateTime: "2026-11-12T12:00:00Z",
         },
+        position: 1,
         needsReply: true,
         isReplyOpen: false,
         isSubmitting: false,
