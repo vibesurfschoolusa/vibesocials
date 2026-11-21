@@ -367,13 +367,15 @@ export function MediaCard({ item, onReuse, onDeleteRequest, selected, canSelect,
               </>
             )}
           </p>
+          {/* R57 client-journey-2 L1: the card is the only place the owner reads
+              the client's note (at most 200 characters), so both are shown whole. */}
           {item.clientSenderName !== undefined && (
             <>
-              <p className="truncate text-xs font-medium text-foreground">
+              <p className="break-words text-xs font-medium text-foreground">
                 From {item.clientSenderName ?? "your client"}
               </p>
               {item.clientNote ? (
-                <p className="line-clamp-3 whitespace-pre-line break-words text-xs text-muted-foreground">
+                <p className="whitespace-pre-line break-words text-xs text-muted-foreground">
                   {item.clientNote}
                 </p>
               ) : null}

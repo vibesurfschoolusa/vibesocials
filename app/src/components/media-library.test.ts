@@ -273,7 +273,7 @@ describe("MediaCard: a client's upload", () => {
   it("a long sender name renders whole and wraps", () => {
     const name = "Maria Fernanda de la Cruz Lopez-Hernandez from the Surf Club";
     const html = card({ clientSenderName: name, clientNote: null });
-    const sender = /<p class="([^"]*)">From <!-- -->([^<]*)<\/p>/.exec(html);
+    const sender = /<p class="([^"]*)">From (?:<!-- -->)?([^<]*)<\/p>/.exec(html);
     expect(sender?.[2]).toBe(name);
     expect(sender?.[1]).not.toMatch(/truncate/);
     expect(sender?.[1]).toMatch(/break-words/);
