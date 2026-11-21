@@ -22,6 +22,7 @@ vi.mock("@/hooks/useConnections", async (importOriginal) => ({
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { ToastProvider } from "@/components/ui/toast";
 import type { PostJobDTO } from "@/lib/postsDto";
+import { queueMayHaveGoneThroughText } from "@/lib/queueActions";
 import { QueueView } from "./queue-view";
 
 let root: Root;
@@ -213,5 +214,45 @@ describe("Queue: a refused Approve keeps its sentence on the card", () => {
     answers.push(rejectRefusal);
     await press('Reject "First post"');
     expect(lineNodes(REJECT_TEXT)).toHaveLength(0);
+  }, 10_000);
+});
+
+// R57 pages-a L3 / publishing-flow L4: the line and a toast with the same text
+// were both role="alert", so a screen reader read the refusal twice.
+const toastNodes = (text: string) =>
+  findAll(container, (n) => n.attributes?.role === "alert" && String(n.textContent ?? "").includes(text)).filter(
+    (n) => cardRow(n) === null,
+  );
+
+describe("Queue: a refused Approve is shown once", () => {
+  it("a refused Approve: the line on the card and no toast", async () => {
+    await mount();
+    answers.push(limitRefusal);
+    await press('Approve "First post"');
+    expect(lineNodes(LIMIT_TEXT)).toHaveLength(1);
+    expect(toastNodes(LIMIT_TEXT)).toHaveLength(0);
+  }, 10_000);
+
+  it("a refusal that reloads the Queue (the card may go): the toast, and no line", async () => {
+    const CHANGED = "This post changed since you opened it. Review the latest version.";
+    await mount();
+    answers.push(() => Response.json({ error: CHANGED, code: "CHANGED_SINCE_REVIEW" }, { status: 409 }));
+    await press('Approve "First post"');
+    expect(toastNodes(CHANGED)).toHaveLength(1);
+    expect(lineNodes(CHANGED)).toHaveLength(0);
+  }, 10_000);
+
+  it("a lost answer: the toast, as now", async () => {
+    await mount();
+    answers.push(() => Promise.reject(new TypeError("Failed to fetch")));
+    await press('Approve "First post"');
+    expect(toastNodes(queueMayHaveGoneThroughText("approve"))).toHaveLength(1);
+  }, 10_000);
+
+  it("a refused Reject: the toast, as now", async () => {
+    await mount();
+    answers.push(rejectRefusal);
+    await press('Reject "First post"');
+    expect(toastNodes(REJECT_TEXT)).toHaveLength(1);
   }, 10_000);
 });

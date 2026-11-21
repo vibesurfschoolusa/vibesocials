@@ -124,9 +124,10 @@ describe("Queue: a refused post action, one rule", () => {
     );
   });
 
-  it("Approve and Reject: the same rule", () => {
+  // R57 pages-a L3: an Approve refusal that keeps the card is its line, not also a toast.
+  it("Approve and Reject: the same rule, an Approve refusal that keeps the card shown as its line only", () => {
     expect(between("const handleDecide", "}, [")).toMatch(
-      /showRefusal\(\s*postActionRefusal\(\s*response\.status,\s*data,\s*decision === "approve" \? "Couldn't approve this post\." : "Couldn't reject this post\.",\s*"Approve",?\s*\),?\s*\);/,
+      /const refusal = postActionRefusal\(\s*response\.status,\s*data,\s*decision === "approve" \? "Couldn't approve this post\." : "Couldn't reject this post\.",\s*"Approve",?\s*\);\s+(\/\/[^\n]*\n\s+)*if \(decision === "approve" && !refusal\.reload\) \{\s+setApproveRefusals\(\(current\) => \(\{ \.\.\.current, \[job\.id\]: refusal\.text \}\)\);\s+return;\s+\}\s+showRefusal\(refusal\);\s+return;/,
     );
   });
 

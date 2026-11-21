@@ -1428,15 +1428,20 @@ export function QueueView({
         if (!response.ok) {
           // Stale card (already decided, changed since review, publish couldn't
           // start, gone): re-sync so no dead Approve/Reject buttons remain.
-          const refusal = showRefusal(
-            postActionRefusal(
-              response.status,
-              data,
-              decision === "approve" ? "Couldn't approve this post." : "Couldn't reject this post.",
-              "Approve",
-            ),
+          const refusal = postActionRefusal(
+            response.status,
+            data,
+            decision === "approve" ? "Couldn't approve this post." : "Couldn't reject this post.",
+            "Approve",
           );
-          if (decision === "approve") setApproveRefusals((current) => ({ ...current, [job.id]: refusal.text }));
+          // R57 pages-a L3: both are alerts, so a refusal is shown once. An
+          // Approve refusal that leaves the card as it is stays as the card's
+          // line; one that reloads the Queue may take the card away, so it toasts.
+          if (decision === "approve" && !refusal.reload) {
+            setApproveRefusals((current) => ({ ...current, [job.id]: refusal.text }));
+            return;
+          }
+          showRefusal(refusal);
           return;
         }
         const outcome = decisionOutcome(decision, data);
