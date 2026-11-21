@@ -61,10 +61,4 @@ describe("cardName, a card's name in its buttons", () => {
       `Story, ${at("2026-11-21T14:00:00.000Z")}`,
     );
   });
-
-  it("a day-only name, in the zone given, as the report shows a post's day", () => {
-    expect(cardName("Dawn patrol", "2026-11-21T23:30:00.000Z", { day: true, timeZone: "UTC" })).toBe(
-      `Dawn patrol, ${new Date("2026-11-21T23:30:00.000Z").toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })}`,
-    );
-  });
 });

@@ -18,7 +18,7 @@ import {
   type ReportPost,
 } from "@/lib/monthlyReport";
 import { formatNumber } from "@/lib/formatNumber";
-import { cardName } from "@/lib/queueLabelName";
+import { labelName } from "@/lib/queueLabelName";
 import { countWord } from "@/lib/plural";
 
 import { LocalDay } from "./local-day";
@@ -90,11 +90,14 @@ function PostPicture({ post }: { post: ReportPost }) {
   return <MediaThumb media={post.media} />;
 }
 
-function PostRow({ post }: { post: ReportPost }) {
-  // R58 client-journey L1: a series shares one caption, so the links name the
-  // post's day too. UTC, as the report counts its months: this renders on the
-  // server, which knows no viewer zone.
-  const name = cardName(post.caption, post.publishedAt, { day: true, timeZone: "UTC" });
+/**
+ * `position`: the post's place in the list, from 1. R58 client-journey L1: a
+ * series shares one caption, so the links name it by that too. Not its day:
+ * this renders on the server, whose UTC day can differ from the local date
+ * LocalDay shows.
+ */
+function PostRow({ post, position }: { post: ReportPost; position: number }) {
+  const name = labelName(post.caption);
   return (
     <li data-report-post className="rounded-[var(--radius)] border border-border bg-card p-3 text-card-foreground">
       <div className="flex gap-3">
@@ -128,7 +131,7 @@ function PostRow({ post }: { post: ReportPost }) {
                   {" "}
                   <ExternalLink
                     href={p.url}
-                    aria-label={`View post on ${p.platform}${p.story ? " Story" : ""} "${name}" ${NEW_TAB_HINT}`}
+                    aria-label={`View post ${position} on ${p.platform}${p.story ? " Story" : ""} "${name}" ${NEW_TAB_HINT}`}
                     className="text-primary underline"
                   >
                     View post
@@ -284,7 +287,7 @@ export function MonthlyReportView({
         ) : (
           <ul className="space-y-3">
             {report.posts.map((post, i) => (
-              <PostRow key={`${post.publishedAt}-${i}`} post={post} />
+              <PostRow key={`${post.publishedAt}-${i}`} post={post} position={i + 1} />
             ))}
           </ul>
         )}

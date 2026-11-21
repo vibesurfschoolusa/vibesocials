@@ -424,17 +424,16 @@ describe("MonthlyReportView - a Feed and Story post", () => {
 // R57 pages-b sweep (#282's rule): every post repeats View post, so each
 // link's name starts with its text and names the platform and the post.
 describe("MonthlyReportView: View post names its post", () => {
-  // The report counts and dates its posts in UTC, so the name's day is UTC too.
-  const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
-  it("names the platform, the Story and the caption, then the new-tab hint", () => {
+  it("names its place in the list, the platform, the Story and the caption, then the new-tab hint", () => {
     const html = render(report());
-    expect(html).toContain(`aria-label="View post on Instagram Story &quot;Dawn patrol, ${day("2026-10-12T10:00:00.000Z")}&quot; (opens in a new tab)"`);
-    expect(html).toContain(`aria-label="View post on LinkedIn &quot;Old one, ${day("2026-10-02T10:00:00.000Z")}&quot; (opens in a new tab)"`);
+    expect(html).toContain('aria-label="View post 1 on Instagram Story &quot;Dawn patrol&quot; (opens in a new tab)"');
+    expect(html).toContain('aria-label="View post 2 on LinkedIn &quot;Old one&quot; (opens in a new tab)"');
   });
 
   // R58 client-journey L1: a Repeat series publishes one caption many times,
-  // so each link names the post's day too (cardName).
-  it("two posts with the same caption on different days have different names", () => {
+  // so each link names its post's place in the list as shown. Not a day: the
+  // server's UTC day can differ from the local date the page shows.
+  it("two posts with the same caption have different names, by their place in the list", () => {
     const post = (publishedAt: string) => ({
       publishedAt,
       caption: "Dawn patrol",
@@ -442,15 +441,15 @@ describe("MonthlyReportView: View post names its post", () => {
       mediaCount: 1,
       platforms: [{ platform: "LinkedIn", story: false, url: "https://www.linkedin.com/feed/update/urn:li:share:1", numbers: {} }],
     });
-    const html = render(report({ postCount: 2, posts: [post("2026-10-12T10:00:00.000Z"), post("2026-10-19T10:00:00.000Z")] }));
-    const names = [...html.matchAll(/aria-label="(View post on LinkedIn [^"]*)"/g)].map((m) => m[1]);
+    const html = render(report({ postCount: 2, posts: [post("2026-10-19T10:00:00.000Z"), post("2026-10-12T10:00:00.000Z")] }));
+    const names = [...html.matchAll(/aria-label="(View post [^"]*)"[^>]*>View post/g)].map((m) => m[1]);
     expect(names).toEqual([
-      `View post on LinkedIn &quot;Dawn patrol, ${day("2026-10-12T10:00:00.000Z")}&quot; (opens in a new tab)`,
-      `View post on LinkedIn &quot;Dawn patrol, ${day("2026-10-19T10:00:00.000Z")}&quot; (opens in a new tab)`,
+      "View post 1 on LinkedIn &quot;Dawn patrol&quot; (opens in a new tab)",
+      "View post 2 on LinkedIn &quot;Dawn patrol&quot; (opens in a new tab)",
     ]);
   });
 
-  it("a post with no caption is Untitled post plus its day", () => {
+  it("both links of one post share its number", () => {
     const html = render(
       report({
         postCount: 1,
@@ -460,11 +459,15 @@ describe("MonthlyReportView: View post names its post", () => {
             caption: "",
             media: null,
             mediaCount: 1,
-            platforms: [{ platform: "LinkedIn", story: false, url: "https://www.linkedin.com/feed/update/urn:li:share:1", numbers: {} }],
+            platforms: [
+              { platform: "Instagram", story: false, url: "https://www.instagram.com/p/1/", numbers: {} },
+              { platform: "Instagram", story: true, url: "https://www.instagram.com/stories/x/1/", numbers: {} },
+            ],
           },
         ],
       }),
     );
-    expect(html).toContain(`aria-label="View post on LinkedIn &quot;Untitled post, ${day("2026-10-12T10:00:00.000Z")}&quot; (opens in a new tab)"`);
+    expect(html).toContain('aria-label="View post 1 on Instagram &quot;Untitled post&quot; (opens in a new tab)"');
+    expect(html).toContain('aria-label="View post 1 on Instagram Story &quot;Untitled post&quot; (opens in a new tab)"');
   });
 });
