@@ -266,7 +266,7 @@ export function MediaFilePicker({
 /** Thumbnail for a single item: image preview, video frame + play affordance,
  * or a generic file icon fallback. Opens the stored file in a new tab (the
  * existing public storage URL — no new endpoint required). */
-function MediaThumbnail({ item }: { item: MediaItemDto }) {
+function MediaThumbnail({ item, name }: { item: MediaItemDto; name: string }) {
   const [imageFailed, setImageFailed] = useState(false);
   const isImage = item.mimeType.startsWith("image/");
   const isVideo = item.mimeType.startsWith("video/");
@@ -314,13 +314,15 @@ function MediaThumbnail({ item }: { item: MediaItemDto }) {
           )}
         </div>
       )}
-      <span className="sr-only">{`Open ${pickerItemName(item)}`}</span>
+      <span className="sr-only">{`Open ${name}`}</span>
     </ExternalLink>
   );
 }
 
 interface MediaCardProps {
   item: MediaItemDto;
+  /** The card's place in the grid, from 1: its controls' names carry it (pickerItemName). */
+  position: number;
   onReuse: (item: MediaItemDto) => void;
   onDeleteRequest: (item: MediaItemDto) => void;
   selected: boolean;
@@ -329,14 +331,15 @@ interface MediaCardProps {
   onToggleSelect: (item: MediaItemDto) => void;
 }
 
-export function MediaCard({ item, onReuse, onDeleteRequest, selected, canSelect, onToggleSelect }: MediaCardProps) {
+export function MediaCard({ item, position, onReuse, onDeleteRequest, selected, canSelect, onToggleSelect }: MediaCardProps) {
+  const name = pickerItemName(item, position);
   // null for a never-posted upload (retention-exempt — see
   // server/jobs/mediaRetention.ts); 0 means "eligible for removal now".
   const retentionDays = daysUntilRemoval(item.lastUsedAt, RETENTION_DAYS, new Date());
 
   return (
     <Card className="relative overflow-hidden">
-      <MediaThumbnail item={item} />
+      <MediaThumbnail item={item} name={name} />
       <span className="absolute left-2 top-2 rounded bg-background/90 p-1">
         <input
           type="checkbox"
@@ -344,7 +347,7 @@ export function MediaCard({ item, onReuse, onDeleteRequest, selected, canSelect,
           checked={selected}
           disabled={!selected && !canSelect}
           onChange={() => onToggleSelect(item)}
-          aria-label={`Select ${pickerItemName(item)} for Add many`}
+          aria-label={`Select ${name} for Add many`}
         />
       </span>
       <div className="space-y-2 p-3">
@@ -392,7 +395,7 @@ export function MediaCard({ item, onReuse, onDeleteRequest, selected, canSelect,
             variant="outline"
             size="sm"
             className="w-full min-w-0 sm:w-auto sm:flex-1"
-            aria-label={`Use in new post ${pickerItemName(item)}`}
+            aria-label={`Use in new post ${name}`}
             onClick={() => onReuse(item)}
           >
             <Repeat className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -403,7 +406,7 @@ export function MediaCard({ item, onReuse, onDeleteRequest, selected, canSelect,
             variant="ghost"
             size="sm"
             className="w-full flex-shrink-0 text-muted-foreground hover:text-destructive sm:h-8 sm:w-8 sm:px-0"
-            aria-label={`Delete ${pickerItemName(item)}`}
+            aria-label={`Delete ${name}`}
             onClick={() => onDeleteRequest(item)}
           >
             <Trash2 className="h-4 w-4" aria-hidden />
@@ -1129,10 +1132,11 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
               </div>
             ) : null}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {items.map((item) => (
+              {items.map((item, index) => (
                 <MediaCard
                   key={item.id}
                   item={item}
+                  position={index + 1}
                   onReuse={handleReuse}
                   onDeleteRequest={handleDeleteRequest}
                   selected={selected.has(item.id)}

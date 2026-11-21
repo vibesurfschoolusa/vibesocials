@@ -125,21 +125,26 @@ describe("Media picker says it is loading, then the result", () => {
   });
 });
 
-// R58 pages-a-2 L1: two Media items often share a file name, so a checkbox
-// names the item's upload time too (cardName).
+// R58 pages-a-2 L1: two Media items often share a file name. R59 fix review L1:
+// the upload time has minute precision and the caption cut stopped at 40
+// characters, so names still repeated. An item is named by its place in the
+// grid and its full file name, as /u's rows are.
 describe("the picker's checkboxes", () => {
-  const at = (iso: string) =>
-    new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-
-  it("two items with the same file name have different names, by their upload date", () => {
-    const a = pickerItemName({ originalFilename: "IMG_0001.JPG", createdAt: "2026-11-12T15:00:00.000Z" });
-    const b = pickerItemName({ originalFilename: "IMG_0001.JPG", createdAt: "2026-11-14T15:00:00.000Z" });
-    expect(a).toBe(`IMG_0001.JPG, ${at("2026-11-12T15:00:00.000Z")}`);
-    expect(b).toBe(`IMG_0001.JPG, ${at("2026-11-14T15:00:00.000Z")}`);
+  it("two same-named items uploaded in the same minute have different names", () => {
+    const a = pickerItemName({ originalFilename: "IMG_0001.JPG" }, 1);
+    const b = pickerItemName({ originalFilename: "IMG_0001.JPG" }, 2);
+    expect(a).toBe("1. IMG_0001.JPG");
+    expect(b).toBe("2. IMG_0001.JPG");
   });
 
-  it("each checkbox's name is Choose and that name", () => {
+  it("two long names that differ only after character 40 are named whole", () => {
+    expect(pickerItemName({ originalFilename: "WhatsApp Image 2026-11-12 at 15.04.33 (1).jpeg" }, 3)).toBe("3. WhatsApp Image 2026-11-12 at 15.04.33 (1).jpeg");
+    expect(pickerItemName({ originalFilename: "WhatsApp Image 2026-11-12 at 15.04.33 (2).jpeg" }, 4)).toBe("4. WhatsApp Image 2026-11-12 at 15.04.33 (2).jpeg");
+  });
+
+  it("each checkbox's name is Choose and that name, by the item's place in the grid", () => {
     const source = readFileSync(new URL("./media-picker-dialog.tsx", import.meta.url), "utf8");
-    expect(source).toContain("aria-label={`Choose ${pickerItemName(item)}`}");
+    expect(source).toContain("{items.map((item, index) => {");
+    expect(source).toContain("aria-label={`Choose ${pickerItemName(item, index + 1)}`}");
   });
 });

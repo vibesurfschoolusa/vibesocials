@@ -18,15 +18,17 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { toggleMediaSelection } from "@/lib/bulkMedia";
 import { appendMediaPage, type MediaItemDto } from "@/lib/mediaDto";
-import { cardName } from "@/lib/queueLabelName";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 /**
- * A Media item in its checkbox's name. R58 pages-a-2 L1: two items often share
- * a file name, so it carries the upload time too (cardName).
+ * A Media item in its controls' names: its place in the shown grid and its full
+ * file name, as /u's rows are named ("3. IMG_0001.JPG"). R58 pages-a-2 L1: two
+ * items often share a file name. R59 fix review L1: the upload time (minute
+ * precision) and a cut name (40 characters) still let names repeat; the place
+ * can't.
  */
-export function pickerItemName(item: Pick<MediaItemDto, "originalFilename" | "createdAt">): string {
-  return cardName(item.originalFilename, item.createdAt);
+export function pickerItemName(item: Pick<MediaItemDto, "originalFilename">, position: number): string {
+  return `${position}. ${item.originalFilename}`;
 }
 
 interface MediaPickerDialogProps {
@@ -170,7 +172,7 @@ export function MediaPickerDialog({ workspaceId, open, onOpenChange, addedIds, r
           <>
             {items.length > 0 && !error ? <AnnouncedText className="sr-only" text={mediaCountLine(items.length)} /> : null}
             <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {items.map((item) => {
+              {items.map((item, index) => {
                 const added = addedIds.has(item.id);
                 const checked = added || selected.has(item.id);
                 const isVideo = item.mimeType.startsWith("video/");
@@ -210,7 +212,7 @@ export function MediaPickerDialog({ workspaceId, open, onOpenChange, addedIds, r
                           checked={checked}
                           disabled={added || (!checked && atLimit)}
                           onChange={() => setSelected((current) => toggleMediaSelection(current, item.id))}
-                          aria-label={`Choose ${pickerItemName(item)}`}
+                          aria-label={`Choose ${pickerItemName(item, index + 1)}`}
                         />
                       </span>
                       <span className="block p-2 text-xs">

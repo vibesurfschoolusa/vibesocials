@@ -52,6 +52,7 @@ describe("MediaCard at phone width", () => {
   const html = renderToStaticMarkup(
     createElement(MediaCard, {
       item,
+      position: 1,
       onReuse: () => {},
       onDeleteRequest: () => {},
       selected: false,
@@ -74,7 +75,7 @@ describe("MediaCard at phone width", () => {
     const thumb = html.slice(html.indexOf('<a href="'), html.indexOf("</a>") + 4);
     expect(thumb).toContain('target="_blank"');
     expect(thumb).not.toContain("aria-label=");
-    expect(thumb).toMatch(/<span class="sr-only">Open a-very-long-file-name-from-the-camera-r…, [^<]+<\/span>/);
+    expect(thumb).toMatch(/<span class="sr-only">Open 1\. a-very-long-file-name-from-the-camera-roll\.jpg<\/span>/);
     expect(thumb).toMatch(/<span class="[^"]*absolute[^"]*">\(opens in a new tab\)<\/span><\/a>$/);
   });
 
@@ -82,12 +83,12 @@ describe("MediaCard at phone width", () => {
   // (R59 pages-b L1: and its upload time, through pickerItemName).
   it("names Use in new post by its file, keeping its text", () => {
     expect(html).toMatch(
-      /<button[^>]*aria-label="Use in new post a-very-long-file-name-from-the-camera-r…, [^"]+"[^>]*>.*<span class="truncate">Use in new post<\/span><\/button>/,
+      /<button[^>]*aria-label="Use in new post 1\. a-very-long-file-name-from-the-camera-roll\.jpg"[^>]*>.*<span class="truncate">Use in new post<\/span><\/button>/,
     );
   });
 
   it("keeps Delete in the card, with its word on a phone and its file in its name", () => {
-    expect(html).toMatch(/<button[^>]*aria-label="Delete a-very-long-file-name-from-the-camera-r…, [^"]+"[^>]*>/);
+    expect(html).toMatch(/<button[^>]*aria-label="Delete 1\. a-very-long-file-name-from-the-camera-roll\.jpg"[^>]*>/);
     expect(html).toMatch(/<span class="sm:sr-only">Delete<\/span>/);
   });
 });
@@ -252,6 +253,7 @@ describe("MediaCard: a client's upload", () => {
     renderToStaticMarkup(
       createElement(MediaCard, {
         item: { ...base, ...extra } as never,
+        position: 1,
         onReuse: () => {},
         onDeleteRequest: () => {},
         selected: false,
@@ -287,25 +289,25 @@ describe("MediaCard: a client's upload", () => {
   });
 });
 
-// R59 pages-b L1, client-journey L2: files sent through /u often share a name, so
-// each control names the file and when it was uploaded (pickerItemName).
-describe("MediaCard: two items with one file name", () => {
-  const item = (id: string, createdAt: string) => ({
+// R59 pages-b L1, client-journey L2, and the fix review L1: files sent through /u
+// often share a name and a minute, and long names can differ only at the end, so
+// each control names the card's place in the grid and the full file name.
+describe("MediaCard: items with the same or nearly the same name", () => {
+  const item = (id: string, originalFilename: string) => ({
     id,
-    originalFilename: "IMG_0001.JPG",
+    originalFilename,
     mimeType: "image/jpeg",
     sizeBytes: 1234,
     baseCaption: "",
     storageLocation: `https://blob.example/${id}.jpg`,
-    createdAt,
+    createdAt: "2026-11-12T15:00:00.000Z",
     lastUsedAt: null,
   });
-  const at = (iso: string) =>
-    new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-  const names = (value: ReturnType<typeof item>) => {
+  const names = (value: ReturnType<typeof item>, position: number) => {
     const html = renderToStaticMarkup(
       createElement(MediaCard, {
         item: value,
+        position,
         onReuse: () => {},
         onDeleteRequest: () => {},
         selected: false,
@@ -317,23 +319,27 @@ describe("MediaCard: two items with one file name", () => {
       [...html.matchAll(/<span class="sr-only">(Open [^<]*)<\/span>/g)].map((m) => m[1]),
     );
   };
-  const a = "2026-11-12T15:00:00.000Z";
-  const b = "2026-11-14T15:00:00.000Z";
 
-  it("every control carries the file name and its upload time", () => {
-    expect(names(item("a", a))).toEqual(
+  it("every control carries the card's place and the full file name", () => {
+    expect(names(item("a", "IMG_0001.JPG"), 3)).toEqual(
       expect.arrayContaining([
-        `Select IMG_0001.JPG, ${at(a)} for Add many`,
-        `Use in new post IMG_0001.JPG, ${at(a)}`,
-        `Delete IMG_0001.JPG, ${at(a)}`,
-        `Open IMG_0001.JPG, ${at(a)}`,
+        "Select 3. IMG_0001.JPG for Add many",
+        "Use in new post 3. IMG_0001.JPG",
+        "Delete 3. IMG_0001.JPG",
+        "Open 3. IMG_0001.JPG",
       ]),
     );
   });
 
-  it("two same-named items get different names", () => {
-    const first = names(item("a", a));
-    const second = names(item("b", b));
+  it("two same-named items uploaded in the same minute get different names", () => {
+    const first = names(item("a", "IMG_0001.JPG"), 1);
+    const second = names(item("b", "IMG_0001.JPG"), 2);
+    expect(first).toHaveLength(4);
     for (const name of first) expect(second).not.toContain(name);
+  });
+
+  it("two long names that differ only after character 40 are named whole", () => {
+    expect(names(item("a", "WhatsApp Image 2026-11-12 at 15.04.33 (1).jpeg"), 1)).toContain("Delete 1. WhatsApp Image 2026-11-12 at 15.04.33 (1).jpeg");
+    expect(names(item("b", "WhatsApp Image 2026-11-12 at 15.04.33 (2).jpeg"), 2)).toContain("Delete 2. WhatsApp Image 2026-11-12 at 15.04.33 (2).jpeg");
   });
 });
