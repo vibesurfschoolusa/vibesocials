@@ -235,7 +235,7 @@ export function BulkPostRow({
               >
                 Down
               </Button>
-              <Button variant="ghost" size="md" disabled={!editable} onClick={onRemove}>
+              <Button variant="ghost" size="md" disabled={!editable} onClick={onRemove} aria-label={`Remove ${row.fileName}`}>
                 Remove
               </Button>
             </div>
@@ -250,11 +250,11 @@ export function BulkPostRow({
             <div className="mt-2 flex gap-2">
               {/* R48 publishing L4: a file refused for itself is refused on every Retry. */}
               {row.uploadErrorKind === "file" ? null : (
-                <Button size="md" disabled={locked} onClick={onRetry}>
+                <Button size="md" disabled={locked} onClick={onRetry} aria-label={`Retry ${row.fileName}`}>
                   Retry
                 </Button>
               )}
-              <Button variant="outline" size="md" disabled={locked} onClick={onRemove}>
+              <Button variant="outline" size="md" disabled={locked} onClick={onRemove} aria-label={`Remove ${row.fileName}`}>
                 Remove
               </Button>
             </div>

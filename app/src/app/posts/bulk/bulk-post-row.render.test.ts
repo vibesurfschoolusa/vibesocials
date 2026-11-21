@@ -426,3 +426,18 @@ describe("Add many row: the caption counter", () => {
     expect(html).toContain('role="alert" class="text-destructive"');
   });
 });
+
+// R55 pages-a-2 L2: Up and Down name their file; so do Remove and Retry.
+describe("Add many row: buttons name their file", () => {
+  it("the row's Remove names the file", () => {
+    expect(render(row({ fileName: "surf.jpg" }))).toContain('aria-label="Remove surf.jpg"');
+  });
+
+  it("the failed-upload Remove and Retry name the file", () => {
+    const html = render(
+      row({ fileName: "surf.jpg", upload: "failed", blob: null, uploadError: "x", uploadErrorKind: "network" }),
+    );
+    expect(html.match(/aria-label="Remove surf\.jpg"/g)?.length).toBe(2);
+    expect(html).toContain('aria-label="Retry surf.jpg"');
+  });
+});
