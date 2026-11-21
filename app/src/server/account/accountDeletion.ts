@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
 
-import { POST_PUBLISHING_MESSAGE, isPostPublishing } from "./deleteWorkspace";
+import { POST_PUBLISHING_MESSAGE, isOnlyWorkspace, isPostPublishing } from "./deleteWorkspace";
 import { planAccountDeletion, type AccountDeletionPlan, type DeletionMembership } from "./deletionPlan";
 
 /**
@@ -25,8 +25,19 @@ function joinNames(names: string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-export function blockedMessage(blocked: AccountDeletionPlan["blocked"]): string {
-  return `You are the only owner of ${joinNames(blocked.map((b) => b.name))}. Make another member an owner, or delete the workspace, then try again.`;
+/**
+ * A workspace that blocks the deletion. R61 new-customer-2 L1: `onlyWorkspace`
+ * when it is the person's only membership, which Delete workspace refuses
+ * ("delete your account instead"), so the sentence must not send them there.
+ */
+export type BlockedWorkspace = AccountDeletionPlan["blocked"][number] & { onlyWorkspace?: boolean };
+
+export function blockedMessage(blocked: readonly BlockedWorkspace[]): string {
+  const names = joinNames(blocked.map((b) => b.name));
+  if (blocked.length === 1 && blocked[0].onlyWorkspace) {
+    return `You are the only owner of ${names}. Make another member an owner with Make owner, or remove the other members, then try again.`;
+  }
+  return `You are the only owner of ${names}. Make another member an owner, or delete the workspace, then try again.`;
 }
 
 /**
@@ -90,7 +101,13 @@ export async function loadAccountDeletion(
     }
   }
 
-  return { plan: planAccountDeletion(workspaces), workspaces };
+  const plan = planAccountDeletion(workspaces);
+  // R61 new-customer-2 L1: the refusal's wording reads the person's memberships
+  // (former workspaces, role null, are not theirs), as Delete workspace counts them.
+  if (isOnlyWorkspace(memberships.length)) {
+    plan.blocked = plan.blocked.map((entry): BlockedWorkspace => ({ ...entry, onlyWorkspace: true }));
+  }
+  return { plan, workspaces };
 }
 
 /** Why the account cannot be deleted right now, or null. */
