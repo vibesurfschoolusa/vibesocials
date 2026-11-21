@@ -18,9 +18,12 @@ import { describe, expect, it } from "vitest";
 const API = path.join(__dirname, "..");
 const SCANNED = ["posts", "review-link"];
 
-/** A write pinned to the version read: updatedAt or an approval column taken from the row read. */
-const PIN = /\b(updatedAt|submittedForApprovalAt|approvedAt): (?:row|post)\.\1\b|\bstatus: memberUnderApproval \? row\.status\b/;
-const WRITES = /\.(?:updateMany|deleteMany)\(|\bfinishPostJob\(/;
+/** Columns a write is pinned to when taken from a value read (any name: row., existing., decision.version). */
+const PINNED_COLUMNS = new Set(["updatedAt", "submittedForApprovalAt", "approvedAt"]);
+/** The calls that write. */
+const WRITE_CALL = /\.(?:updateMany|deleteMany|update|delete)$|^finishPostJob$/;
+/** Where a property is a condition; a nearer data/select/... makes it a value written or read. */
+const NOT_A_CONDITION = new Set(["data", "select", "include", "orderBy", "_count"]);
 
 /** The handlers whose lost race lostRaceAnswer words. */
 const PINNED: Record<string, string> = {
@@ -38,11 +41,26 @@ const OWN_RULE: Record<string, string> = {
     "the client's Approve on /v is pinned to the version the page showed: the client must see the latest text, so a changed post answers REVIEW_POST_CHANGED_MESSAGE",
 };
 
-/** The opening of each block a lost race is answered in. */
-const LOST_BRANCH = /if \(!result\.ok\) \{|if \(cancelled === 0\) \{/g;
+/**
+ * 409s a listed handler sends after its pinned write that are not a lost race,
+ * by a piece of their text, and why. An entry no longer found fails too.
+ */
+const LATER_409: Record<string, Record<string, string>> = {
+  "posts/[postJobId]/publish/route.ts#POST": {
+    "nothingSentMessage(": "the claim won and nothing could be sent (no connected platform): not a lost race",
+  },
+};
 
 /** A sentence that words a lost race (a moved-on sentence comes from postMovedOnText). */
-const LOST_TEXT = /changed in the meantime|no longer available to|\btry again\b/i;
+const LOST_TEXT = /changed in the meantime|no longer available to|can no longer be|\btry again\b/i;
+
+/** Texts a listed file keeps that LOST_TEXT matches, and why. An entry no longer in its file fails too. */
+const KEPT_TEXTS: Record<string, Record<string, string>> = {
+  "posts/[postJobId]/cancel-series/route.ts": {
+    "This post can no longer be cancelled.":
+      "the fallback of the check before any write, for a status that is not a draft or scheduled (postMovedOnText words every such status)",
+  },
+};
 /** Never read by a person: a log line's "[tag] ...". */
 const NOT_SHOWN = /^\[/;
 
@@ -54,12 +72,57 @@ function routeFiles(dir: string): string[] {
   });
 }
 
+function parse(source: string): ts.SourceFile {
+  return ts.createSourceFile("route.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+}
+
 /** Each exported handler's source, keyed "NAME". */
 function handlersOf(source: string): Map<string, string> {
   const found = new Map<string, string>();
-  const parts = source.split(/^export async function (\w+)/m);
-  for (let i = 1; i < parts.length; i += 2) found.set(parts[i], parts[i + 1]);
+  for (const statement of parse(source).statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name && statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
+      found.set(statement.name.text, statement.getText());
+    }
+  }
   return found;
+}
+
+function walk(node: ts.Node, visit: (node: ts.Node) => void) {
+  visit(node);
+  ts.forEachChild(node, (child) => walk(child, visit));
+}
+
+const propertyName = (node: ts.PropertyAssignment) => (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name) ? node.name.text : "");
+
+/** Is this property a condition of a query or write: under `where`, in a `...Where` value, or an argument of a write? */
+function inCondition(node: ts.Node): boolean {
+  for (let at: ts.Node | undefined = node.parent; at; at = at.parent) {
+    if (ts.isPropertyAssignment(at)) {
+      const name = propertyName(at);
+      if (name === "where") return true;
+      if (NOT_A_CONDITION.has(name)) return false;
+    }
+    if (ts.isVariableDeclaration(at) && ts.isIdentifier(at.name) && /where/i.test(at.name.text)) return true;
+    if (ts.isCallExpression(at) && WRITE_CALL.test(at.expression.getText())) return true;
+  }
+  return false;
+}
+
+/**
+ * The pins in a source: a pinned column (or the status) whose condition is a
+ * value read (a name or a property, any name: row.updatedAt, existing.updatedAt,
+ * decision.version; a status taken from row.status).
+ */
+function pinsOf(file: ts.SourceFile): ts.PropertyAssignment[] {
+  const pins: ts.PropertyAssignment[] = [];
+  walk(file, (node) => {
+    if (!ts.isPropertyAssignment(node) || !inCondition(node)) return;
+    const name = propertyName(node);
+    const value = node.initializer.getText();
+    if (PINNED_COLUMNS.has(name) && /^[\w.]+$/.test(value) && !/^(?:null|undefined|true|false)$/.test(value)) pins.push(node);
+    else if (name === "status" && /\b\w+\.status\b/.test(value)) pins.push(node);
+  });
+  return pins;
 }
 
 /** Every scanned file's source, keyed "dir/route.ts". */
@@ -75,12 +138,17 @@ function files(): Map<string, string> {
 
 /** Does this handler hold a write pinned to a value it read? */
 function hasPinnedWrite(handler: string): boolean {
-  return PIN.test(handler) && WRITES.test(handler);
+  const file = parse(handler);
+  let writes = false;
+  walk(file, (node) => {
+    if (ts.isCallExpression(node) && WRITE_CALL.test(node.expression.getText())) writes = true;
+  });
+  return writes && pinsOf(file).length > 0;
 }
 
 /** Every string and template text in a source; a template's expressions read as ${}. */
 function textsOf(source: string): string[] {
-  const file = ts.createSourceFile("route.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const file = parse(source);
   const texts: string[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) texts.push(node.text);
@@ -93,33 +161,89 @@ function textsOf(source: string): string[] {
   return texts;
 }
 
-/** The texts in a file that word a lost race. */
+/** The texts in a whole file (its module constants too) that word a lost race. */
 function lostTexts(file: string): string[] {
-  const handlers = [...handlersOf(file).values()].join("\n");
-  return textsOf(handlers).filter((text) => LOST_TEXT.test(text) && !NOT_SHOWN.test(text));
+  return textsOf(file).filter((text) => LOST_TEXT.test(text) && !NOT_SHOWN.test(text));
 }
 
-/** The lost-race answers in a handler not given by lostRaceAnswer. */
-function handWrittenLostRaces(handler: string): string[] {
-  const blocks: string[] = [];
-  for (const match of handler.matchAll(LOST_BRANCH)) {
-    let depth = 0;
-    const start = match.index! + match[0].length - 1;
-    for (let at = start; at < handler.length; at += 1) {
-      if (handler[at] === "{") depth += 1;
-      else if (handler[at] === "}" && --depth === 0) {
-        blocks.push(handler.slice(start, at + 1));
-        break;
-      }
+/** `NextResponse.json(body, { status: 409 })`. */
+function is409(node: ts.Node): node is ts.CallExpression {
+  if (!ts.isCallExpression(node) || node.expression.getText() !== "NextResponse.json") return false;
+  const init = node.arguments[1];
+  return (
+    !!init &&
+    ts.isObjectLiteralExpression(init) &&
+    init.properties.some((p) => ts.isPropertyAssignment(p) && propertyName(p) === "status" && p.initializer.getText() === "409")
+  );
+}
+
+/** The local helpers that send a 409 (e.g. `const notCancelable = (status) => NextResponse.json(..., { status: 409 })`). */
+function helpers409(file: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  walk(file, (node) => {
+    if (!ts.isVariableDeclaration(node) || !ts.isIdentifier(node.name) || !node.initializer) return;
+    if (!ts.isArrowFunction(node.initializer) && !ts.isFunctionExpression(node.initializer)) return;
+    let sends = false;
+    walk(node.initializer, (inner) => {
+      if (is409(inner)) sends = true;
+    });
+    if (sends) names.add(node.name.text);
+  });
+  return names;
+}
+
+/**
+ * The statements that can run after a pinned write: the ones after it in each
+ * enclosing block, up to the handler, stopping at a branch that ends in a
+ * return (its path ends there). A callback's body (a transaction) does not stop it.
+ */
+function statementsAfter(pin: ts.Node): ts.Statement[] {
+  const after: ts.Statement[] = [];
+  for (let node: ts.Node = pin; node.parent; node = node.parent) {
+    const parent = node.parent;
+    if (!ts.isBlock(parent) && !ts.isSourceFile(parent)) continue;
+    const statements = [...parent.statements];
+    after.push(...statements.slice(statements.indexOf(node as ts.Statement) + 1));
+    if (ts.isSourceFile(parent) || ts.isFunctionDeclaration(parent.parent)) break;
+    const callback = ts.isArrowFunction(parent.parent) || ts.isFunctionExpression(parent.parent);
+    if (!callback && statements.length > 0 && ts.isReturnStatement(statements[statements.length - 1])) break;
+  }
+  return after;
+}
+
+/**
+ * The 409s a handler sends after a pinned write that lostRaceAnswer did not
+ * word, leaving out those `allowed` names by a piece of their text.
+ */
+function handWrittenLostRaces(handler: string, allowed: readonly string[] = []): string[] {
+  const file = parse(handler);
+  const helpers = helpers409(file);
+  const found = new Set<string>();
+  for (const pin of pinsOf(file)) {
+    for (const statement of statementsAfter(pin)) {
+      walk(statement, (node) => {
+        if (!ts.isCallExpression(node)) return;
+        const viaHelper = ts.isIdentifier(node.expression) && helpers.has(node.expression.text);
+        if (!viaHelper && !is409(node)) return;
+        const body = node.arguments[0];
+        const worded = !viaHelper && !!body && ts.isCallExpression(body) && body.expression.getText() === "lostRaceAnswer";
+        const text = node.getText();
+        if (!worded && !allowed.some((piece) => text.includes(piece))) found.add(text);
+      });
     }
   }
-  return blocks.filter((block) => !/\blostRaceAnswer\(/.test(block));
+  return [...found];
+}
+
+/** Every 409 after a pinned write, worded or not (to check that LATER_409 entries still exist). */
+function every409After(handler: string): string[] {
+  return handWrittenLostRaces(handler);
 }
 
 describe("a lost race is worded by lostRaceAnswer alone", () => {
   const all = files();
   const handlers = new Map(
-    [...all].flatMap(([file, source]) => [...handlersOf(source)].map(([name, body]) => [`${file}#${name}`, body] as const)),
+    [...all].flatMap(([file, source]) => [...handlersOf(source)].map(([name, body]) => [`${file}#${name}` as string, body] as const)),
   );
 
   it("every handler with a pinned write is listed", () => {
@@ -127,15 +251,26 @@ describe("a lost race is worded by lostRaceAnswer alone", () => {
     expect(pinned.sort()).toEqual([...Object.keys(PINNED), ...Object.keys(OWN_RULE)].sort());
   });
 
-  it.each(Object.keys(PINNED))("%s answers each lost race with lostRaceAnswer", (key) => {
+  it.each(Object.keys(PINNED))("%s: every 409 after a pinned write comes from lostRaceAnswer", (key) => {
     const source = handlers.get(key);
     expect(source, key).toBeDefined();
     expect(source, key).toMatch(/\blostRaceAnswer\(/);
-    expect(handWrittenLostRaces(source!), key).toEqual([]);
+    expect(handWrittenLostRaces(source!, Object.keys(LATER_409[key] ?? {})), key).toEqual([]);
   });
 
-  it.each(Object.keys(PINNED))("%s's file words no lost race itself", (key) => {
-    expect(lostTexts(all.get(key.split("#")[0])!)).toEqual([]);
+  it("each LATER_409 entry is still a 409 after a pinned write", () => {
+    for (const [key, entries] of Object.entries(LATER_409)) {
+      const later = every409After(handlers.get(key) ?? "");
+      for (const piece of Object.keys(entries)) expect(later.some((text) => text.includes(piece)), `${key}: ${piece}`).toBe(true);
+    }
+  });
+
+  it.each(Object.keys(PINNED))("%s's file words no lost race itself, module constants included", (key) => {
+    const file = key.split("#")[0];
+    const kept = KEPT_TEXTS[file] ?? {};
+    const texts = lostTexts(all.get(file)!);
+    expect(texts.filter((text) => !(text in kept))).toEqual([]);
+    for (const text of Object.keys(kept)) expect(texts, `${file}: kept "${text}"`).toContain(text);
   });
 });
 
