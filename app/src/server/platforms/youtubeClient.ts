@@ -242,8 +242,10 @@ const YOUTUBE_TAGS_MAX_CHARS = 500;
 // R58 fix review: a link starts after a character that cannot be part of
 // one, so "Awww.#cute" and "#surf.school/#lessons" are not links, and its
 // last name before the "/" is letters, so "6.30pm/#surf" is not one either.
+// R59 platform-clients L1: combining marks count as letters here too, as in
+// the hashtag rule, so "हिन्दी.com/#book" is one link.
 const LINK_PATTERN =
-  /(?<![\p{L}\p{N}_#@.-])(?:(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S+|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}\/\S*)/giu;
+  /(?<![\p{L}\p{M}\p{N}_#@.-])(?:(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S+|[\p{L}\p{M}\p{N}-]+(?:\.[\p{L}\p{M}\p{N}-]+)*\.\p{L}[\p{L}\p{M}]+\/\S*)/giu;
 
 /** The caption's hashtags as tags, without the "#", links left out. */
 function youtubeHashtags(caption: string): string[] {

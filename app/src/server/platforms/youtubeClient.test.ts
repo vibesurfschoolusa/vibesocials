@@ -2505,6 +2505,19 @@ describe("buildYouTubeVideoResource — text YouTube accepts", () => {
     expect(resourceFor({ caption: "Book at site.com/#book #surf" }).snippet.tags).toEqual(["surf"]);
   });
 
+  // R59 platform-clients L1: a combining mark is part of a tag, and of a link.
+  it("keeps Devanagari, Thai and decomposed-accent tags whole", () => {
+    expect(resourceFor({ caption: "#नमस्ते #สวัสดี #café" }).snippet.tags).toEqual([
+      "नमस्ते",
+      "สวัสดี",
+      "café",
+    ]);
+  });
+
+  it("drops the #fragment of a link whose name has a combining mark", () => {
+    expect(resourceFor({ caption: "Book at हिन्दी.com/#book #surf" }).snippet.tags).toEqual(["surf"]);
+  });
+
   it("keeps a plain #surf as it was", () => {
     expect(resourceFor({ caption: "Morning session #surf" }).snippet.tags).toEqual(["surf"]);
   });
