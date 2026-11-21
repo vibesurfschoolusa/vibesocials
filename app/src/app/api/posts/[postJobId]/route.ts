@@ -18,6 +18,7 @@ import {
   validateScheduledFor,
 } from "@/lib/scheduling";
 import { platformCaptionEntries } from "@/lib/platforms";
+import { xTextEmptyRefusal } from "@/lib/xTextRefusal";
 import { resolvePlatformCaptions, resolvePostCaptionSource } from "@/server/jobs/posting";
 import { storyPlatformsOf, withStoryCaptions } from "@/lib/storyPlacement";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
@@ -285,6 +286,21 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
     data.scheduledFor = validation.date;
+  }
+
+  // R62 review low 2: an edit can no more leave X an empty text than POST could
+  // create one. Only a post without a photo (no media item; a file still goes
+  // to X), only when a caption changes, against the platforms it was made for.
+  if (existing.mediaItem === null && (body.baseCaption !== undefined || body.perPlatformOverrides !== undefined)) {
+    const storedOverrides = existing.perPlatformOverrides as Partial<Record<Platform, string>> | null;
+    const stored = existing.publishMetadata as { targetPlatforms?: Platform[] } | null;
+    const xRefusal = await xTextEmptyRefusal({
+      baseCaption: typeof body.baseCaption === "string" ? body.baseCaption : (existing.baseCaption ?? ""),
+      xOverride: perPlatformOverrides !== undefined ? perPlatformOverrides?.x : storedOverrides?.x,
+      workspace: workspaceContext.workspace,
+      targetPlatforms: stored?.targetPlatforms?.length ? stored.targetPlatforms : undefined,
+    });
+    if (xRefusal) return NextResponse.json({ error: xRefusal }, { status: 400 });
   }
 
   if (Object.keys(data).length === 0) {

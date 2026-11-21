@@ -22,8 +22,7 @@ import {
   sentWorkspaceId,
 } from "@/lib/workspaceChanged";
 import { textPostsEnabled } from "@/lib/platformLimits";
-import { removeXMentions } from "@/lib/xMentions";
-import { buildCaptionWithFooter } from "@/lib/captionFooter";
+import { xTextEmptyRefusal } from "@/lib/xTextRefusal";
 import {
   assertPostTargetsValid,
   assertTextPostTargetsValid,
@@ -735,11 +734,6 @@ const FILE_FIELDS = ["blobUrl", "mediaItemId", "media", "filename", "mimeType", 
 
 const TEXT_POST_WITH_FILE_MESSAGE = "A post without a photo can't carry a file. Remove textOnly, or remove the file.";
 
-// R62 platform-clients L2: X's text goes out without @mentions (computeTweetText),
-// and X refuses an empty text on every Retry, so such a post is refused here.
-const X_TEXT_EMPTY_MESSAGE =
-  "X removes @mentions from posts sent through its API, so this post has no text left for X. Add some words, or leave X out.";
-
 /** 400 for a rejected platform choice; `code` + `platforms` let a client react without parsing `error`. */
 function postTargetingErrorResponse(error: PostTargetingError) {
   return NextResponse.json(
@@ -1165,25 +1159,15 @@ export async function POST(request: Request) {
     if (error instanceof PostTargetingError) return postTargetingErrorResponse(error);
     throw error;
   }
-  // A post with a file still sends the file to X, so only a text post is
-  // refused. The text is built as publishing builds it: the override (an empty
-  // one falls back to the base caption) with the workspace's footer
-  // (inngest-functions.ts), then without mentions, as computeTweetText sends it.
-  if (textOnly && (!targetPlatforms || targetPlatforms.includes("x"))) {
-    const xCaption = perPlatformOverrides?.x ? perPlatformOverrides.x : baseCaptionRaw;
-    const xText = removeXMentions(buildCaptionWithFooter(xCaption, context.workspace, "x"));
-    // With no list, a text post goes to every connection that takes text, so
-    // X is a target when the workspace has it connected.
-    if (
-      !xText.trim() &&
-      (targetPlatforms ||
-        (await prisma.socialConnection.findFirst({
-          where: { workspaceId: context.workspace.id, platform: "x" },
-          select: { id: true },
-        })))
-    ) {
-      return NextResponse.json({ error: X_TEXT_EMPTY_MESSAGE }, { status: 400 });
-    }
+  // A post with a file still sends the file to X, so only a text post is refused.
+  if (textOnly) {
+    const xRefusal = await xTextEmptyRefusal({
+      baseCaption: baseCaptionRaw,
+      xOverride: perPlatformOverrides?.x,
+      workspace: context.workspace,
+      targetPlatforms,
+    });
+    if (xRefusal) return NextResponse.json({ error: xRefusal }, { status: 400 });
   }
 
   // Roadmap Phase 5 — resolve the intent. `draft: true` wins; otherwise a

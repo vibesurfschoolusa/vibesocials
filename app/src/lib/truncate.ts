@@ -90,13 +90,15 @@ export function truncateGraphemes(
 }
 
 const WHITESPACE = /^\s+$/u;
+/** How far back a word end is looked for (R62 review low 1): a script without spaces is cut by graphemes. */
+const WORD_LOOKBACK = 100;
 
 /**
  * `truncateGraphemes` cut at the last whole word that fits (R62
  * platform-clients L1, Instagram): a word, so a #tag or @mention, is never
  * sent in part. Counted in graphemes, with room kept for the ellipsis as
- * `truncateGraphemes` keeps it. Text with no space before the limit keeps the
- * plain grapheme cut. Text that fits comes back unchanged.
+ * `truncateGraphemes` keeps it. Text with no space in the 100 graphemes before
+ * the limit keeps the plain grapheme cut. Text that fits comes back unchanged.
  */
 export function truncateGraphemesAtWord(text: string, maxGraphemes: number, opts?: TruncateOptions): string {
   const max = Math.max(0, Math.floor(maxGraphemes));
@@ -110,9 +112,10 @@ export function truncateGraphemesAtWord(text: string, maxGraphemes: number, opts
   // The limit falls on a space: the cut already ends a word.
   let end = budget;
   if (!WHITESPACE.test(graphemes[budget])) {
+    const stop = Math.max(0, budget - WORD_LOOKBACK);
     let space = budget - 1;
-    while (space > 0 && !WHITESPACE.test(graphemes[space])) space -= 1;
-    if (space > 0) end = space;
+    while (space > stop && !WHITESPACE.test(graphemes[space])) space -= 1;
+    if (space > 0 && WHITESPACE.test(graphemes[space])) end = space;
   }
   while (end > 0 && WHITESPACE.test(graphemes[end - 1])) end -= 1;
   // Only spaces before the limit: nothing whole to keep, so the plain cut.
