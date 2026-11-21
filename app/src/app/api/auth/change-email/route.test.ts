@@ -200,6 +200,11 @@ describe("POST /api/auth/change-email", () => {
     await expect(response.json()).resolves.toEqual({ ok: true });
     expect(requestCreateMock).not.toHaveBeenCalled();
     expect(deliverAccountEmailMock).not.toHaveBeenCalled();
+    // R57 new-customer L1: no email can be accepted, so an earlier change to
+    // another address is retired here too.
+    expect(requestDeleteManyMock.mock.calls).toEqual([
+      [{ where: { userId: "user-1", usedAt: null, newEmail: { not: "new@example.com" } } }],
+    ]);
   });
 
   // R6-security M1: while the previous address can undo the last change, the
@@ -255,30 +260,51 @@ describe("POST /api/auth/change-email", () => {
 
   // R56 new-customer L1: the previous pending change stays until the new
   // change's email is accepted.
-  it("email accepted: the pending changes made before this one are retired, after the send", async () => {
+  // R57 new-customer L1: an earlier change to another address (a typo, say)
+  // is retired before the send, by createdAt like the rest.
+  const RETIRE_OTHER_ADDRESSES = {
+    where: { userId: "user-1", usedAt: null, newEmail: { not: "new@example.com" }, createdAt: { lt: NEW_CREATED_AT } },
+  };
+
+  it("email accepted: earlier changes to other addresses go before the send, the rest after it", async () => {
     const response = await POST(request(GOOD));
     expect(response.status).toBe(200);
     expect(requestCreateMock.mock.calls[0][0].select).toEqual({ id: true, createdAt: true });
-    expect(requestDeleteManyMock).toHaveBeenCalledTimes(1);
-    expect(requestDeleteManyMock).toHaveBeenCalledWith({
-      where: { userId: "user-1", usedAt: null, createdAt: { lt: NEW_CREATED_AT } },
-    });
+    expect(requestDeleteManyMock.mock.calls).toEqual([
+      [RETIRE_OTHER_ADDRESSES],
+      [{ where: { userId: "user-1", usedAt: null, createdAt: { lt: NEW_CREATED_AT } } }],
+    ]);
     expect(requestCreateMock.mock.invocationCallOrder[0]).toBeLessThan(
+      requestDeleteManyMock.mock.invocationCallOrder[0],
+    );
+    expect(requestDeleteManyMock.mock.invocationCallOrder[0]).toBeLessThan(
       deliverAccountEmailMock.mock.invocationCallOrder[0],
     );
     expect(deliverAccountEmailMock.mock.invocationCallOrder[0]).toBeLessThan(
-      requestDeleteManyMock.mock.invocationCallOrder[0],
+      requestDeleteManyMock.mock.invocationCallOrder[1],
     );
   });
 
-  it("email refused: the earlier pending change is kept and only the new one is removed; the answer is as before", async () => {
+  it("email refused: an earlier change to the same address is kept, other addresses' are not, and the new one is removed; the answer is as before", async () => {
     deliverAccountEmailMock.mockResolvedValue(false);
     const response = await POST(request(GOOD));
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({
       error: "We couldn't send the confirmation email just now. Your email is unchanged. Please try again in a few minutes.",
     });
-    expect(requestDeleteManyMock).toHaveBeenCalledTimes(1);
-    expect(requestDeleteManyMock).toHaveBeenCalledWith({ where: { id: "req_new", usedAt: null } });
+    expect(requestDeleteManyMock.mock.calls).toEqual([
+      [RETIRE_OTHER_ADDRESSES],
+      [{ where: { id: "req_new", usedAt: null } }],
+    ]);
+  });
+
+  it("an email that throws: other addresses' changes are already retired, and the new one is removed", async () => {
+    deliverAccountEmailMock.mockRejectedValue(new Error("boom"));
+    const response = await POST(request(GOOD));
+    expect(response.status).toBe(500);
+    expect(requestDeleteManyMock.mock.calls).toEqual([
+      [RETIRE_OTHER_ADDRESSES],
+      [{ where: { id: "req_new", usedAt: null } }],
+    ]);
   });
 });
