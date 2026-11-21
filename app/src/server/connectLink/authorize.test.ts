@@ -14,7 +14,11 @@ const h = vi.hoisted(() => ({
   handshakeUpsert: vi.fn(),
   handshakeCreate: vi.fn(),
   handshakeDeleteMany: vi.fn(),
+  checkRateLimit: vi.fn(),
 }));
+// R61 security-billing-2 L1: the owner's X start is limited per person; the
+// link flow keeps the connect-link start's own limits (per network, per link).
+vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: h.checkRateLimit }));
 vi.mock("@/lib/workspace", () => ({ requireOwnerContextForOAuthStart: h.ownerContext }));
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -87,6 +91,7 @@ beforeEach(() => {
   h.ownerContext.mockResolvedValue({ user: { id: "user-1" }, workspace: { id: "ws-1" }, role: "owner" });
   // The start route's cleanup chains .catch on this, so it must answer a promise.
   h.handshakeDeleteMany.mockResolvedValue({ count: 0 });
+  h.checkRateLimit.mockResolvedValue({ allowed: true });
   for (const [key, value] of Object.entries(ENV)) vi.stubEnv(key, value);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -192,6 +197,23 @@ describe("x: the request-token call and the handshake row", () => {
       },
     });
     vi.useRealTimers();
+  });
+
+  // R61 security-billing-2 L1: the per-person limit is the owner's Connect
+  // from Settings only. A client on /c has no signed-in owner; the link
+  // flow never reaches the start route, so the new limit never refuses it.
+  it("the new limit: an owner's Connect is limited by their user id; a link-flow start is not refused by it", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => requestTokenAnswer()));
+    h.checkRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 600 });
+
+    const owner = await xStart(new Request(`${ORIGIN}/api/auth/x/start`));
+    expect(owner.headers.get("location")).toBe(`${ORIGIN}/settings?error=x_too_many_tries`);
+    expect(h.checkRateLimit).toHaveBeenCalledWith(expect.objectContaining({ userId: "user-1", route: "auth/x/start" }));
+
+    h.checkRateLimit.mockClear();
+    const location = await startXLinkFlow({ linkId: "link-1", nonce: "nonce-1", userId: "user-1", workspaceId: "ws-1" });
+    expect(location).toBe("https://api.twitter.com/oauth/authorize?oauth_token=req-token");
+    expect(h.checkRateLimit).not.toHaveBeenCalled();
   });
 
   it("answers null, and writes nothing, when X refuses or is not configured", async () => {
