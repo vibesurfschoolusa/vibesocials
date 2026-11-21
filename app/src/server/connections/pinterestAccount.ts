@@ -65,8 +65,9 @@ export async function fetchPinterestAccount(accessToken: string): Promise<Pinter
 /**
  * The account's boards (its own, and group boards it collaborates on), in
  * Pinterest's order, following the bookmark for up to
- * {@link PINTEREST_BOARD_MAX_PAGES} pages. Null when Pinterest refuses the first
- * page; a later page that fails ends the list with what was read.
+ * {@link PINTEREST_BOARD_MAX_PAGES} pages. Null when any page fails (R65 L1:
+ * never a partial list, as for Meta and LinkedIn, so a missing board can't look
+ * like the full choice). A network failure on the first page throws.
  */
 export async function listPinterestBoards(accessToken: string): Promise<PinterestBoard[] | null> {
   const boards: PinterestBoard[] = [];
@@ -78,17 +79,24 @@ export async function listPinterestBoards(accessToken: string): Promise<Pinteres
     url.searchParams.set("page_size", String(PINTEREST_BOARD_PAGE_SIZE));
     if (bookmark) url.searchParams.set("bookmark", bookmark);
 
-    const response = await fetchWithinLimit(url.toString(), bearer(accessToken), PINTEREST_CONNECT_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetchWithinLimit(url.toString(), bearer(accessToken), PINTEREST_CONNECT_TIMEOUT_MS);
+    } catch (error) {
+      if (page === 0) throw error;
+      console.error("[Pinterest OAuth] Could not reach a later boards page", { page });
+      return null;
+    }
     if (!response.ok) {
       console.error("[Pinterest OAuth] Could not list boards", { status: response.status, page });
-      return page === 0 ? null : boards;
+      return null;
     }
     const body: unknown = await response.json().catch(() => UNREADABLE);
     // R36 review: a page that can't be read (a body that stalled past the
     // limit, or broken JSON) is a failed read, never "no boards".
     if (body === UNREADABLE) {
       console.error("[Pinterest OAuth] Could not read the boards answer", { page });
-      return page === 0 ? null : boards;
+      return null;
     }
     const parsed = parsePinterestBoards(body);
     for (const board of parsed.boards) {
