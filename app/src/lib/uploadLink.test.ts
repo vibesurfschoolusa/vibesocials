@@ -40,9 +40,11 @@ describe("the sentences and limits", () => {
 describe("uploadLinkBytesLimitMessage", () => {
   const LEFT = (20 * 1024 * 1024 - Math.round(19.7 * 1024 * 1024)) * 1024;
 
+  // R63 client-journey L1: the route's last sentence is the other limits' "tomorrow",
+  // which /u (send-file.ts) replaces with the real wait and the step.
   it("19.7 GB used plus a 400 MB file: the \"would take this link past\" sentence, naming what is left", () => {
     expect(uploadLinkBytesLimitMessage(LEFT)).toBe(
-      "This file would take this link past today's 20 GB upload limit. A file under 307 MB can still go today; the limit resets at midnight UTC.",
+      "This file would take this link past today's 20 GB. A file under 307 MB can still go today. Send the rest tomorrow.",
     );
   });
 
@@ -54,7 +56,7 @@ describe("uploadLinkBytesLimitMessage", () => {
 
   it("what is left not known: a smaller file may still go", () => {
     expect(uploadLinkBytesLimitMessage(undefined)).toBe(
-      "This file would take this link past today's 20 GB upload limit. A smaller file may still go today; the limit resets at midnight UTC.",
+      "This file would take this link past today's 20 GB. A smaller file may still go today. Send the rest tomorrow.",
     );
   });
 });

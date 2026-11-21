@@ -360,14 +360,17 @@ describe("the bytes a link takes in a day", () => {
 describe("a file that would take the link past its 20 GB day", () => {
   const LEFT = (20 * 1024 * 1024 - Math.round(19.7 * 1024 * 1024)) * 1024;
   const PAST =
-    "This file would take this link past today's 20 GB upload limit. A file under 307 MB can still go today; the limit resets at midnight UTC.";
+    "This file would take this link past today's 20 GB. A file under 307 MB can still go today. Send the rest tomorrow.";
 
-  it("19.7 GB used plus a 400 MB file: the \"would take this link past\" sentence, which /u shows as it is", async () => {
+  // R63 client-journey L1: /u gives the real wait and the step, as for the other limits.
+  it("19.7 GB used plus a 400 MB file: the \"would take this link past\" sentence, which /u gives with its wait", async () => {
     consumeBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 5000, leftBytes: LEFT });
     const response = await call(tokenRequest({ size: 400 * 1024 * 1024 }));
     expect(response.status).toBe(429);
-    await expect(response.json()).resolves.toMatchObject({ error: PAST });
-    expect(uploadLimitText(PAST, 5000)).toBe(PAST);
+    await expect(response.json()).resolves.toMatchObject({ error: PAST, retryAfterSeconds: 5000 });
+    expect(uploadLimitText(PAST, 5000)).toBe(
+      "This file would take this link past today's 20 GB. A file under 307 MB can still go today. Wait 2 hours, then try the files that didn't send.",
+    );
     expect(handleUploadMock).not.toHaveBeenCalled();
   });
 

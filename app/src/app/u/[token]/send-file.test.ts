@@ -8,6 +8,7 @@ import {
   UPLOAD_LINK_IP_LIMIT_MESSAGE,
   UPLOAD_LINK_IP_LIMIT_REASON,
   UPLOAD_LINK_STORAGE_FULL_MESSAGE,
+  uploadLinkBytesLimitMessage,
 } from "@/lib/uploadLink";
 
 import {
@@ -446,6 +447,31 @@ describe("sendClientFile: a refused try names its wait", () => {
   it("the day's 20 GB: its own reason with the wait", async () => {
     const error = await refusal(limited(UPLOAD_LINK_BYTES_LIMIT_MESSAGE, 30 * 60));
     expect(error.message).toBe(`${UPLOAD_LINK_BYTES_LIMIT_REASON} Wait 30 minutes, then try the files that didn't send.`);
+  });
+
+  // R63 client-journey L1: a file that would take the link past its 20 GB names
+  // the real wait and the step, as "used up" does, never a UTC clock time.
+  it("19.7 GB used plus a 400 MB file: what can still go, the wait in hours and the retry step", async () => {
+    const left = (20 * 1024 * 1024 - Math.round(19.7 * 1024 * 1024)) * 1024;
+    const error = await refusal(limited(uploadLinkBytesLimitMessage(left), 4 * 3600 - 100));
+    expect(error.kind).toBe("refused");
+    expect(error.message).toBe(
+      "This file would take this link past today's 20 GB. A file under 307 MB can still go today. Wait 4 hours, then try the files that didn't send.",
+    );
+    const unknown = await refusal(limited(uploadLinkBytesLimitMessage(undefined)));
+    expect(unknown.message).toBe(
+      "This file would take this link past today's 20 GB. A smaller file may still go today. Try the files that didn't send again later.",
+    );
+  });
+
+  it("exactly at 20 GB: the \"used\" sentence with the wait, as before", async () => {
+    const error = await refusal(limited(uploadLinkBytesLimitMessage(0), 30 * 60));
+    expect(error.message).toBe(`${UPLOAD_LINK_BYTES_LIMIT_REASON} Wait 30 minutes, then try the files that didn't send.`);
+  });
+
+  it("another 429 sentence is shown as it is", async () => {
+    const error = await refusal(limited("This file would take this link past today's 20 GB.", 30 * 60));
+    expect(error.message).toBe("This file would take this link past today's 20 GB.");
   });
 
   it("no wait in the answer: a true sentence with no reload step", async () => {
