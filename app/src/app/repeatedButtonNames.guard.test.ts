@@ -77,14 +77,19 @@ function openingTagEnd(source: string, start: number): number {
 
 export type UnnamedButton = { index: number; text: string };
 
-const STRING_ONLY = /^\s*(?:"([^"]*)"|'([^']*)')\s*$/;
-// `cond ? "A" : "B"`: both words are fixed, so the text is as static as one.
-const FIXED_TERNARY = /^[^?]+\?\s*(?:"([^"]*)"|'([^']*)')\s*:\s*(?:"[^"]*"|'[^']*')\s*$/;
+// A string literal, or a template literal with no ${…}: its words, in group 1, 2 or 3.
+const LITERAL = "(?:\"([^\"]*)\"|'([^']*)'|`((?:[^`$]|\\$(?!\\{))*)`)";
+const OTHER_LITERAL = "(?:\"[^\"]*\"|'[^']*'|`(?:[^`$]|\\$(?!\\{))*`)";
+const STRING_ONLY = new RegExp(String.raw`^\s*${LITERAL}\s*$`);
+// `cond ? "A" : "B"` and `cond && "A"`: the words are fixed, so the text is as static as one.
+// The condition ends at a spaced " ? ", so an optional chain (row?.busy) is part of it.
+const FIXED_TERNARY = new RegExp(String.raw`^[\s\S]+?\s\?\s*${LITERAL}\s*:\s*${OTHER_LITERAL}\s*$`);
+const FIXED_AND = new RegExp(String.raw`^[\s\S]+?&&\s*${LITERAL}\s*$`);
 
 /**
  * The words a control's children always show, or null when any part of them
  * comes from data. Tags are dropped (icons, a wrapping <span>); a `{…}` may be
- * a comment, a string literal or a ternary of two string literals.
+ * a comment, a literal, a ternary of two literals or `cond && literal`.
  */
 export function staticText(children: string): string | null {
   let text = "";
@@ -101,9 +106,9 @@ export function staticText(children: string): string | null {
       const expression = children.slice(i + 1, close);
       i = close;
       if (/^\s*\/\*[\s\S]*\*\/\s*$/.test(expression)) continue;
-      const literal = STRING_ONLY.exec(expression) ?? FIXED_TERNARY.exec(expression);
+      const literal = STRING_ONLY.exec(expression) ?? FIXED_TERNARY.exec(expression) ?? FIXED_AND.exec(expression);
       if (!literal) return null;
-      text += literal[1] ?? literal[2];
+      text += literal[1] ?? literal[2] ?? literal[3];
     } else {
       text += ch;
     }
@@ -125,7 +130,7 @@ export function unnamedRepeatedButtons(source: string): UnnamedButton[] {
       const tagEnd = openingTagEnd(source, start);
       if (tagEnd < 0) continue;
       const tag = source.slice(start, tagEnd + 1);
-      if (tag.endsWith("/>") || /\baria-label(ledby)?=/.test(tag)) continue;
+      if (tag.endsWith("/>") || /\baria-label(ledby)?=(?!\{\s*undefined\s*\})/.test(tag)) continue;
       const childrenEnd = source.indexOf(`</${button[1]}>`, tagEnd);
       if (childrenEnd < 0) continue;
       const text = staticText(source.slice(tagEnd + 1, childrenEnd));
@@ -160,6 +165,27 @@ describe("repeated buttons name their item", () => {
   it("finds a ternary of two string literals", () => {
     const bad = `items.map((item) => <Button onClick={() => save(item)}>{busy ? "Saving…" : "Save"}</Button>)`;
     expect(unnamedRepeatedButtons(bad)).toEqual([expect.objectContaining({ text: "Saving…" })]);
+  });
+
+  // R57 second look: four more shapes of fixed text, and a label that is no label.
+  it("finds a template literal with no ${…}", () => {
+    const bad = "items.map((item) => <Button onClick={() => save(item)}>{`Save`}</Button>)";
+    expect(unnamedRepeatedButtons(bad)).toEqual([expect.objectContaining({ text: "Save" })]);
+  });
+
+  it("finds cond && a string literal", () => {
+    const bad = `items.map((item) => <Button onClick={() => save(item)}>{busy && "Saving"}</Button>)`;
+    expect(unnamedRepeatedButtons(bad)).toEqual([expect.objectContaining({ text: "Saving" })]);
+  });
+
+  it("finds a ternary whose condition uses ?.", () => {
+    const bad = `rows.map((row) => <Button onClick={() => save(row)}>{row?.busy ? "Saving" : "Save"}</Button>)`;
+    expect(unnamedRepeatedButtons(bad)).toEqual([expect.objectContaining({ text: "Saving" })]);
+  });
+
+  it("counts aria-label={undefined} as no label", () => {
+    const bad = `items.map((item) => <Button aria-label={undefined} onClick={() => go(item)}>Delete</Button>)`;
+    expect(unnamedRepeatedButtons(bad)).toEqual([expect.objectContaining({ text: "Delete" })]);
   });
 
   it("finds a native button", () => {
