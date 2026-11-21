@@ -70,7 +70,11 @@ const POOL_TODAY = `Approve it again ${RESET}; it then publishes at once. Or rej
 const freeWs = (day: string) => `If another post here is still scheduled for ${day}, cancel or move it, then approve again.`;
 const freeYou = (day: string) =>
   `If you have another post still scheduled for ${day}, in any of those workspaces, cancel or move it, then approve again.`;
-const freeSam = (day: string) => `If Sam has another post still scheduled for ${day}, they can cancel or move it to make room.`;
+// R58 publishing-flow L1: a per-person refusal happens only when this workspace
+// is free, so it is always one of the counted ones and its posts are the
+// approver's to cancel or move. The holder's other workspaces come second.
+const freeSam = (day: string) =>
+  `If another post here is still scheduled for ${day}, cancel or move it, then approve again. Sam can also free one in another of those workspaces.`;
 const freeOwner = (day: string) =>
   `If this workspace's owner has another post still scheduled for ${day}, they can cancel or move it to make room.`;
 
@@ -156,6 +160,20 @@ describe("approval endings, one rule: per person, a named co-owner", () => {
   it("today", () => expect(own("schedule", holder, true)).toBe(approval.samToday));
   it("a future day", () => expect(own("schedule", holder)).toBe(approval.samFuture));
   it("publish now", () => expect(own("now", holder)).toBe(approval.samNow));
+});
+
+describe("approval endings: a named co-owner's step never leaves the approver only waiting", () => {
+  it("offers this workspace's step first, today, a future day and publish now", () => {
+    for (const text of [own("schedule", holder, true), own("schedule", holder), own("now", holder)]) {
+      expect(text).toMatch(/ If another post here is still scheduled for (today|that day), cancel or move it, then approve again\. Sam can also free one/);
+      expect(text).not.toMatch(/they can cancel or move it to make room/);
+    }
+  });
+  it("billing on: the other workspaces are the ones the sentence names", () => {
+    const text = ownerDailyPostLimitMessage(15, "schedule", null, holder, time, { BILLING_ENABLED: "true" }, "approval");
+    expect(text).toContain("their workspaces not yet paid for, which is the daily limit for one person (retries count toward it). If another post here");
+    expect(text).toContain("Sam can also free one in another of those workspaces.");
+  });
 });
 
 describe("approval endings, one rule: per person, an owner not known to be the reader", () => {

@@ -273,8 +273,14 @@ function freeSlotStep(count: LimitCount, day: "today" | "that day"): string | nu
   if (holder?.isViewer) {
     return `If you have another post still scheduled for ${day}, in any of those workspaces, cancel or move it, then approve again.`;
   }
-  const who = holder?.coOwned ? holder.name : "this workspace's owner";
-  return `If ${who} has another post still scheduled for ${day}, they can cancel or move it to make room.`;
+  // R58 publishing-flow L1: a per-person refusal happens only when this
+  // workspace is free, so it is always one of the counted ones and its posts
+  // are the approver's to cancel or move. The co-owner's other workspaces are
+  // theirs alone, and "those workspaces" keeps to the ones that count.
+  if (holder?.coOwned) {
+    return `If another post here is still scheduled for ${day}, cancel or move it, then approve again. ${holder.name} can also free one in another of those workspaces.`;
+  }
+  return `If this workspace's owner has another post still scheduled for ${day}, they can cancel or move it to make room.`;
 }
 
 /**
