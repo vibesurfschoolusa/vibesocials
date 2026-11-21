@@ -20,7 +20,9 @@ const {
   notifyOwnersMock,
   failPendingMock,
   checkDailyPostLimitMock,
+  connectionFindFirstMock,
 } = vi.hoisted(() => ({
+  connectionFindFirstMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   createPostJobOnlyMock: vi.fn(),
@@ -51,6 +53,7 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     postJob: { findUnique: postJobFindUniqueMock, update: postJobUpdateMock },
     postJobResult: { findMany: postJobResultFindManyMock },
+    socialConnection: { findFirst: connectionFindFirstMock },
   },
 }));
 
@@ -173,6 +176,8 @@ beforeEach(() => {
   failPendingMock.mockResolvedValue({ failedCount: 1, status: "failed" });
   checkDailyPostLimitMock.mockReset();
   checkDailyPostLimitMock.mockResolvedValue(null);
+  connectionFindFirstMock.mockReset();
+  connectionFindFirstMock.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -359,6 +364,45 @@ describe("POST /api/posts - textOnly (a post without a photo)", () => {
       );
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({ error: X_EMPTY });
+    });
+
+    // Lead review: the text X really gets carries the workspace's footer
+    // (buildCaptionWithFooter), so default hashtags leave it something to send.
+    it("accepts a mentions-only caption when the footer has default hashtags", async () => {
+      const context = makeWorkspaceContext();
+      context.workspace.defaultHashtags = "#surf #waves";
+      getWorkspaceContextMock.mockResolvedValue(context);
+      const response = await POST(textRequest({ baseCaption: "@surfshop @wavecafe", platforms: ["x", "linkedin"] }));
+      expect(response.status).toBe(200);
+      expect(createPostJobOnlyMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses when the footer is only a mention too", async () => {
+      const context = makeWorkspaceContext();
+      context.workspace.defaultHashtags = null;
+      context.workspace.companyWebsite = null;
+      getWorkspaceContextMock.mockResolvedValue(context);
+      const response = await POST(textRequest({ baseCaption: "@surfshop", platforms: ["x"] }));
+      expect(response.status).toBe(400);
+    });
+
+    // With no list, a text post goes to every connection that takes text, X included.
+    it("checks X chosen implicitly (no list) when the workspace has X connected, and creates nothing", async () => {
+      connectionFindFirstMock.mockResolvedValue({ id: "conn-x" });
+      const response = await POST(textRequest({ baseCaption: "@surfshop @wavecafe", platforms: undefined }));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: X_EMPTY });
+      expect(connectionFindFirstMock).toHaveBeenCalledWith({
+        where: { workspaceId: "ws-1", platform: "x" },
+        select: { id: true },
+      });
+      expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    });
+
+    it("accepts it with no list when the workspace has no X connection", async () => {
+      const response = await POST(textRequest({ baseCaption: "@surfshop @wavecafe", platforms: undefined }));
+      expect(response.status).toBe(200);
+      expect(createPostJobOnlyMock).toHaveBeenCalledTimes(1);
     });
 
     it("answers a post with a photo as before", async () => {
