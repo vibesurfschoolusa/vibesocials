@@ -33,6 +33,19 @@ const NOTHING_FAILED_TEXT =
   "Nothing to retry: none of this post's platforms has failed. Activity now shows where it stands.";
 
 /**
+ * R58 publishing-flow L2: Retry all lost the claim to another retry. With
+ * platforms still left out (to reconnect, or unconfirmed), "none has failed"
+ * is untrue, so it names what is already being retried and keeps their notice.
+ */
+function lostRaceText(included: readonly Platform[], leftOutNotice: string | null): string {
+  if (!leftOutNotice) return NOTHING_FAILED_TEXT;
+  const labels = included.map(platformLabel);
+  const names = labels.length <= 1 ? labels.join("") : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+  const verb = labels.length === 1 ? "is already being retried or has gone out" : "are already being retried or have gone out";
+  return `${names} ${verb}. Activity now shows where it stands. ${leftOutNotice}`;
+}
+
+/**
  * Parsed retry request: retry every failed platform, or one named platform.
  */
 export type RetryTarget =
@@ -334,7 +347,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
         error:
           target.kind === "platform"
             ? `${platformLabel(target.platform)} is already being retried or has gone out. Activity now shows where it stands.`
-            : NOTHING_FAILED_TEXT,
+            : lostRaceText(candidates, leftOutSentence(leftOut, workspaceContext.role)),
         code: "NOTHING_TO_RETRY",
       },
       { status: 409 },

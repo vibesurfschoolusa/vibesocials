@@ -339,6 +339,48 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
+  // R58 publishing-flow L2: a lost race with platforms still left out must not
+  // say nothing has failed, and keeps the left-out notice.
+  it("Retry all failed, race lost with a platform left out: names what is being retried, keeps the notice", async () => {
+    postJobFindFirstMock.mockResolvedValue(
+      makeJob([
+        { platform: "instagram", status: "failed" },
+        { platform: "tiktok", status: "failed" },
+        { platform: "linkedin", status: "failed", errorCode: "PUBLISH_UNCONFIRMED" },
+      ]),
+    );
+    resultUpdateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+    const body = (await res.json()) as { code?: string; error?: string };
+
+    expect(res.status).toBe(409);
+    expect(body.code).toBe("NOTHING_TO_RETRY");
+    expect(body.error).toBe(
+      "Instagram and TikTok are already being retried or have gone out. Activity now shows where it stands. LinkedIn left out: check whether it posted first.",
+    );
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("Retry all failed, race lost with one platform included and one left out: the singular form", async () => {
+    postJobFindFirstMock.mockResolvedValue(
+      makeJob([
+        { platform: "instagram", status: "failed" },
+        { platform: "linkedin", status: "failed", errorCode: "PUBLISH_UNCONFIRMED" },
+      ]),
+    );
+    resultUpdateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+    const body = (await res.json()) as { code?: string; error?: string };
+
+    expect(res.status).toBe(409);
+    expect(body.code).toBe("NOTHING_TO_RETRY");
+    expect(body.error).toBe(
+      "Instagram is already being retried or has gone out. Activity now shows where it stands. LinkedIn left out: check whether it posted first.",
+    );
+  });
+
   it("single platform happy path: atomic claim, in_progress, event with just that platform", async () => {
     postJobFindFirstMock.mockResolvedValue(
       makeJob([{ platform: "tiktok", status: "failed" }]),
