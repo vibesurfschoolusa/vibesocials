@@ -534,7 +534,7 @@ describe("the per-person number", () => {
         })
       )?.error,
     ).toBe(
-      "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Approve it again in 9 hours; it then publishes at once. Or reject it and ask the member to schedule it for another day.",
+      "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Cancel or move another post still scheduled for today, then approve again. Or approve it again in 9 hours, when it publishes at once, or reject it and ask the member to schedule it for another day.",
     );
   });
 

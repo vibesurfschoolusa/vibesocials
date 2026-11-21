@@ -114,15 +114,20 @@ describe("each builder's approval form: the same facts, the approver's steps", (
 // approve again, and that the post would then go out at once.
 const todaySteps = (reset: string) =>
   `Approve it again ${reset}; it then publishes at once. Or reject it and ask the member to schedule it for another day.`;
+// R57 pages-a L2 / publishing-flow L2: the workspace's and the per-person counts
+// also hold posts still scheduled later today, so cancelling or moving one of
+// those frees room at once; only the pools count runs already gone out.
+const freeableTodaySteps = (reset: string) =>
+  `Cancel or move another post still scheduled for today, then approve again. Or approve it again ${reset}, when it publishes at once, or reject it and ask the member to schedule it for another day.`;
 const today = {
-  wsSched: `That day already has 20 posts, which is this workspace's daily limit. ${todaySteps(RESET)}`,
-  ownSched: `That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). ${todaySteps(RESET)}`,
-  ownNamedSched: `Sam, an owner of this workspace, already has 15 posts that day across the workspaces they own, which is the daily limit for one person (retries count toward it). ${todaySteps(RESET)}`,
+  wsSched: `That day already has 20 posts, which is this workspace's daily limit. ${freeableTodaySteps(RESET)}`,
+  ownSched: `That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). ${freeableTodaySteps(RESET)}`,
+  ownNamedSched: `Sam, an owner of this workspace, already has 15 posts that day across the workspaces they own, which is the daily limit for one person (retries count toward it). ${freeableTodaySteps(RESET)}`,
   svcSched: `That day is full: Vibe Socials has reached its daily limit of posts for the whole service. ${todaySteps(RESET)}`,
   poolSched: `That day is full: Vibe Socials has reached the limit of 5 posts a day shared by accounts made today (UTC) or with an unconfirmed email address. ${todaySteps(RESET)} ${NOTE}`,
 };
 
-describe("an approval for a slot later today: the reset ending, saying it then publishes at once", () => {
+describe("an approval for a slot later today: a slot to free where one can be freed, else the reset ending", () => {
   it("workspace", () => {
     expect(dailyPostLimitMessage(20, "schedule", time, "approval", true)).toBe(today.wsSched);
   });
@@ -154,6 +159,21 @@ describe("an approval for a slot later today: the reset ending, saying it then p
   it("a reset in the reader's zone is kept whole", () => {
     const zoned = { now: time.now, timeZone: "America/New_York" };
     const reset = dailyPostLimitMessage(20, "now", zoned).match(/try again (from .*)\.$/)![1]!;
-    expect(dailyPostLimitMessage(20, "schedule", zoned, "approval", true)).toContain(todaySteps(reset));
+    expect(serviceDailyPostLimitMessage("schedule", zoned, "approval", true)).toContain(todaySteps(reset));
+    expect(dailyPostLimitMessage(20, "schedule", zoned, "approval", true)).toContain(freeableTodaySteps(reset));
+  });
+  it("only the two pools leave out the free-a-slot step today", () => {
+    const built = {
+      wsSched: dailyPostLimitMessage(20, "schedule", time, "approval", true),
+      ownSched: ownerDailyPostLimitMessage(15, "schedule", null, null, time, {}, "approval", true),
+      ownNamedSched: ownerDailyPostLimitMessage(15, "schedule", null, holder, time, {}, "approval", true),
+      svcSched: serviceDailyPostLimitMessage("schedule", time, "approval", true),
+      poolSched: newAccountPoolMessage("schedule", time, "approval", true),
+    };
+    for (const [key, text] of Object.entries(built)) {
+      const pool = key === "svcSched" || key === "poolSched";
+      expect(text.includes("Cancel or move another post still scheduled for today, then approve again.")).toBe(!pool);
+      expect(text.includes("it then publishes at once")).toBe(pool);
+    }
   });
 });

@@ -147,8 +147,9 @@ describe("checkDailyPostLimit", () => {
   // already published or failed, so "Cancel or move another post on that day"
   // names posts the Queue doesn't have, and room never comes back today.
   describe("an approval at the limit: whether the counted day is today", () => {
+    // R57 pages-a L2: this count also holds posts still scheduled later today, so freeing one comes first.
     const TODAY_STEPS =
-      "Approve it again in 9 hours; it then publishes at once. Or reject it and ask the member to schedule it for another day.";
+      "Cancel or move another post still scheduled for today, then approve again. Or approve it again in 9 hours, when it publishes at once, or reject it and ask the member to schedule it for another day.";
 
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ["Date"] });
