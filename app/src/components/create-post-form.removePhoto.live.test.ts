@@ -24,11 +24,14 @@ vi.mock("@/lib/prepareUploadFile", async (importOriginal) => {
 /** Every upload asked for: the key and its signal. Keys naming a `stall` entry never finish unless aborted. */
 const uploads: { key: string; signal: AbortSignal | undefined }[] = [];
 const stall = new Set<string>();
+/** A stalled upload's finish, by key: the test lets it go. */
+const release = new Map<string, () => void>();
 vi.mock("@vercel/blob/client", () => ({
   upload: (key: string, _file: File, options: { abortSignal?: AbortSignal }) => {
     uploads.push({ key, signal: options.abortSignal });
     if (![...stall].some((name) => key.includes(name))) return Promise.resolve({ url: `https://blob.example/${key}` });
-    return new Promise((_resolve, reject) => {
+    return new Promise((resolve, reject) => {
+      release.set(key, () => resolve({ url: `https://blob.example/${key}` }));
       options.abortSignal?.addEventListener("abort", () => reject(new Error("The request was aborted.")));
     });
   },
@@ -42,7 +45,14 @@ let root: Root;
 let container: FakeNode;
 let body: FakeNode;
 
-const fetchMock = vi.fn(() => Promise.resolve(Response.json({})));
+const posted: string[] = [];
+const fetchMock = vi.fn((input: unknown, init?: { method?: string }) => {
+  if (String(input) === "/api/posts" && init?.method === "POST") {
+    posted.push(String(input));
+    return Promise.resolve(Response.json({ postJob: { id: "job-1" } }));
+  }
+  return Promise.resolve(Response.json({}));
+});
 
 function find(node: FakeNode, test: (n: FakeNode) => boolean): FakeNode | null {
   if (test(node)) return node;
@@ -132,6 +142,8 @@ beforeEach(async () => {
   vi.stubGlobal("Node", class {});
   uploads.length = 0;
   stall.clear();
+  release.clear();
+  posted.length = 0;
   root = createRoot(container as unknown as HTMLElement);
   await mount();
 });
@@ -266,5 +278,83 @@ describe("Create: a photo removed while it uploads", () => {
     } finally {
       consoleError.mockRestore();
     }
+  }, 10_000);
+
+  // R62 fix review M1/L1: a pressed Publish that waits on the upload.
+  /** The page as navigation leaves it: the form goes, the toasts (ToastProvider) stay. */
+  async function leaveForm() {
+    await act(async () => {
+      root.render(createElement(ToastProvider, null, null));
+    });
+    await settle();
+  }
+  const typeCaption = (value: string) => run(() => props(byId("post-caption")).onChange({ target: { value } }));
+  async function pressPublishAndConfirm() {
+    await run(() => props(byId("create-post-form")).onSubmit({ preventDefault() {} }));
+    const dialog = find(body, (n) => n.attributes?.role === "dialog");
+    if (!dialog) throw new Error("no Publish dialog");
+    const confirm = find(
+      dialog,
+      (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() !== "Cancel" && (n.textContent as string).trim() !== "",
+    );
+    if (!confirm) throw new Error("no confirm button");
+    await run(() => props(confirm).onClick());
+  }
+  const UNEXPECTED = "Unexpected error while creating post.";
+
+  it("Publish pressed during the upload, then the page is left: the upload goes on and the post is sent, with no toast", async () => {
+    stall.add("press");
+    await typeCaption("Surf lesson today");
+    await pick(new File(["v"], "press.mp4", { type: "video/mp4" }));
+    await pressPublishAndConfirm();
+    expect(posted).toHaveLength(0);
+
+    await leaveForm();
+    expect(uploadsOf("press")[0]!.signal?.aborted).toBe(false);
+    await act(async () => release.get(uploadsOf("press")[0]!.key)!());
+    await settle();
+
+    expect(posted).toHaveLength(1);
+    expect(pageSays(UNEXPECTED)).toBe(false);
+    expect(pageSays("nothing was posted")).toBe(false);
+  }, 10_000);
+
+  it("the page is left with no press waiting: the upload is aborted, as before", async () => {
+    stall.add("idle");
+    await pick(new File(["v"], "idle.mp4", { type: "video/mp4" }));
+    await leaveForm();
+    expect(uploadsOf("idle")[0]!.signal?.aborted).toBe(true);
+    expect(posted).toHaveLength(0);
+    expect(pageSays(UNEXPECTED)).toBe(false);
+  }, 10_000);
+
+  it("the file is changed while the post sends: the press's own sentence, and nothing is posted", async () => {
+    stall.add("old");
+    await typeCaption("Surf lesson today");
+    await pick(new File(["v"], "old.mp4", { type: "video/mp4" }));
+    await pressPublishAndConfirm();
+    await pick(new File(["n"], "new.mp4", { type: "video/mp4" }));
+
+    expect(uploadsOf("old")[0]!.signal?.aborted).toBe(true);
+    expect(posted).toHaveLength(0);
+    expect(pageSays(UNEXPECTED)).toBe(false);
+    expect(
+      pageSays(
+        "You changed the file while the post was sending, so nothing was posted. Press Publish post again to post the new file.",
+      ),
+    ).toBe(true);
+  }, 10_000);
+
+  it("the file is removed while the post sends: its sentence, and nothing is posted", async () => {
+    stall.add("dropped");
+    await typeCaption("Surf lesson today");
+    await pick(new File(["v"], "dropped.mp4", { type: "video/mp4" }));
+    await pressPublishAndConfirm();
+    await pick();
+
+    expect(uploadsOf("dropped")[0]!.signal?.aborted).toBe(true);
+    expect(posted).toHaveLength(0);
+    expect(pageSays(UNEXPECTED)).toBe(false);
+    expect(pageSays("You removed the file while the post was sending, so nothing was posted.")).toBe(true);
   }, 10_000);
 });
