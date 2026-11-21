@@ -424,7 +424,7 @@ describe("a refused upload's sentence reaches the person", () => {
   });
 
   // R62 pages-a-2 L1: only this file doesn't fit; the page names what still can.
-  it("19.7 GB used plus a 400 MB file: the \"would take you past\" sentence, in the answer and on the page", async () => {
+  it("19.7 GB used plus a 400 MB file: the answer names what is left, the page says a smaller file may still go", async () => {
     const left = (20 * 1024 * 1024 - Math.round(19.7 * 1024 * 1024)) * 1024;
     consumeDayBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 32_400, leftBytes: left });
     const past =
@@ -432,7 +432,10 @@ describe("a refused upload's sentence reaches the person", () => {
     const res = await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: JSON.stringify({ size: 400 * MB }), multipart: false });
     expect(res.status).toBe(429);
     await expect(res.json()).resolves.toEqual({ error: past, retryAfterSeconds: 32_400 });
-    await expect(shown()).resolves.toBe(past);
+    // The page's later question gets the remembered wording, with no number.
+    await expect(shown()).resolves.toBe(
+      "This file would take you past today's 20 GB upload limit. A smaller file may still go today; the limit resets at midnight UTC.",
+    );
   });
 
   it("exactly at 20 GB: the \"used\" sentence, in the answer and on the page", async () => {
