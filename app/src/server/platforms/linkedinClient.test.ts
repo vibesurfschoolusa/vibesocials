@@ -9,6 +9,8 @@ import {
   ensureFreshLinkedInToken,
   LINKEDIN_ASSET_MAX_WAIT_MS,
   LINKEDIN_ASSET_POLL_INTERVAL_MS,
+  LINKEDIN_COVER_FRAME_ONLY_NOTE,
+  LINKEDIN_COVER_REFUSED_NOTE,
   LINKEDIN_INLINE_VIDEO_POLL_MS,
   LINKEDIN_INLINE_VIDEO_WAIT_MS,
   LINKEDIN_MAX_UPLOAD_RESTARTS,
@@ -4073,6 +4075,42 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
 
       expect(error?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
       expect(li.sequence()).toEqual(["blob", "register"]);
+    });
+  });
+
+  // R60 platform-clients-2 L2: the multipart path asks for no thumbnail, so a
+  // chosen cover is not set; the post says so with the whole-file path's note.
+  describe("a chosen cover", () => {
+    const imageCover = { cover: { imageUrl: "https://blob.example.com/cover.jpg" } };
+
+    it("an image cover: no thumbnail is asked for, and the post carries the cover note", async () => {
+      const start = fakeStore();
+      const li = stubLinkedIn();
+
+      expect(await run(bigCtx(start.store, imageCover))).toHaveProperty("continuation");
+      expect(bodyOf(li.registers()[0]).initializeUploadRequest.uploadThumbnail).toBe(false);
+
+      const { store } = fakeStore(processingState(3 * MINUTE));
+      stubLinkedIn();
+      expect(await run(bigCtx(store, imageCover))).toEqual({
+        externalPostId: "urn:li:share:77",
+        note: LINKEDIN_COVER_REFUSED_NOTE,
+      });
+    });
+
+    it("a frame without an image: the post carries the frame-only note", async () => {
+      const { store } = fakeStore(processingState(3 * MINUTE));
+      stubLinkedIn();
+      expect(await run(bigCtx(store, { cover: { timeMs: 500 } }))).toEqual({
+        externalPostId: "urn:li:share:77",
+        note: LINKEDIN_COVER_FRAME_ONLY_NOTE,
+      });
+    });
+
+    it("no cover: the post has no note, as before", async () => {
+      const { store } = fakeStore(processingState(3 * MINUTE));
+      stubLinkedIn();
+      expect(await run(bigCtx(store))).toEqual({ externalPostId: "urn:li:share:77" });
     });
   });
 });
