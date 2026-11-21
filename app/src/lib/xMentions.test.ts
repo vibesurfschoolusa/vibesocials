@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildPlatformPreview } from "./platformPreview";
 import { adaptMaxLength } from "./platformOverrides";
 import { removeXMentions } from "./xMentions";
+import { xWeightedLength } from "./xWeightedLength";
 import { computeTweetText } from "@/server/platforms/xClient";
 
 // The footer from the 2026-11-08 live post that X refused with 403.
@@ -124,5 +125,39 @@ describe("X text: client and preview agree", () => {
 
   it("other platforms keep their mentions", () => {
     expect(buildPlatformPreview({ platform: "instagram", caption: LIVE_POST }).rendered).toContain("@visitflorida");
+  });
+});
+
+// R59 second look: the cut uses xWeightedLength's own link test (countsAsLink),
+// never a copy, so a name is cut exactly when the X count weighs it as a link.
+describe("removeXMentions and the X count agree on links", () => {
+  it.each([
+    ["kai.surf", true],
+    ["surf.co", true],
+    ["kai.Surf", false],
+    ["kai.Thanks", false],
+  ] as const)("@%s: cut before its dot %s, as the X count weighs it", (name, isLink) => {
+    expect(xWeightedLength(name) === 23).toBe(isLink);
+    expect(removeXMentions(`Hi @${name}`)).toBe(isLink ? `Hi ${name.slice(0, name.indexOf("."))}` : `Hi ${name}`);
+  });
+
+  it("keeps \"kai.Surf\" whole: a capitalised ending is not a link (G1 rule)", () => {
+    expect(removeXMentions("Coached by @kai.Surf")).toBe("Coached by kai.Surf");
+  });
+
+  it("keeps \"kai.Thanks\" whole: \"Thanks\" is not a link ending", () => {
+    expect(removeXMentions("Shot by @kai.Thanks for watching")).toBe("Shot by kai.Thanks for watching");
+  });
+
+  it("keeps \"kai.pro\" whole: \"pro\" is not on the ending list (known limit)", () => {
+    expect(removeXMentions("Coached by @kai.pro")).toBe("Coached by kai.pro");
+  });
+
+  it("calls the shared link test instead of a copy of it", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./xMentions.ts", import.meta.url)), "utf8");
+    expect(source).toContain("countsAsLink(");
+    expect(source).not.toContain("xWeightedLength(");
   });
 });

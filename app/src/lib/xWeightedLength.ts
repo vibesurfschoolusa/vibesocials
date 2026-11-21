@@ -96,7 +96,7 @@ function typedEnding(text: string): string {
   return host.slice(host.lastIndexOf(".") + 1);
 }
 
-function countsAsLink(link: TextLink, text: string): boolean {
+export function countsAsLink(link: TextLink, text: string): boolean {
   if (link.hasScheme || link.hasWww) return true;
   const ending = typedEnding(text);
   return ending === ending.toLowerCase() && isLinkEnding(link.tld);

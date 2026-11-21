@@ -1,13 +1,11 @@
 import { hashtagsIn } from "@/lib/hashtags";
-import { X_LINK_WEIGHT, xWeightedLength } from "@/lib/xWeightedLength";
+import { textUnits } from "@/lib/truncate";
+import { countsAsLink } from "@/lib/xWeightedLength";
 
 const MENTION = /(^|[\s([{])@([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)/g;
 const MENTION_TOKEN = /^@[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*[,;]*$/;
 // Characters people put between footer tags: "#surf · @kai | @mia, @ana".
 const SEPARATOR_TOKEN = /^[·•|,;/–—-]+$/;
-// Longer than X's link weight, so the padded name weighs X_LINK_WEIGHT only
-// when X counts it as a link.
-const LINK_PROBE = `${"a".repeat(X_LINK_WEIGHT + 7)}.`;
 
 function isHashtagToken(token: string): boolean {
   const bare = token.replace(/[,;]+$/, "");
@@ -44,11 +42,16 @@ function withoutMentions(tokens: readonly string[]): string {
  * The name a mention in running text leaves. R59 fix review L2: a dotted name
  * that X would count as a link ("vibesurfschool.za", "surf.co") keeps only the
  * part before its first dot, so the post never carries a link nobody wrote.
- * The test is xWeightedLength's own, on the name behind a long label.
+ * The test is the X count's own (countsAsLink), so the count and the cut
+ * agree: a capitalised ending ("kai.Surf") is not a link (G1), and an ending
+ * off X's list (".pro") is not cut.
  */
 function bareName(name: string): string {
   if (!name.includes(".")) return name;
-  return xWeightedLength(LINK_PROBE + name) === X_LINK_WEIGHT ? name.slice(0, name.indexOf(".")) : name;
+  const units = textUnits(name);
+  const [unit] = units;
+  const isLink = units.length === 1 && unit.link !== null && countsAsLink(unit.link, unit.text);
+  return isLink ? name.slice(0, name.indexOf(".")) : name;
 }
 
 function inRunningText(line: string): string {
