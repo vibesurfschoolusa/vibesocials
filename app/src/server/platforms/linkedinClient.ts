@@ -547,7 +547,7 @@ export const LINKEDIN_COVER_FRAME_ONLY_NOTE =
   "Cover not set: LinkedIn needs the cover as an image, and the chosen frame could not be saved as one.";
 /** R60 platform-clients-2 L2: the multipart path (a video over 50 MiB) sends no cover. */
 export const LINKEDIN_COVER_LARGE_VIDEO_NOTE =
-  "Cover not set: a video over 50 MB is sent to LinkedIn in parts, without the chosen cover, so the video uses its own.";
+  "Cover not set: a video over 50 MB is sent to LinkedIn in parts, without the chosen cover, so LinkedIn shows a frame from the video. To use your cover, post a video of 50 MB or less.";
 export const LINKEDIN_COVER_UNREADABLE_NOTE =
   "Cover not set: the cover image could not be read from storage, so the video uses its own.";
 

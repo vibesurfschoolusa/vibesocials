@@ -56,8 +56,28 @@ function bareName(name: string): string {
   return hasLink ? name.slice(0, name.indexOf(".")) : name;
 }
 
+/**
+ * Where the links the X count finds lie in `line`, as [start, end) offsets.
+ * R60 fix review M1: an "@" inside one ("youtube.com/@vibesurfschool") belongs
+ * to the link, so it is never taken for a mention. The spans come from
+ * textUnits, the X count's own split, so the count and the cut agree.
+ */
+function linkSpans(line: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  let at = 0;
+  for (const unit of textUnits(line)) {
+    if (unit.link !== null) spans.push([at, at + unit.text.length]);
+    at += unit.text.length;
+  }
+  return spans;
+}
+
 function inRunningText(line: string): string {
-  return line.replace(MENTION, (_whole, name: string) => bareName(name));
+  if (!line.includes("@")) return line;
+  const spans = linkSpans(line);
+  return line.replace(MENTION, (whole: string, name: string, offset: number) =>
+    spans.some(([start, end]) => offset >= start && offset < end) ? whole : bareName(name),
+  );
 }
 
 /** One paragraph's lines: a footer paragraph loses its mentions whole, any other only their "@". */
@@ -141,8 +161,13 @@ export function removeXMentions(text: string): string {
       if (kept.trim() !== "") lines.push(kept);
     });
     if (lines.length > 0) out.push({ blank: false, lines });
-    else if (out.at(-1)?.blank) out.pop();
-    else dropNextBlank = true;
+    else {
+      // R60 fix review L1: with nothing kept before it, the blank lines on
+      // both sides go, so no stray newline starts the post.
+      const keptBefore = out.some((kept) => !kept.blank);
+      if (out.at(-1)?.blank) out.pop();
+      if (!keptBefore) dropNextBlank = true;
+    }
   }
   return changed ? out.flatMap((block) => block.lines).join("\n") : text;
 }
