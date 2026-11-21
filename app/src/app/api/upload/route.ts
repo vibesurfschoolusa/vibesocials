@@ -17,13 +17,18 @@ import { MISSING_WORKSPACE_ID_CODE, renderedWorkspaceRefusal, sentWorkspaceId } 
 import { checkStorageLimit } from "@/server/usage/workspaceUsage";
 
 import {
-  UPLOAD_BYTES_LIMIT_MESSAGE,
   UPLOAD_COUNTER_UNAVAILABLE_MESSAGE,
   consumeUploadDayBytes,
   declaredUploadSize,
   releaseUploadDayBytes,
 } from "./uploadBudget";
-import { clearUploadRefusal, readUploadRefusal, recordUploadRefusal } from "./uploadRefusal";
+import {
+  clearUploadRefusal,
+  dayLimitRefusalMessage,
+  readUploadRefusal,
+  recordDayLimitRefusal,
+  recordUploadRefusal,
+} from "./uploadRefusal";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
@@ -201,9 +206,10 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({ error: UPLOAD_COUNTER_UNAVAILABLE_MESSAGE }, { status: 503 });
     }
     if (!day.allowed) {
-      await recordUploadRefusal(user.id, "day-limit");
+      // R62 pages-a-2 L1: worded from what the day had left before this file.
+      await recordDayLimitRefusal(user.id, day.leftBytes);
       return NextResponse.json(
-        { error: UPLOAD_BYTES_LIMIT_MESSAGE, retryAfterSeconds: day.retryAfterSeconds },
+        { error: dayLimitRefusalMessage(day.leftBytes), retryAfterSeconds: day.retryAfterSeconds },
         { status: 429, headers: { "Retry-After": String(day.retryAfterSeconds ?? 60) } },
       );
     }

@@ -55,14 +55,15 @@ export function declaredUploadSize(
 
 /**
  * Count `bytes` against the person's UTC day, as linkBytes.ts does for a link.
- * A refused file gives its share back, so a smaller one still fits. Fails
- * closed: each token can write up to 512 MB.
+ * A refused file gives its share back, so a smaller one still fits, and
+ * `leftBytes` says how much did (R62 pages-a-2 L1). Fails closed: each token
+ * can write up to 512 MB.
  */
 export async function consumeUploadDayBytes(
   userId: string,
   bytes: number,
   now: number = Date.now(),
-): Promise<RateLimitResult & { unavailable?: true }> {
+): Promise<RateLimitResult & { unavailable?: true; leftBytes?: number }> {
   const { key, resetAt } = dayKey(userId, now);
   const kib = toKib(bytes);
   try {
@@ -75,7 +76,11 @@ export async function consumeUploadDayBytes(
     await prisma.rateLimitEntry
       .update({ where: { key }, data: { count: { decrement: kib } } })
       .catch((error: unknown) => console.error("[upload] Couldn't give back refused bytes (ignored)", error));
-    return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((resetAt.getTime() - now) / 1000)) };
+    return {
+      allowed: false,
+      retryAfterSeconds: Math.max(1, Math.ceil((resetAt.getTime() - now) / 1000)),
+      leftBytes: Math.max(0, LIMIT_KIB - (entry.count - kib)) * 1024,
+    };
   } catch (error) {
     console.error("[upload] Byte counter store error, failing closed", error);
     return { allowed: false, retryAfterSeconds: 60, unavailable: true };

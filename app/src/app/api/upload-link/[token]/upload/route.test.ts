@@ -345,7 +345,7 @@ describe("the bytes a link takes in a day", () => {
   });
 
   it("refuses with a plain sentence once the link's day is full, and signs nothing", async () => {
-    consumeBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 5000 });
+    consumeBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 5000, leftBytes: 0 });
 
     const response = await call(tokenRequest());
 

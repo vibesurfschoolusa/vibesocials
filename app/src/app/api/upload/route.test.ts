@@ -342,7 +342,7 @@ describe("POST /api/upload — declared size and the day's bytes", () => {
   });
 
   it("refuses with a plain sentence once the person's day is used up, signing nothing", async () => {
-    consumeDayBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 32_400 });
+    consumeDayBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 32_400, leftBytes: 0 });
 
     const res = await tokenWith(SIZE_PAYLOAD);
 
@@ -417,7 +417,7 @@ describe("a refused upload's sentence reaches the person", () => {
   });
 
   it("the day's 20 GB is told when uploads start again", async () => {
-    consumeDayBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 32_400 });
+    consumeDayBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 32_400, leftBytes: 0 });
     expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false })).status).toBe(429);
     await expect(shown()).resolves.toBe(UPLOAD_DAY_LIMIT_MESSAGE);
     expect(UPLOAD_BYTES_LIMIT_MESSAGE).toBe(UPLOAD_DAY_LIMIT_MESSAGE);
@@ -501,7 +501,7 @@ describe("a refused upload's sentence reaches the person", () => {
   });
 
   it("a token request refused by the token rate limit forgets the older reason too", async () => {
-    consumeDayBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 32_400 });
+    consumeDayBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 32_400, leftBytes: 0 });
     await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false });
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
     expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false })).status).toBe(429);

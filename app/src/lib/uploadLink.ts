@@ -28,6 +28,19 @@ export const UPLOAD_LINK_IP_LIMIT_MESSAGE = `${UPLOAD_LINK_IP_LIMIT_REASON} Try 
 export const UPLOAD_LINK_BYTES_LIMIT_REASON = "This link has taken 20 GB of files today, its daily limit.";
 export const UPLOAD_LINK_BYTES_LIMIT_MESSAGE = `${UPLOAD_LINK_BYTES_LIMIT_REASON} Send the rest tomorrow.`;
 
+/**
+ * R62 pages-a-2 L1: the link's 20 GB refusal, from the bytes its day had left
+ * before this file. Under 1 MB left, the day is used up; unknown, a smaller
+ * file may still fit. Not in send-file.ts's limit list, so /u shows it as it is.
+ */
+export function uploadLinkBytesLimitMessage(leftBytes: number | undefined): string {
+  const past = "This file would take this link past today's 20 GB upload limit.";
+  if (leftBytes === undefined) return `${past} A smaller file may still go today; the limit resets at midnight UTC.`;
+  const leftMb = Math.floor(leftBytes / (1024 * 1024));
+  if (leftMb < 1) return UPLOAD_LINK_BYTES_LIMIT_MESSAGE;
+  return `${past} A file under ${leftMb} MB can still go today; the limit resets at midnight UTC.`;
+}
+
 /** Files one link takes in a UTC day, counted on the upload token and on the registration. */
 export const UPLOAD_LINK_FILES_PER_DAY = 200;
 /**

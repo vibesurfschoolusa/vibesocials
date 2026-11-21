@@ -10,7 +10,6 @@ import { unsupportedTypeMessage, uploadTypeOf } from "@/lib/prepareUploadFile";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import {
-  UPLOAD_LINK_BYTES_LIMIT_MESSAGE,
   UPLOAD_LINK_DAILY_LIMIT_MESSAGE,
   UPLOAD_LINK_FILES_PER_DAY,
   UPLOAD_LINK_INACTIVE_MESSAGE,
@@ -18,6 +17,7 @@ import {
   UPLOAD_LINK_IP_PER_HOUR,
   UPLOAD_LINK_STORAGE_FULL_MESSAGE,
   requestIp,
+  uploadLinkBytesLimitMessage,
   uploadLinkPathname,
   uploadLinkStoragePrefix,
 } from "@/lib/uploadLink";
@@ -137,7 +137,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
   }
   if (!bytesLimit.allowed) {
     await releaseUploadLinkReservation(link.id, { file: true, bytes: 0 });
-    return tooMany(UPLOAD_LINK_BYTES_LIMIT_MESSAGE, bytesLimit.retryAfterSeconds);
+    return tooMany(uploadLinkBytesLimitMessage(bytesLimit.leftBytes), bytesLimit.retryAfterSeconds);
   }
 
   const storageFull = await checkStorageLimit(link.workspaceId);
