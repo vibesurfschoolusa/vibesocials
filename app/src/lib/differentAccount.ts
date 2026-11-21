@@ -47,6 +47,8 @@ export function connectedAccountName(connection: {
   if (connection.platform === "linkedin") return connection.username || "the connected LinkedIn page";
   // R8 review: a Facebook Page's identifier is its numeric id.
   if (connection.platform === "facebook_page") return connection.username || "the connected Facebook Page";
+  // R59 fix review L1: a TikTok identifier is its opaque open_id, never shown.
+  if (connection.platform === "tiktok") return connection.username || "the connected TikTok account";
   return connection.username || connection.accountIdentifier || `the connected ${platformLabel(connection.platform)} account`;
 }
 

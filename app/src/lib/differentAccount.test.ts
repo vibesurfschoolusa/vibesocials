@@ -338,3 +338,39 @@ describe("signInTo: who has to sign in", () => {
     expect(signInTo("x", "@surfco")).toBe("sign in to @surfco");
   });
 });
+
+// R59 fix review L1: a TikTok accountIdentifier is its opaque open_id, so a
+// TikTok row with no name is "the connected TikTok account" everywhere.
+describe("a TikTok connection with no name", () => {
+  const row = { platform: "tiktok" as const, username: null, accountIdentifier: "-000AbOpenId" };
+
+  it("is named the connected TikTok account, never by its open_id", () => {
+    expect(connectedAccountName(row)).toBe("the connected TikTok account");
+    expect(connectedAccountName({ ...row, username: "Vibe Surf" })).toBe("Vibe Surf");
+  });
+
+  it("the Settings banner names it without the open_id", () => {
+    const message = reconnectDifferentAccountMessage("tiktok", connectedAccountName(row));
+    expect(message).toContain("the connected TikTok account");
+    expect(message).not.toContain("-000AbOpenId");
+  });
+
+  it("the /c banner names it without the open_id", () => {
+    const message = linkDifferentAccountMessage("tiktok", connectedAccountName(row));
+    expect(message).toContain("the connected TikTok account");
+    expect(message).not.toContain("-000AbOpenId");
+  });
+
+  it("the owners' email names it without the open_id", async () => {
+    const { buildRefusedConnectEmail } = await import("@/server/notifications/refusedConnectEmail");
+    const email = buildRefusedConnectEmail({
+      platform: "tiktok",
+      workspaceId: "ws-1",
+      workspaceName: "Surf Co",
+      connectedName: connectedAccountName(row),
+      appBaseUrl: null,
+    });
+    expect(email.html).toContain("the connected TikTok account");
+    expect(`${email.subject}${email.html}`).not.toContain("-000AbOpenId");
+  });
+});
