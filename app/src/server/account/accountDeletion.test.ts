@@ -5,6 +5,7 @@ const m = vi.hoisted(() => ({
   rowsFindMany: vi.fn(),
   postJobFindFirst: vi.fn(),
   postJobGroupBy: vi.fn(),
+  scheduledFindMany: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -13,7 +14,13 @@ vi.mock("@/lib/db", () => ({
     workspace: { findMany: vi.fn(async () => []) },
     socialConnection: { findMany: m.rowsFindMany },
     mediaItem: { findMany: m.rowsFindMany },
-    postJob: { findMany: m.rowsFindMany, findFirst: m.postJobFindFirst, groupBy: m.postJobGroupBy },
+    // The scheduled count selects the pair link; the other reads select only the workspace.
+    postJob: {
+      findMany: (args: { select?: Record<string, unknown> }) =>
+        args.select?.storyOfPostJobId ? m.scheduledFindMany(args) : m.rowsFindMany(args),
+      findFirst: m.postJobFindFirst,
+      groupBy: m.postJobGroupBy,
+    },
     postMetric: { findMany: m.rowsFindMany },
   },
 }));
@@ -27,6 +34,9 @@ beforeEach(() => {
   m.rowsFindMany.mockResolvedValue([]);
   m.postJobFindFirst.mockResolvedValue(null);
   m.postJobGroupBy.mockResolvedValue([{ workspaceId: "ws-personal", _count: { _all: 3 } }]);
+  m.scheduledFindMany.mockResolvedValue(
+    ["a", "b", "c"].map((id) => ({ id, storyOfPostJobId: null, workspaceId: "ws-personal" })),
+  );
 });
 
 describe("blockedMessage", () => {
@@ -101,9 +111,41 @@ describe("accountDeletionPreview", () => {
       leaveWorkspaces: [{ name: "Joined" }],
       refusal: null,
     });
-    expect(m.postJobGroupBy).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { workspaceId: { in: ["ws-personal"] }, status: "scheduled" } }),
-    );
+    expect(m.scheduledFindMany).toHaveBeenCalledWith({
+      where: { workspaceId: { in: ["ws-personal"] }, status: "scheduled" },
+      select: { id: true, storyOfPostJobId: true, workspaceId: true },
+    });
+  });
+
+  // R62 client-journey-2 L1: a Feed and Story post is two jobs but one post.
+  describe("the scheduled count, a pair counted once", () => {
+    const owned = (id: string, name: string) => ({ role: "owner", workspace: { id, name, members: [] } });
+
+    it("one scheduled Feed and Story pair reads 1", async () => {
+      m.memberFindMany.mockResolvedValue([owned("ws-personal", "Personal")]);
+      m.scheduledFindMany.mockResolvedValue([
+        { id: "feed", storyOfPostJobId: null, workspaceId: "ws-personal" },
+        { id: "story", storyOfPostJobId: "feed", workspaceId: "ws-personal" },
+      ]);
+      const preview = await accountDeletionPreview("user-1");
+      expect(preview.deleteWorkspaces).toEqual([{ name: "Personal", scheduledCount: 1 }]);
+    });
+
+    it("two separate posts read 2, each workspace counted on its own", async () => {
+      m.memberFindMany.mockResolvedValue([owned("ws-personal", "Personal"), owned("ws-club", "Club")]);
+      m.scheduledFindMany.mockResolvedValue([
+        { id: "a", storyOfPostJobId: null, workspaceId: "ws-personal" },
+        { id: "b", storyOfPostJobId: null, workspaceId: "ws-personal" },
+        { id: "c", storyOfPostJobId: null, workspaceId: "ws-club" },
+      ]);
+      const preview = await accountDeletionPreview("user-1");
+      expect(preview.deleteWorkspaces).toEqual(
+        expect.arrayContaining([
+          { name: "Personal", scheduledCount: 2 },
+          { name: "Club", scheduledCount: 1 },
+        ]),
+      );
+    });
   });
 
   it("gives the blocking sentence when the user is the only owner of a shared workspace", async () => {

@@ -16,7 +16,9 @@ const {
   usageMock,
   membershipCountMock,
   findLogoRowMock,
+  scheduledJobsMock,
 } = vi.hoisted(() => ({
+  scheduledJobsMock: vi.fn<(args?: unknown) => Promise<unknown[]>>(async () => []),
   findLogoRowMock: vi.fn<(args?: unknown) => Promise<unknown>>(async () => null),
   membershipCountMock: vi.fn<(args?: unknown) => Promise<number>>(async () => 2),
   usageMock: vi.fn<(...args: unknown[]) => Promise<null>>(async () => null),
@@ -54,7 +56,7 @@ vi.mock("@/lib/db", () => ({
     socialConnection: { findMany: findConnectionsMock },
     workspace: { findUnique: findLogoRowMock },
     workspaceMember: { findMany: findOwnersMock, count: membershipCountMock },
-    postJob: { count: async () => 0 },
+    postJob: { findMany: scheduledJobsMock },
   },
 }));
 vi.mock("@/server/account/accountDeletion", () => ({ accountDeletionPreview: async () => null }));
@@ -453,6 +455,39 @@ describe("SettingsPage — the rendered workspace", () => {
       expect(sectionProps.TeamSection?.onlyWorkspace).toBe(memberships === 1);
       expect(membershipCountMock).toHaveBeenCalledWith({ where: { userId: "user-1" } });
     }
+  });
+
+  // R62 client-journey-2 L1: a Feed and Story post is two jobs but one post.
+  describe("the Delete workspace scheduled count", () => {
+    async function scheduledCountOf(rows: { id: string; storyOfPostJobId: string | null }[]) {
+      scheduledJobsMock.mockReset();
+      scheduledJobsMock.mockResolvedValue(rows);
+      for (const key of Object.keys(sectionProps)) delete sectionProps[key];
+      await render("owner");
+      expect(scheduledJobsMock).toHaveBeenCalledWith({
+        where: { workspaceId: "ws-1", status: "scheduled" },
+        select: { id: true, storyOfPostJobId: true },
+      });
+      return (sectionProps.TeamSection?.deletion as { scheduledCount: number }).scheduledCount;
+    }
+
+    it("one scheduled Feed and Story pair reads 1", async () => {
+      expect(
+        await scheduledCountOf([
+          { id: "feed", storyOfPostJobId: null },
+          { id: "story", storyOfPostJobId: "feed" },
+        ]),
+      ).toBe(1);
+    });
+
+    it("two separate posts read 2", async () => {
+      expect(
+        await scheduledCountOf([
+          { id: "a", storyOfPostJobId: null },
+          { id: "b", storyOfPostJobId: null },
+        ]),
+      ).toBe(2);
+    });
   });
 
   it("reads no membership count for a member, who has no Leave line", async () => {
