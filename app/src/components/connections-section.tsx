@@ -182,7 +182,10 @@ export function ConnectionsSection({
           const isGoogleBusinessProfile = key === "google_business_profile";
           // A Business Profile has no account name to show until a location is
           // chosen (lib/connectionSummary.ts names it after that location).
-          const username = connection?.username ?? (connection?.accountIdentifier || null);
+          // R59 new-customer-2 L1: TikTok's accountIdentifier is its opaque
+          // open_id, so a TikTok row with no name says "Connected" instead.
+          const username =
+            connection?.username ?? (key === "tiktok" ? null : connection?.accountIdentifier || null);
           const locationName = connection?.locationName ?? null;
 
           return (

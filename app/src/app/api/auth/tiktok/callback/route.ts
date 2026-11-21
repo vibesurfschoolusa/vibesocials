@@ -171,7 +171,8 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
         expiresAt,
         accountIdentifier,
         scopes,
-        metadata,
+        // R59 new-customer-2 L1: a reconnect whose name read failed keeps the stored name.
+        ...(displayName ? { metadata } : {}),
         // Roadmap Phase 4: successful reconnect clears the flag set by a
         // prior refresh failure (see server/platforms/connectionHealth.ts).
         needsReconnect: false,

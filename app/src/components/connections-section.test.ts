@@ -289,3 +289,22 @@ describe("ConnectionsSection names each card's controls by platform", () => {
     expect(source).toContain("aria-label={`Coming soon: ${label}`}");
   });
 });
+
+// R59 new-customer-2 L1: TikTok's accountIdentifier is its opaque open_id, never a name to show.
+describe("ConnectionsSection, a TikTok row with no account name", () => {
+  it("a first connect with no name says Connected, never the open_id", () => {
+    const html = render({ connections: [{ ...connected("tiktok"), accountIdentifier: "-000AbOpenId", username: null }] });
+    expect(html).toContain(">Connected</p>");
+    expect(html).not.toContain("-000AbOpenId");
+  });
+
+  it("with a name, says Connected as the name", () => {
+    const html = render({ connections: [{ ...connected("tiktok"), accountIdentifier: "-000AbOpenId", username: "Vibe Surf" }] });
+    expect(html).toContain("Connected as Vibe Surf");
+  });
+
+  it("other platforms still fall back to their account id, as now", () => {
+    const html = render({ connections: [{ ...connected("x"), accountIdentifier: "vibesurf", username: null }] });
+    expect(html).toContain("Connected as vibesurf");
+  });
+});
