@@ -268,3 +268,25 @@ describe("removeXMentions and the X count agree on links", () => {
     expect(removeXMentions(`Hi @${name}`)).toBe(isLink ? `Hi ${name.slice(0, name.indexOf("."))}` : `Hi ${name}`);
   });
 });
+
+// R61 platform-clients L1: twitter-text reads a full-width "＠" as the mention
+// sign too, so it is removed the same way as "@".
+describe("removeXMentions: the full-width ＠", () => {
+  it("drops the ＠ in running text", () => {
+    expect(removeXMentions("Thanks ＠kai")).toBe("Thanks kai");
+  });
+
+  it("removes a ＠ footer paragraph", () => {
+    expect(removeXMentions("Great day out.\n\n＠kai ＠mia")).toBe("Great day out.");
+  });
+
+  it("handles a mix of @ and ＠", () => {
+    expect(removeXMentions("Thanks @kai and ＠mia")).toBe("Thanks kai and mia");
+    expect(removeXMentions("Great day out.\n\n@kai ＠mia #surf")).toBe("Great day out.\n\n#surf");
+  });
+
+  it("keeps an email address with either sign", () => {
+    expect(removeXMentions("Write to info＠surf.com")).toBe("Write to info＠surf.com");
+    expect(removeXMentions("Write to info@surf.com or ＠kai")).toBe("Write to info@surf.com or kai");
+  });
+});
