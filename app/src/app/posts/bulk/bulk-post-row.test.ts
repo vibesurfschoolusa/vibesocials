@@ -38,7 +38,7 @@ describe("Add many: a caption that failed", () => {
     for (const budget of ["workspace", "owner"] as const) {
       const body = (await aiWorkspaceLimitResponse(3600, budget).json()) as { code: string; error: string };
       const text = captionFailedText(429, body.code, 3600, body.error);
-      expect(text).toBe(`No caption was written: ${body.error.charAt(0).toLowerCase()}${body.error.slice(1)}`);
+      expect(text).toBe(`No caption was written. ${body.error}`);
     }
   });
 

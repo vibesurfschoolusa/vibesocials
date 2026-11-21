@@ -24,6 +24,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  automaticCaptionRefusedText,
   buildTextPostBody,
   captionsAfterReuseDismissed,
   CreatePostFormSkeleton,
@@ -2082,5 +2083,20 @@ describe("mediaOptionalHint", () => {
   it("a file attached: no hint", () => {
     expect(mediaOptionalHint({ noFile: false, connected: ["facebook_page", "instagram"] })).toBeNull();
     expect(mediaOptionalHint({ noFile: false, connected: [] })).toBeNull();
+  });
+});
+
+// R57 publishing-flow L5: the route sentence can start with a co-owner's
+// name (#284), so its case is never changed; the lead-in is its own sentence.
+describe("automaticCaptionRefusedText keeps the route sentence's case", () => {
+  it("a sentence starting with a name keeps its capital", () => {
+    const sentence = "Maria Lopez, an owner of this workspace, has reached today's AI limit across the workspaces they own. It resets in 3 hours.";
+    expect(automaticCaptionRefusedText(sentence)).toBe(`No caption was written. ${sentence}`);
+  });
+
+  it("a sentence starting with This workspace reads as two sentences", () => {
+    expect(automaticCaptionRefusedText("This workspace has reached today's AI limit. It resets in 1 hour.")).toBe(
+      "No caption was written. This workspace has reached today's AI limit. It resets in 1 hour.",
+    );
   });
 });

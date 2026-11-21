@@ -1070,7 +1070,7 @@ describe("the automatic caption's refusal says no caption was written", () => {
     await finishUploads();
     expect(autoCaptionCalls()).toBe(1);
     await answer("/api/posts/auto-caption", tooMany());
-    expect(pageSays("No caption was written: too many tries. Wait 4 minutes, then try again.")).toBe(true);
+    expect(pageSays("No caption was written. Too many tries. Wait 4 minutes, then try again.")).toBe(true);
     expect(captionNow()).toBe("");
   });
 
@@ -1093,14 +1093,14 @@ describe("the automatic caption's refusal says no caption was written", () => {
     await pick(photo());
     await finishUploads();
     await answer("/api/posts/auto-caption", busy());
-    expect(pageSays("No caption was written: we couldn't check that just now. Nothing was changed. Try again in a minute.")).toBe(true);
+    expect(pageSays("No caption was written. We couldn't check that just now. Nothing was changed. Try again in a minute.")).toBe(true);
   });
 
   it("automatic: a 504 starts with No caption was written", async () => {
     await pick(photo());
     await finishUploads();
     await answer("/api/posts/auto-caption", slow());
-    expect(pageSays("No caption was written: the AI service took too long. Try again.")).toBe(true);
+    expect(pageSays("No caption was written. The AI service took too long. Try again.")).toBe(true);
   });
 
   // R44 review L1: a lost answer may hide a caption the AI did write, so it

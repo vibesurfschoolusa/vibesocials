@@ -27,6 +27,7 @@ import {
   type BulkBodyRow,
   automaticRequestMayGo,
   rowAiRequests,
+  routeSentenceAfter,
 } from "./bulkExtras";
 
 const BLOB = { url: "https://blob.example/a.jpg", filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 10 };
@@ -324,7 +325,7 @@ describe("Add many: why Improve failed", () => {
 
   it("requestImprovedCaption returns the mapped sentence and never a caption on failure", async () => {
     for (const [status, body, expected] of [
-      [429, { error: "Your workspace has used its AI for now.", code: "AI_WORKSPACE_DAILY_LIMIT" }, "The caption was not improved: your workspace has used its AI for now."],
+      [429, { error: "Your workspace has used its AI for now.", code: "AI_WORKSPACE_DAILY_LIMIT" }, "The caption was not improved. Your workspace has used its AI for now."],
       [429, { code: "AI_WORKSPACE_DAILY_LIMIT" }, improveFailedText(429, "AI_WORKSPACE_DAILY_LIMIT")],
       [429, { error: "Too many tries. Wait 4 minutes, then try again.", retryAfterSeconds: 230 }, "The caption was not improved. Too many tries. Wait 4 minutes, then try again."],
       [429, { error: "unreadable" }, improveFailedText(429, undefined)],
@@ -656,5 +657,25 @@ describe("requestImprovedCaption's wait from Retry-After", () => {
       ok: false,
       error: "The caption was not improved. Too many tries. Wait 10 minutes, then try again.",
     });
+  });
+});
+
+// R57 pages-a L1: since #284 a route sentence can start with a co-owner's
+// name, so its case is never changed; the lead-in ends with a full stop.
+describe("routeSentenceAfter keeps the route sentence's case", () => {
+  it("a sentence starting with a name keeps its capital", () => {
+    const sentence = "Maria Lopez, an owner of this workspace, has reached today's AI limit across the workspaces they own. It resets in 3 hours.";
+    expect(routeSentenceAfter("No caption was written", sentence)).toBe(`No caption was written. ${sentence}`);
+    expect(routeSentenceAfter("The caption was not improved", sentence)).toBe(`The caption was not improved. ${sentence}`);
+  });
+
+  it("a sentence starting with This workspace reads as two sentences", () => {
+    expect(routeSentenceAfter("No caption was written", "This workspace has reached today's AI limit. It resets in 1 hour.")).toBe(
+      "No caption was written. This workspace has reached today's AI limit. It resets in 1 hour.",
+    );
+  });
+
+  it("no readable sentence: null, as before", () => {
+    for (const error of [undefined, "", "   ", 42]) expect(routeSentenceAfter("No caption was written", error)).toBeNull();
   });
 });
