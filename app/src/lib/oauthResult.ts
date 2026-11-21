@@ -80,6 +80,16 @@ export function differentAccountBanner(
 }
 
 /**
+ * R54 client-journey L1: the code over a working row. A stale tab's Connect
+ * is refused as a different account too (saveConnection.ts), and a reload or
+ * Back after a reconnect worked keeps the code; nothing changed either way.
+ * `connectedName` comes from the workspace's own row, never the address.
+ */
+export function differentAccountKeptMessage(platform: Platform, connectedName: string): string {
+  return `Nothing changed: ${PLATFORM_LABELS[platform]} stays connected as ${connectedName}.`;
+}
+
+/**
  * R29 OO1 (pages L5): the one place a sentence gets the sign-in button's
  * name: the one the row shows, or null when it shows neither (it works).
  */

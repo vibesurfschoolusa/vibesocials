@@ -647,16 +647,23 @@ describe("SettingsPage — the different-account sentence follows the row's butt
     expect(await render("youtube_different_account")).toContain(YOUTUBE);
   });
 
-  it("a working connection after the reconnect: no sentence at all", async () => {
+  // R54 client-journey L1: a stale tab's Connect over a working row is
+  // refused too; the sentence is true after that and after a reload or Back.
+  it("a working connection: nothing changed, named from the row, as an alert", async () => {
     findConnectionsMock.mockResolvedValue([youtube({})]);
     const html = await render("youtube_different_account");
+    expect(html).toContain("Nothing changed: YouTube stays connected as Surf Co channel.");
+    // The variant googlePermissionMessage's working-row sentence has (danger).
+    const before = html.slice(0, html.indexOf("Nothing changed: YouTube"));
+    expect(before.slice(before.lastIndexOf("<div role="))).toMatch(/^<div role="alert" class="[^"]*border-destructive\/25/);
     expect(html).not.toContain(YOUTUBE);
-    expect(html).not.toMatch(ANY_FAILURE);
+    expect(html).not.toContain("Switch account to change");
   });
 
   it("no connection: no sentence at all", async () => {
     const html = await render("youtube_different_account");
     expect(html).not.toContain("different YouTube account");
+    expect(html).not.toContain("Nothing changed:");
     expect(html).not.toMatch(ANY_FAILURE);
   });
 
@@ -667,10 +674,25 @@ describe("SettingsPage — the different-account sentence follows the row's butt
     expect(await render("linkedin_different_account")).toContain(LINKEDIN);
   });
 
-  it("LinkedIn working after the reconnect: no sentence at all", async () => {
+  it("LinkedIn working: nothing changed, with the row's page name", async () => {
     findConnectionsMock.mockResolvedValue([linkedIn({})]);
     const html = await render("linkedin_different_account");
+    expect(html).toContain("Nothing changed: LinkedIn stays connected as Surf Co page.");
     expect(html).not.toContain("Reconnect shows the steps");
+  });
+
+  it("the code's own platform's row decides, not another platform's", async () => {
+    findConnectionsMock.mockResolvedValue([youtube({ needsReconnect: true }), linkedIn({})]);
+    let html = await render("linkedin_different_account");
+    expect(html).toContain("Nothing changed: LinkedIn stays connected as Surf Co page.");
+    expect(html).not.toContain(YOUTUBE);
+    html = await render("youtube_different_account");
+    expect(html).toContain(YOUTUBE);
+    expect(html).not.toContain("Nothing changed:");
+    // A code for a platform with no row says nothing, even beside a working one.
+    findConnectionsMock.mockResolvedValue([linkedIn({})]);
+    html = await render("youtube_different_account");
+    expect(html).not.toContain("Nothing changed:");
     expect(html).not.toMatch(ANY_FAILURE);
   });
 });

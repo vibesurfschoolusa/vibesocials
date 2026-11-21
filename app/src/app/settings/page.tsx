@@ -36,7 +36,13 @@ import { workspacePlanNoteShown } from "@/lib/planCopy";
 import { getPlanOffers, getYearlyPlanOffers } from "@/server/billing/planPrices";
 import { getWorkspaceUsageOrNull, LIMIT_OVERRIDES_SELECT, planChangeRaisesEveryLimit } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
-import { describeOAuthResult, differentAccountBanner, shownControl, type OAuthResult } from "@/lib/oauthResult";
+import {
+  describeOAuthResult,
+  differentAccountBanner,
+  differentAccountKeptMessage,
+  shownControl,
+  type OAuthResult,
+} from "@/lib/oauthResult";
 import {
   LOCATION_CLEARED_PARAM,
   accountCheckFailedMessage,
@@ -144,9 +150,11 @@ export default async function SettingsPage({
   // R6 review low 1: a reconnect came back with another account and nothing
   // changed; the sentence names only the connected one, from this workspace
   // (R7-new-customer L2: nothing from the address is shown).
-  // R53 client-journey: only while the row shows Reconnect (differentAccountBanner).
+  // R53 client-journey: the reconnect sentence only while the row shows
+  // Reconnect (differentAccountBanner); R54 client-journey L1: over a working
+  // row, that nothing changed; with no row, nothing.
   const different = differentAccountBanner(params.error, rowShown);
-  const differentFrom = different?.told ? connections.find((c) => c.platform === different.platform) : undefined;
+  const differentFrom = different ? connections.find((c) => c.platform === different.platform) : undefined;
   // Anyone can type the parameter: the sentence only for a Business Profile
   // connection that really has no location chosen (R6 fourth review 1).
   const gbpWithoutLocation = connections.some((c) => c.platform === "google_business_profile" && !c.locationName);
@@ -175,7 +183,10 @@ export default async function SettingsPage({
       ? {
           variant: "danger",
           platform: different.platform,
-          message: reconnectDifferentAccountMessage(different.platform, connectedAccountName(differentFrom)),
+          message: (different.told ? reconnectDifferentAccountMessage : differentAccountKeptMessage)(
+            different.platform,
+            connectedAccountName(differentFrom),
+          ),
         }
       : null;
   }

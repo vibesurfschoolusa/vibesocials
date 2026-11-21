@@ -3,7 +3,13 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 import { describeConnectLinkResult } from "./connectLink";
-import { describeOAuthResult, differentAccountBanner, shownControl, type ShownControl } from "./oauthResult";
+import {
+  describeOAuthResult,
+  differentAccountBanner,
+  differentAccountKeptMessage,
+  shownControl,
+  type ShownControl,
+} from "./oauthResult";
 
 describe("describeOAuthResult", () => {
   it("returns null when neither param is present", () => {
@@ -762,6 +768,14 @@ describe("describeOAuthResult — every sentence names only the button the row s
 });
 
 // R53 client-journey: one rule for Settings and /c.
+// R54 client-journey L1: a refused sign-in over a working row.
+describe("differentAccountKeptMessage", () => {
+  it("says nothing changed and names the platform and the connected account", () => {
+    expect(differentAccountKeptMessage("youtube", "Surf Co channel")).toBe("Nothing changed: YouTube stays connected as Surf Co channel.");
+    expect(differentAccountKeptMessage("x", "@surfco")).toBe("Nothing changed: X stays connected as @surfco.");
+  });
+});
+
 describe("differentAccountBanner", () => {
   it("told only while the platform's row shows Reconnect", () => {
     expect(differentAccountBanner("instagram_different_account", () => "reconnect")).toEqual({ platform: "instagram", told: true });
