@@ -129,6 +129,20 @@ describe("checkDailyPostLimit", () => {
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
+  it("at the limit, `steps: approval` changes only the closing words, not the refusal", async () => {
+    db.postJobCount.mockResolvedValue(20);
+
+    const plain = await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "schedule" });
+    const approver = await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "schedule", steps: "approval" });
+
+    expect(plain?.error).toMatch(/Pick another day\.$/);
+    expect(approver).toEqual({
+      code: plain?.code,
+      error:
+        "That day already has 20 posts, which is this workspace's daily limit. Approve it again once that day has room, or reject it and ask the member to submit it for another day.",
+    });
+  });
+
   it("counts the workspace's non-draft, non-cancelled posts by scheduledFor, else createdAt, in the UTC day", async () => {
     await checkDailyPostLimit({ workspaceId: "ws-1", day: new Date("2026-11-12T22:00:00Z"), mode: "schedule" });
 

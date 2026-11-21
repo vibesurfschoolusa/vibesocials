@@ -7,7 +7,7 @@ import { logger } from "@/lib/logger";
 import { sentenceForRecipient } from "@/lib/publishFailureText";
 import { storyPlatformsOf } from "@/lib/storyPlacement";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
-import { LIMIT_CHECK_FAILED_CODE, LIMIT_CHECK_FAILED_MESSAGE } from "@/lib/usageLimits";
+import { LIMIT_CHECK_FAILED_CODE, LIMIT_CHECK_FAILED_MESSAGE, type LimitSteps } from "@/lib/usageLimits";
 import { reserveFreeRuns, withdrawSend, type WrittenSends } from "@/server/usage/usageLog";
 import { buildPublishEvent, deferredPostCanSend, prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
 
@@ -270,6 +270,8 @@ export async function reserveSendNow(args: {
   workspaceId: string;
   postJobIds: readonly string[];
   viewerUserId: string;
+  /** R55 pages-a-3 L1: the approver's steps for a refusal's sentence; only the words change. */
+  steps?: LimitSteps;
 }): Promise<SendNowReservation> {
   const day = new Date();
   try {
@@ -281,6 +283,7 @@ export async function reserveSendNow(args: {
       at: day,
       check: "now",
       viewerUserId: args.viewerUserId,
+      ...(args.steps ? { steps: args.steps } : {}),
     });
     if (!reservation.ok) return { ok: false, status: 429, body: reservation.refusal };
     return { ok: true, reserved: { postJobIds: reservation.written, day } };

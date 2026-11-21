@@ -8,6 +8,7 @@ import { isUnconfirmedResult } from "@/lib/postsDto";
 import { retryAllPlan } from "@/lib/retryAll";
 import { notifyOperatorOfFreeRunCeiling, type CeilingOwner } from "@/server/notifications/freeRunCeilingEmail";
 import {
+  type LimitSteps,
   FREE_RUNS_DAILY_CEILING,
   GUARANTEED_RUNS_PER_PERSON,
   isNewAccount,
@@ -756,6 +757,8 @@ type CrossWorkspaceCheck = {
   alsoOnDay?: number;
   /** Second look, point 1: who will read the answer, so the owner held back reads "you". */
   viewerUserId?: string;
+  /** R55 pages-a-3 L1: whose steps the refusal's sentence ends with; only the words change. */
+  steps?: LimitSteps;
 };
 
 /**
@@ -829,7 +832,7 @@ async function refusalFor(
             ? { firstDayEnds: utcDayRange(owner.user.createdAt).end, timeZone: await viewerTimeZone(input.viewerUserId, db) }
             : {};
         return {
-          error: ownerDailyPostLimitMessage(limit, mode, reduced, holder, time),
+          error: ownerDailyPostLimitMessage(limit, mode, reduced, holder, time, process.env, input.steps),
           code: OWNER_DAILY_POST_LIMIT_CODE,
           ceiling: false,
         };
@@ -843,14 +846,14 @@ async function refusalFor(
   const pool = await poolRefusal({ who, day, unit, size: sending, now, db });
   if (pool === "new") {
     return {
-      error: atSend ? newAccountPoolAtSendMessage(now) : newAccountPoolMessage(mode),
+      error: atSend ? newAccountPoolAtSendMessage(now) : newAccountPoolMessage(mode, {}, input.steps),
       code: SERVICE_DAILY_POST_LIMIT_CODE,
       ceiling: false,
     };
   }
   if (pool === "main" || pool === "ceiling") {
     return {
-      error: atSend ? serviceDailyPostLimitAtSendMessage(now) : serviceDailyPostLimitMessage(mode),
+      error: atSend ? serviceDailyPostLimitAtSendMessage(now) : serviceDailyPostLimitMessage(mode, {}, input.steps),
       code: SERVICE_DAILY_POST_LIMIT_CODE,
       ceiling: pool === "ceiling",
     };
@@ -884,6 +887,8 @@ type ReserveInput = {
   /** "now": Post now, publish or approve (every check); "atSend": the scanner (the ceiling and the pools). */
   check: "now" | "atSend";
   viewerUserId?: string;
+  /** R55 pages-a-3 L1: whose steps a refusal's sentence ends with; only the words change. */
+  steps?: LimitSteps;
 };
 
 /**
@@ -921,6 +926,7 @@ export async function reserveFreeRunsIn(tx: ReserveDb, input: ReserveInput): Pro
         excludePostJobId: [...input.postJobIds],
         alsoOnDay: writing.length - 1,
         viewerUserId: input.viewerUserId,
+        steps: input.steps,
       },
       at,
       tx,

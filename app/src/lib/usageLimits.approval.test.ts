@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  approvalLimitMessage,
   dailyPostLimitMessage,
   newAccountPoolMessage,
   ownerDailyPostLimitMessage,
@@ -14,8 +13,7 @@ import {
 const time = { now: new Date("2026-11-20T15:00:00Z"), timeZone: null };
 const holder = { name: "Sam", coOwned: true, isViewer: false };
 
-const SCHEDULED_STEPS =
-  "Cancel or move another post on that day, then approve again. Or reject this one and ask the member to submit it for another day.";
+const SCHEDULED_STEPS = "Approve it again once that day has room, or reject it and ask the member to submit it for another day.";
 const nowSteps = (reset: string) =>
   `Approve it again ${reset}, or reject it and ask the member to schedule it for another day.`;
 
@@ -51,43 +49,54 @@ describe("the limit sentences other callers read are unchanged", () => {
   });
 });
 
-describe("approvalLimitMessage", () => {
-  it("workspace limit, scheduled: the approval steps", () => {
-    expect(approvalLimitMessage(original.wsSched)).toBe(
-      `That day already has 20 posts, which is this workspace's daily limit. ${SCHEDULED_STEPS}`,
-    );
+const RESET = "in 9 hours";
+const NOTE =
+  "It stops applying from the day after the account was made (00:00 UTC), once the owner's email address is confirmed.";
+const approval = {
+  wsNow: `This workspace has reached its limit of 20 posts for today. ${nowSteps(RESET)}`,
+  wsSched: `That day already has 20 posts, which is this workspace's daily limit. ${SCHEDULED_STEPS}`,
+  ownNow: `This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. ${nowSteps(RESET)}`,
+  ownSched: `That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). ${SCHEDULED_STEPS}`,
+  ownNamedNow: `Sam, an owner of this workspace, has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. ${nowSteps(RESET)}`,
+  ownNamedSched: `Sam, an owner of this workspace, already has 15 posts that day across the workspaces they own, which is the daily limit for one person (retries count toward it). ${SCHEDULED_STEPS}`,
+  svcNow: `Vibe Socials has reached its daily limit of posts for the whole service. ${nowSteps(RESET)}`,
+  svcSched: `That day is full: Vibe Socials has reached its daily limit of posts for the whole service. ${SCHEDULED_STEPS}`,
+  poolNow: `Vibe Socials has reached today's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address. ${nowSteps(RESET)} ${NOTE}`,
+  poolSched: `That day is full: Vibe Socials has reached the limit of 5 posts a day shared by accounts made today (UTC) or with an unconfirmed email address. ${SCHEDULED_STEPS} ${NOTE}`,
+};
+
+describe("each builder's approval form: the same facts, the approver's steps", () => {
+  it("workspace, scheduled and now", () => {
+    expect(dailyPostLimitMessage(20, "now", time, "approval")).toBe(approval.wsNow);
+    expect(dailyPostLimitMessage(20, "schedule", time, "approval")).toBe(approval.wsSched);
   });
-  it("workspace limit, now: the approval steps with the reset time", () => {
-    expect(approvalLimitMessage(original.wsNow)).toBe(
-      `This workspace has reached its limit of 20 posts for today. ${nowSteps("in 9 hours")}`,
-    );
+  it("per person, unnamed and named, scheduled and now", () => {
+    expect(ownerDailyPostLimitMessage(15, "now", null, null, time, {}, "approval")).toBe(approval.ownNow);
+    expect(ownerDailyPostLimitMessage(15, "schedule", null, null, time, {}, "approval")).toBe(approval.ownSched);
+    expect(ownerDailyPostLimitMessage(15, "now", null, holder, time, {}, "approval")).toBe(approval.ownNamedNow);
+    expect(ownerDailyPostLimitMessage(15, "schedule", null, holder, time, {}, "approval")).toBe(approval.ownNamedSched);
   });
-  it("per-person limit, named and unnamed, scheduled and now", () => {
-    expect(approvalLimitMessage(original.ownSched)).toBe(original.ownSched.replace("Pick another day.", SCHEDULED_STEPS));
-    expect(approvalLimitMessage(original.ownNamedSched)).toBe(
-      original.ownNamedSched.replace("Pick another day.", SCHEDULED_STEPS),
-    );
-    expect(approvalLimitMessage(original.ownNow)).toBe(
-      original.ownNow.replace("Schedule this post for another day, or try again in 9 hours.", nowSteps("in 9 hours")),
-    );
-    expect(approvalLimitMessage(original.ownNamedNow)).toContain(nowSteps("in 9 hours"));
-    expect(approvalLimitMessage(original.ownNamedNow)).toMatch(/^Sam, an owner of this workspace, has reached/);
-  });
-  it("service and pool sentences keep their trailing note", () => {
-    expect(approvalLimitMessage(original.svcSched)).toBe(original.svcSched.replace("Pick another day.", SCHEDULED_STEPS));
-    expect(approvalLimitMessage(original.poolNow)).toContain(`${nowSteps("in 9 hours")} It stops applying`);
-    expect(approvalLimitMessage(original.poolSched)).toContain(`${SCHEDULED_STEPS} It stops applying`);
+  it("service-wide and new-account, scheduled and now", () => {
+    expect(serviceDailyPostLimitMessage("now", time, "approval")).toBe(approval.svcNow);
+    expect(serviceDailyPostLimitMessage("schedule", time, "approval")).toBe(approval.svcSched);
+    expect(newAccountPoolMessage("now", time, "approval")).toBe(approval.poolNow);
+    expect(newAccountPoolMessage("schedule", time, "approval")).toBe(approval.poolSched);
   });
   it("a reset in the reader's zone is kept whole", () => {
-    const zoned = dailyPostLimitMessage(20, "now", { now: time.now, timeZone: "America/New_York" });
-    expect(approvalLimitMessage(zoned)).toContain(nowSteps(zoned.match(/try again (from .*)\.$/)![1]!));
+    const zoned = { now: time.now, timeZone: "America/New_York" };
+    const reset = dailyPostLimitMessage(20, "now", zoned).match(/try again (from .*)\.$/)![1]!;
+    expect(dailyPostLimitMessage(20, "now", zoned, "approval")).toContain(nowSteps(reset));
   });
-  it("no pick-another-day wording is left, and a sentence without it passes through", () => {
-    for (const text of Object.values(original)) {
-      expect(approvalLimitMessage(text)).not.toMatch(/Pick another day|Schedule this post for another day/);
+  it("no pick-another-day wording is left, and nothing the approver can't do is offered", () => {
+    for (const text of Object.values(approval)) {
+      expect(text).not.toMatch(/Pick another day|Schedule this post|try again|Cancel or move/);
     }
-    expect(approvalLimitMessage("We couldn't check today's limits. Try again in a minute.")).toBe(
-      "We couldn't check today's limits. Try again in a minute.",
-    );
+  });
+  it("word counts, notes included: only the per-person and new-account sentences pass about 45", () => {
+    const counts = Object.fromEntries(Object.entries(approval).map(([k, v]) => [k, v.split(/\s+/).length]));
+    expect(counts).toEqual({
+      wsNow: 30, wsSched: 33, ownNow: 42, ownSched: 47, ownNamedNow: 45, ownNamedSched: 50,
+      svcNow: 32, svcSched: 38, poolNow: 60, poolSched: 68,
+    });
   });
 });

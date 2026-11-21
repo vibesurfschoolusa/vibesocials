@@ -347,6 +347,17 @@ describe("new and unconfirmed accounts have a pool of their own", () => {
     expect(store.events.map((event) => event.pool)).toEqual(["new", "main", "main"]);
   });
 
+  it("steps: approval words the small-pool refusal for the approver, keeping its note", async () => {
+    workspace("ws-fresh", {}, [fresh("fresh-1")]);
+    workspace("ws-fresh-3", {}, [fresh("fresh-3")]);
+    for (let p = 1; p <= 5; p += 1) await due("ws-fresh", `f-${p}`);
+    expect(
+      (await crossWorkspacePostRefusal({ workspaceId: "ws-fresh-3", workspace: {}, day: NOW, mode: "now", steps: "approval" }))?.error,
+    ).toBe(
+      `Vibe Socials has reached today's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address. Approve it again in 9 hours, or reject it and ask the member to schedule it for another day. ${LEAVE_SMALL_POOL}`,
+    );
+  });
+
   it("Post now and scheduling for today meet the small pool too, with their own sentences", async () => {
     workspace("ws-fresh", {}, [fresh("fresh-1")]);
     workspace("ws-fresh-3", {}, [fresh("fresh-3")]);
@@ -437,6 +448,25 @@ describe("the per-person number", () => {
     await expect(
       crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: new Date(NOW.getTime() + DAY), mode: "schedule" }),
     ).resolves.toBeNull();
+  });
+
+  it("steps: approval words the per-person refusal for the approver, now and scheduled", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    const day = new Date("2026-11-18T10:00:00Z");
+    scheduled("ws-1", 15, day);
+    await expect(
+      crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day, mode: "schedule", steps: "approval" }),
+    ).resolves.toEqual({
+      code: "OWNER_DAILY_POST_LIMIT",
+      error:
+        "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Approve it again once that day has room, or reject it and ask the member to submit it for another day.",
+    });
+    scheduled("ws-1", 15, NOW);
+    expect(
+      (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now", steps: "approval" }))?.error,
+    ).toBe(
+      "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. Approve it again in 9 hours, or reject it and ask the member to schedule it for another day.",
+    );
   });
 
   it("15 scheduled on a day's calendar: the 16th is refused with the calendar sentence", async () => {

@@ -388,6 +388,15 @@ describe("reserveSendNow", () => {
     expect(outcome).toEqual({ ok: true, reserved: { postJobIds: ["feed-1", "story-1"], day: expect.any(Date) } });
   });
 
+  it("passes the approver's steps on to the reservation, and only when asked", async () => {
+    reserveMock.mockResolvedValue({ ok: true, written: ["feed-1"] });
+    await reserveSendNow({ ...args, steps: "approval" });
+    expect(reserveMock).toHaveBeenCalledWith(expect.objectContaining({ steps: "approval" }));
+    reserveMock.mockClear();
+    await reserveSendNow(args);
+    expect(reserveMock.mock.calls[0]![0]).not.toHaveProperty("steps");
+  });
+
   it("a half with nothing it can send is not reserved (it makes no run)", async () => {
     canSendMock.mockImplementation(async (id: string) => id === "feed-1");
     reserveMock.mockResolvedValue({ ok: true, written: ["feed-1"] });

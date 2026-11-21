@@ -29,6 +29,7 @@ import {
   type UsageLimitKind,
   type WorkspaceLimitOverrides,
   type WorkspaceLimits,
+  type LimitSteps,
 } from "@/lib/usageLimits";
 import { deferredPostCanSend } from "@/server/jobs/posting";
 import { pacificDayKey } from "@/server/platforms/rateLimited";
@@ -371,6 +372,8 @@ export async function checkDailyPostLimit(args: {
   runsAlsoOnDay?: number;
   /** Second look, point 1: who reads the refusal, so an owner held back by their own lower number reads "you". */
   viewerUserId?: string;
+  /** R55 pages-a-3 L1: whose steps the sentence ends with (the approver's, on an approval card); only the words change. */
+  steps?: LimitSteps;
 }): Promise<LimitRefusal | null> {
   const { workspaceId, day, mode, excludePostJobId } = args;
   try {
@@ -388,6 +391,7 @@ export async function checkDailyPostLimit(args: {
         excludePostJobId,
         alsoOnDay: args.runsAlsoOnDay ?? (await pairRunsAlso(mode, excludePostJobId, args.alsoOnDay)),
         viewerUserId: args.viewerUserId,
+        ...(args.steps ? { steps: args.steps } : {}),
       });
     }
 
@@ -404,7 +408,7 @@ export async function checkDailyPostLimit(args: {
       resetsAt: null,
       day,
     });
-    return { error: dailyPostLimitMessage(limits.postsPerDay, mode), code: DAILY_POST_LIMIT_CODE };
+    return { error: dailyPostLimitMessage(limits.postsPerDay, mode, {}, args.steps), code: DAILY_POST_LIMIT_CODE };
   } catch (error) {
     logger.error("[usage] Daily post limit check failed; allowing", { error, workspaceId });
     return null;

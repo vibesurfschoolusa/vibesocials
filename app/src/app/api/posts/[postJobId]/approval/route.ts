@@ -11,7 +11,6 @@ import {
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
-import { approvalLimitMessage } from "@/lib/usageLimits";
 import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { SCHEDULE_BUFFER_MS } from "@/lib/scheduling";
 import { getWorkspaceContext } from "@/lib/workspace";
@@ -246,10 +245,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       mode: outcome === "schedule" ? "schedule" : "now",
       ...pairLimitArgs(postJobId, half && !blocker(half) ? half : null),
       viewerUserId: workspaceContext.user.id,
+      // The card has no Edit and no day picker: the default steps would send the approver nowhere.
+      steps: "approval",
     });
     if (refusal) {
-      // The card has no Edit and no day picker: the limit's own steps would send the approver nowhere.
-      return NextResponse.json({ error: approvalLimitMessage(refusal.error), code: refusal.code }, { status: 429 });
+      return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
     }
   }
 
@@ -264,12 +264,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       workspaceId,
       postJobIds: [postJobId, ...(takenHalf ? [takenHalf.id] : [])],
       viewerUserId: workspaceContext.user.id,
+      steps: "approval",
     });
-    if (!reserved.ok) {
-      const body =
-        reserved.status === 429 ? { ...reserved.body, error: approvalLimitMessage(reserved.body.error) } : reserved.body;
-      return NextResponse.json(body, { status: reserved.status });
-    }
+    if (!reserved.ok) return NextResponse.json(reserved.body, { status: reserved.status });
     reservation = reserved;
   }
 
