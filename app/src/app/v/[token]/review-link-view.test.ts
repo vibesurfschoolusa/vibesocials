@@ -28,6 +28,7 @@ import {
   keptAfterReload,
   REVIEW_POST_GONE_MESSAGE,
   changeNoteHint,
+  reviewCardName,
   shownCardLine,
   staleNotice,
 } from "./review-link-view";
@@ -515,5 +516,33 @@ describe("ReviewPostCard: which cards are kept, and for how long", () => {
     const cancel = source.slice(source.lastIndexOf("<Button", at), at);
     expect(cancel).toContain("disabled={gone || busy}");
     expect(source).toMatch(/const target = dismissFocusTarget\(pressed\.closest\("li"\), document\);\s*focusAfterPress\(pressed, \(\) => target\);\s*onDismiss\?\.\(\);/);
+  });
+});
+
+// R57 client-journey L2: a Story-only post's caption is a fixed line, so its
+// cards' buttons are named by the card's time instead.
+describe("reviewCardName", () => {
+  const storyOnly = (over: Partial<ReviewPostDTO> = {}) =>
+    post({ platforms: ["Instagram (Story)", "Facebook Page (Story)"], caption: "This goes out as a Story, with no caption.", ...over });
+
+  it("two Story-only cards at different times have different names, each short and naming the Story", () => {
+    const a = render(storyOnly({ id: "a", scheduledFor: "2026-11-20T15:00:00.000Z" }));
+    const b = render(storyOnly({ id: "b", scheduledFor: "2026-11-21T15:00:00.000Z" }));
+    const nameOf = (html: string) => /aria-label="Looks good &quot;([^"]*)&quot;"[^>]*>Looks good<\/button>/.exec(html)?.[1];
+    const [nameA, nameB] = [nameOf(a), nameOf(b)];
+    expect(nameA).toBeDefined();
+    expect(nameA).not.toBe(nameB);
+    for (const name of [nameA, nameB]) {
+      expect(name).toMatch(/^Story, /);
+      expect(name).not.toContain("with no caption");
+      expect((name as string).length).toBeLessThanOrEqual(60);
+    }
+    expect(reviewCardName(storyOnly({ scheduledFor: "2026-11-20T15:00:00.000Z" }))).toContain("2026");
+  });
+
+  it("a captioned card is named by its caption, as before", () => {
+    expect(reviewCardName(post())).toBe("Sunday session");
+    expect(reviewCardName(post({ platforms: ["Instagram (Story)", "Facebook Page"] }))).toBe("Sunday session");
+    expect(reviewCardName(post({ platforms: [], caption: "" }))).toBe("Untitled post");
   });
 });
