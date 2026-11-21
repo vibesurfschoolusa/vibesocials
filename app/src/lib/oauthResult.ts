@@ -85,19 +85,8 @@ export function differentAccountBanner(
   return platform ? { platform, told: shown(platform) === "reconnect" } : null;
 }
 
-/**
- * R54 client-journey L1: the code over a working row. A stale tab's Connect
- * is refused as a different account too (saveConnection.ts), and a reload or
- * Back after a reconnect worked keeps the code; nothing changed either way.
- * `connectedName` comes from the workspace's own row, never the address.
- * R54 fix review L1: an owner's working row shows Switch account on every
- * platform (connection-actions.tsx), the way to another account; a member
- * can't connect, so the member gets only what happened.
- */
-export function differentAccountKeptMessage(platform: Platform, connectedName: string, isOwner: boolean): string {
-  const kept = `Nothing changed: ${PLATFORM_LABELS[platform]} stays connected as ${connectedName}.`;
-  return isOwner ? `${kept} To connect a different account instead, use Switch account.` : kept;
-}
+/** Settings' banner over a working row; it lives beside the choice's sentence so the two can't drift (R55 client-journey L1). */
+export { differentAccountKeptMessage } from "@/lib/differentAccount";
 
 /**
  * R29 OO1 (pages L5): the one place a sentence gets the sign-in button's

@@ -1,6 +1,7 @@
 import type { Platform } from "@prisma/client";
 
-import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
+import type { ShownControl } from "@/lib/oauthResult";
+import { PLATFORM_LABELS, PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 
 /**
  * R6 review low 1 (2026-11-14): a reconnect (a flagged connection, or one in
@@ -203,19 +204,38 @@ export function connectedAmongCandidates(candidates: readonly { id: string }[], 
 }
 
 /**
+ * R54 client-journey L1: the code over a working row. A stale tab's Connect
+ * is refused as a different account too (saveConnection.ts), and a reload or
+ * Back after a reconnect worked keeps the code; nothing changed either way.
+ * `connectedName` comes from the workspace's own row, never the address.
+ * R54 fix review L1: an owner's working row shows Switch account on every
+ * platform (connection-actions.tsx), the way to another account; a member
+ * can't connect, so the member gets only what happened.
+ */
+export function differentAccountKeptMessage(platform: Platform, connectedName: string, isOwner: boolean): string {
+  const kept = `Nothing changed: ${PLATFORM_LABELS[platform]} stays connected as ${connectedName}.`;
+  return isOwner ? `${kept} To connect a different account instead, use Switch account.` : kept;
+}
+
+/**
  * Settings' choice. Offered: choosing it is the way forward. Not offered: the
  * person signed in to another account (for LinkedIn another member, so the
- * sign-out step); other platforms as before.
+ * sign-out step); other platforms as before. R55 client-journey L1: the
+ * reconnect wording only while the row shows Reconnect (`shown`); a stale
+ * tab's Connect over a working row gets Settings' kept wording. Only an owner
+ * reaches the choice.
  */
 export function choiceDifferentAccountMessage(
   platform: Platform,
   chosenName: string,
   connectedName: string,
   connectedOffered: boolean,
+  shown: ShownControl,
 ): string {
   if (connectedOffered) {
     return `You chose ${chosenName}, not ${connectedName}. Choose ${connectedName} to reconnect it, or use Switch account to change to ${chosenName}.`;
   }
+  if (shown === "connected") return differentAccountKeptMessage(platform, connectedName, true);
   return platform === "linkedin"
     ? reconnectDifferentAccountMessage(platform, connectedName)
     : settingsDifferentAccountMessage(platform, chosenName, connectedName);

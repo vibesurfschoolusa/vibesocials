@@ -590,7 +590,15 @@ describe("POST /api/connections/pending/[id]", () => {
   it("409s with both names when the chosen account is not the one connected, keeping the choice and the connection", async () => {
     findUniqueMock.mockResolvedValue(row(FACEBOOK));
     // The connected Page is not on this list.
-    connectionFindUniqueMock.mockResolvedValue({ platform: "facebook_page", accountIdentifier: "page-9", metadata: {} });
+    // A flagged row shows Reconnect (R55 client-journey L1: a working one gets the kept wording).
+    connectionFindUniqueMock.mockResolvedValue({
+      platform: "facebook_page",
+      accountIdentifier: "page-9",
+      metadata: {},
+      needsReconnect: true,
+      expiresAt: null,
+      refreshToken: null,
+    });
     saveFacebookPageConnectionMock.mockResolvedValue({
       ok: false,
       reason: "different_account",
@@ -909,6 +917,9 @@ describe("POST: a refused choice, by whether the connected one was on the list",
       platform: "linkedin",
       accountIdentifier: "member-9",
       metadata: { organizations: [{ id: "999", name: "Old Page" }] },
+      needsReconnect: true,
+      expiresAt: null,
+      refreshToken: null,
     });
     saveLinkedInConnectionMock.mockResolvedValue({
       ok: false,
@@ -922,6 +933,64 @@ describe("POST: a refused choice, by whether the connected one was on the list",
     expect(response.status).toBe(409);
     expect((await response.json()).error).toBe(
       // R8-client-journey L2: a LinkedIn page is managed, not signed in to.
+      "LinkedIn connected a different page than Old Page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Old Page. To use the other page instead, use Switch account.",
+    );
+  });
+
+  // R55 client-journey L1: a stale tab's Connect over a working row, which
+  // shows Switch account and no Reconnect: the kept wording, from this
+  // workspace's own row.
+  it("a working row, the connected one not on the list: nothing changed, and Switch account", async () => {
+    const cases = [
+      {
+        payload: LINKEDIN,
+        candidateId: "222",
+        save: saveLinkedInConnectionMock,
+        connection: { platform: "linkedin", accountIdentifier: "member-9", metadata: { organizations: [{ id: "999", name: "Surf Co page" }] } },
+        connectedName: "Surf Co page",
+        expected: "Nothing changed: LinkedIn stays connected as Surf Co page. To connect a different account instead, use Switch account.",
+      },
+      {
+        payload: FACEBOOK,
+        candidateId: "page-2",
+        save: saveFacebookPageConnectionMock,
+        connection: { platform: "facebook_page", accountIdentifier: "page-9", metadata: {} },
+        connectedName: "My Surf School",
+        expected: "Nothing changed: Facebook Page stays connected as My Surf School. To connect a different account instead, use Switch account.",
+      },
+    ] as const;
+    for (const { payload, candidateId, save, connection, connectedName, expected } of cases) {
+      findUniqueMock.mockResolvedValue(row(payload));
+      connectionFindUniqueMock.mockResolvedValue({ ...connection, needsReconnect: false, expiresAt: null, refreshToken: null });
+      save.mockResolvedValue({ ok: false, reason: "different_account", connectedName, signedInName: "Client Cafe" });
+
+      const response = await POST(postReq({ candidateId }), ctx());
+
+      expect(response.status, connection.platform).toBe(409);
+      await expect(response.json()).resolves.toEqual({ error: expected });
+      expect(connectionFindUniqueMock).toHaveBeenCalledWith({
+        where: { workspaceId_platform: { workspaceId: "ws-1", platform: connection.platform } },
+        select: { platform: true, expiresAt: true, refreshToken: true, needsReconnect: true },
+      });
+    }
+    expect(deleteManyMock).not.toHaveBeenCalled();
+  });
+
+  it("LinkedIn in its expiry warning window shows Reconnect: the sign-out step, as before", async () => {
+    findUniqueMock.mockResolvedValue(row(LINKEDIN));
+    connectionFindUniqueMock.mockResolvedValue({
+      platform: "linkedin",
+      accountIdentifier: "member-9",
+      metadata: { organizations: [{ id: "999", name: "Old Page" }] },
+      needsReconnect: false,
+      refreshToken: null,
+      expiresAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
+    });
+    saveLinkedInConnectionMock.mockResolvedValue({ ok: false, reason: "different_account", connectedName: "Old Page", signedInName: "Client Cafe" });
+
+    const response = await POST(postReq({ candidateId: "222" }), ctx());
+
+    expect((await response.json()).error).toBe(
       "LinkedIn connected a different page than Old Page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Old Page. To use the other page instead, use Switch account.",
     );
   });

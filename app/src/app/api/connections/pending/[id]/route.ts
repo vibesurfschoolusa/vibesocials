@@ -6,7 +6,7 @@ import { CONNECTION_EXPIRY_SELECT, inExpiryWarningWindow } from "@/lib/connectio
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
-import { shownControl, signInButton } from "@/lib/oauthResult";
+import { shownControl, signInButton, type ShownControl } from "@/lib/oauthResult";
 import { cancelFailedText, choiceFailedText, choiceLifeLeftMs, type ChoiceCardButton } from "@/lib/pendingChoiceText";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -341,8 +341,16 @@ async function refusedChoice(
     // R6 review low 1: the connection stays as it was, and so does the choice.
     // R7 review 3: when the connected one was on the list, choosing it is the way.
     const offered = await connectedWasOffered(pending, workspaceId);
+    // R55 client-journey L1: a working row shows no Reconnect. A failed read
+    // keeps the reconnect wording, as before this rule.
+    const shown: ShownControl = offered
+      ? "reconnect"
+      : await cardButton(workspaceId, pending.platform).then(
+          (button) => (button ? "reconnect" : "connected"),
+          () => "reconnect",
+        );
     return NextResponse.json(
-      { error: choiceDifferentAccountMessage(pending.platform, result.signedInName, result.connectedName, offered) },
+      { error: choiceDifferentAccountMessage(pending.platform, result.signedInName, result.connectedName, offered, shown) },
       { status: 409 },
     );
   }

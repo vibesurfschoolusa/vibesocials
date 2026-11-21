@@ -16,6 +16,7 @@ import {
   reconnectDifferentAccountMessage,
   settingsDifferentAccountMessage,
 } from "./differentAccount";
+import { differentAccountKeptMessage } from "./oauthResult";
 import * as differentAccount from "./differentAccount";
 
 /**
@@ -46,7 +47,7 @@ describe("different account on reconnect", () => {
     expect(settingsDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School")).toBe(
       "You chose Client Cafe; My Surf School wasn't listed. To reconnect it, sign in with a Facebook account that manages My Surf School and tick it when Facebook lists the Pages, or use Switch account to change to Client Cafe.",
     );
-    expect(choiceDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School", false)).toBe(
+    expect(choiceDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School", false, "reconnect")).toBe(
       settingsDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School"),
     );
   });
@@ -81,7 +82,7 @@ describe("different account on reconnect", () => {
   });
 
   it("Settings, Instagram, not offered in the list: the Facebook sign-in that works", () => {
-    const sentence = choiceDifferentAccountMessage("instagram", "@otherbiz", "@surfschool", false);
+    const sentence = choiceDifferentAccountMessage("instagram", "@otherbiz", "@surfschool", false, "reconnect");
     expect(sentence).toBe(
       "You chose @otherbiz; @surfschool wasn't listed. To reconnect it, sign in with a Facebook account that manages the Page linked to @surfschool and tick that Page when Facebook lists the Pages (and its Instagram account, if listed), or use Switch account to change to @otherbiz.",
     );
@@ -124,8 +125,8 @@ describe("different account on reconnect", () => {
     for (const sentence of [
       reconnectDifferentAccountMessage("instagram", "surfschool"),
       reconnectDifferentAccountMessage("facebook_page", "Surf Co Page"),
-      choiceDifferentAccountMessage("instagram", "otherbiz", "surfschool", false),
-      choiceDifferentAccountMessage("facebook_page", "Client Cafe", "Surf Co Page", false),
+      choiceDifferentAccountMessage("instagram", "otherbiz", "surfschool", false, "reconnect"),
+      choiceDifferentAccountMessage("facebook_page", "Client Cafe", "Surf Co Page", false, "reconnect"),
       linkDifferentAccountMessage("instagram", "surfschool"),
       linkDifferentAccountMessage("facebook_page", "Surf Co Page"),
     ]) {
@@ -137,7 +138,7 @@ describe("different account on reconnect", () => {
     for (const sentence of [
       reconnectDifferentAccountMessage("linkedin", "Surf Co page"),
       linkDifferentAccountMessage("linkedin", "Surf Co page"),
-      choiceDifferentAccountMessage("linkedin", "Client Cafe", "Surf Co page", false),
+      choiceDifferentAccountMessage("linkedin", "Client Cafe", "Surf Co page", false, "reconnect"),
       linkedInReconnectSignInStep("Surf Co page"),
     ]) {
       expect(sentence).not.toMatch(/sign in to Surf Co page/i);
@@ -216,24 +217,61 @@ describe("a refused choice from a list", () => {
   });
 
   it("Settings, the connected one was offered: choose it", () => {
-    expect(choiceDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School", true)).toBe(
+    expect(choiceDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School", true, "reconnect")).toBe(
       "You chose Client Cafe, not My Surf School. Choose My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
     );
-    expect(choiceDifferentAccountMessage("linkedin", "Client Cafe", "My Surf School", true)).toBe(
+    expect(choiceDifferentAccountMessage("linkedin", "Client Cafe", "My Surf School", true, "reconnect")).toBe(
       "You chose Client Cafe, not My Surf School. Choose My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
     );
   });
 
   it("Settings, LinkedIn, not offered (another member signed in): the sign-out step", () => {
-    expect(choiceDifferentAccountMessage("linkedin", "Client Cafe", "My Surf School", false)).toBe(
+    expect(choiceDifferentAccountMessage("linkedin", "Client Cafe", "My Surf School", false, "reconnect")).toBe(
       reconnectDifferentAccountMessage("linkedin", "My Surf School"),
     );
   });
 
   it("Settings, another platform, not offered: as before", () => {
-    expect(choiceDifferentAccountMessage("pinterest", "Team photos", "My Surf School", false)).toBe(
+    expect(choiceDifferentAccountMessage("pinterest", "Team photos", "My Surf School", false, "reconnect")).toBe(
       settingsDifferentAccountMessage("pinterest", "Team photos", "My Surf School"),
     );
+  });
+
+  // R55 client-journey L1: a stale tab's Connect is refused over a working
+  // row, which shows Switch account and no Reconnect: the kept wording, as in
+  // Settings' banner (differentAccountKeptMessage), for an owner.
+  it("Settings, a working row, not offered: nothing changed, and Switch account", () => {
+    expect(choiceDifferentAccountMessage("linkedin", "Client Cafe", "Surf Co page", false, "connected")).toBe(
+      "Nothing changed: LinkedIn stays connected as Surf Co page. To connect a different account instead, use Switch account.",
+    );
+    expect(choiceDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School", false, "connected")).toBe(
+      "Nothing changed: Facebook Page stays connected as My Surf School. To connect a different account instead, use Switch account.",
+    );
+    expect(choiceDifferentAccountMessage("x", "@other", "@surfco", false, "connected")).toBe(
+      "Nothing changed: X stays connected as @surfco. To connect a different account instead, use Switch account.",
+    );
+    for (const platform of ["linkedin", "facebook_page", "instagram", "pinterest", "x"] as const) {
+      expect(choiceDifferentAccountMessage(platform, "Other", "Mine", false, "connected"), platform).toBe(
+        differentAccountKeptMessage(platform, "Mine", true),
+      );
+    }
+  });
+
+  it("a Reconnect row, not offered: the reconnect wording, as before", () => {
+    expect(choiceDifferentAccountMessage("linkedin", "Client Cafe", "Surf Co page", false, "reconnect")).toBe(
+      reconnectDifferentAccountMessage("linkedin", "Surf Co page"),
+    );
+    expect(choiceDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School", false, "reconnect")).toBe(
+      settingsDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School"),
+    );
+  });
+
+  it("offered: choose it, whatever the row shows", () => {
+    for (const shown of ["reconnect", "connected"] as const) {
+      expect(choiceDifferentAccountMessage("linkedin", "Client Cafe", "My Surf School", true, shown), shown).toBe(
+        "You chose Client Cafe, not My Surf School. Choose My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
+      );
+    }
   });
 
   it("the client's page, offered: choose it from the list", () => {
