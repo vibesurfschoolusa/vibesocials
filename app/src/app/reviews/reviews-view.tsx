@@ -515,10 +515,12 @@ export function ReviewsView({
   const needsReplyReviews = reviews.filter((r) => !r.reviewReply);
   const repliedReviews = reviews.filter((r) => r.reviewReply);
 
-  const renderReviewCard = (review: GoogleReview, needsReply: boolean) => (
+  // R60 pages-b L2: `position` is the card's place in the list shown, from 1.
+  const renderReviewCard = (review: GoogleReview, needsReply: boolean, position: number) => (
     <ReviewCard
       key={review.reviewId}
       review={review}
+      position={position}
       needsReply={needsReply}
       isReplyOpen={replyingTo === review.reviewId}
       isSubmitting={submitting === review.reviewId}
@@ -676,7 +678,7 @@ export function ReviewsView({
           </Card>
         ) : (
           <div className="space-y-4">
-            {needsReplyReviews.map((review) => renderReviewCard(review, true))}
+            {needsReplyReviews.map((review, index) => renderReviewCard(review, true, index + 1))}
           </div>
         )
       ) : repliedReviews.length === 0 ? (
@@ -687,7 +689,7 @@ export function ReviewsView({
         />
       ) : (
         <div className="space-y-4">
-          {repliedReviews.map((review) => renderReviewCard(review, false))}
+          {repliedReviews.map((review, index) => renderReviewCard(review, false, index + 1))}
         </div>
       )}
 

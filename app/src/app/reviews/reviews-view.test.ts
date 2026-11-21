@@ -45,7 +45,7 @@ describe("ReviewsView layout", () => {
     const heading = at("<h1");
     const picker = at("<LocationPicker");
     const tabs = at('aria-label="Review filter"');
-    const list = at("needsReplyReviews.map((review) => renderReviewCard(");
+    const list = at("needsReplyReviews.map((review, index) => renderReviewCard(");
     const panel = at("<ReviewLinkPanel");
     expect(heading).toBeLessThan(picker);
     expect(picker).toBeLessThan(tabs);

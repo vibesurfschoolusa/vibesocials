@@ -31,15 +31,23 @@ const NAMELESS_REVIEWER = "A Google user";
  * too, and each review's buttons read differently. R59 pages-b L2: two
  * nameless reviews can share a day, so theirs carry the star rating as well.
  */
-export function reviewButtonName(review: Pick<GoogleReview, "reviewer" | "createTime" | "starRating">): string {
+export function reviewButtonName(
+  review: Pick<GoogleReview, "reviewer" | "createTime" | "starRating">,
+  position: number,
+): string {
+  const nameless = review.reviewer.displayName === NAMELESS_REVIEWER;
   const stars = STAR_RATINGS[review.starRating];
-  const rating =
-    review.reviewer.displayName === NAMELESS_REVIEWER && stars ? `, ${stars} ${stars === 1 ? "star" : "stars"}` : "";
-  return `${review.reviewer.displayName}${rating}, ${formatDate(review.createTime)}`;
+  const rating = nameless && stars ? `, ${stars} ${stars === 1 ? "star" : "stars"}` : "";
+  // R60 pages-b L2: same day and same rating is common, so a nameless
+  // reviewer's name ends with the card's place in the list, as Media's cards do.
+  const place = nameless ? `, review ${position}` : "";
+  return `${review.reviewer.displayName}${rating}, ${formatDate(review.createTime)}${place}`;
 }
 
 interface ReviewCardProps {
   review: GoogleReview;
+  /** The card's place in the list shown, from 1 (reviewButtonName). */
+  position: number;
   needsReply: boolean;
   isReplyOpen: boolean;
   isSubmitting: boolean;
@@ -64,6 +72,7 @@ interface ReviewCardProps {
  */
 export function ReviewCard({
   review,
+  position,
   needsReply,
   isReplyOpen,
   isSubmitting,
@@ -165,7 +174,7 @@ export function ReviewCard({
                   <Button
                     id={replyButtonId(review.reviewId)}
                     type="button"
-                    aria-label={`Reply to review by ${reviewButtonName(review)}`}
+                    aria-label={`Reply to review by ${reviewButtonName(review, position)}`}
                     onClick={onOpenReply}
                   >
                     <MessageSquare aria-hidden className="h-4 w-4" />
@@ -175,7 +184,7 @@ export function ReviewCard({
                     id={draftButtonId(review.reviewId)}
                     drafting={isGeneratingAI}
                     onDraft={onDraftAI}
-                    reviewer={reviewButtonName(review)}
+                    reviewer={reviewButtonName(review, position)}
                   />
                 </div>
               )}
