@@ -115,7 +115,8 @@ export function cleanBrandVoiceExamples(value: unknown): BrandVoiceCleanResult {
 
 export type MergeExamplesResult =
   | { kind: "added"; added: number; text: string }
-  | { kind: "full" }
+  | { kind: "full"; examples: number }
+  | { kind: "no-posts" }
   | { kind: "nothing-new" };
 
 /**
@@ -129,7 +130,11 @@ export function mergeExampleCaptions(
   const existing = exampleLines(current);
   const room = BRAND_VOICE_MAX_EXAMPLES - existing.length;
   if (room <= 0) {
-    return { kind: "full" };
+    // R64 pages-a-4 L1: the count, so the toast can say a box over five keeps only the first five.
+    return { kind: "full", examples: existing.length };
+  }
+  if (captions.length === 0) {
+    return { kind: "no-posts" };
   }
   const seen = new Set(existing);
   const added: string[] = [];

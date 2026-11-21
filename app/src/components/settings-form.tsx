@@ -18,6 +18,7 @@ import {
   BRAND_VOICE_MAX_LENGTH,
   exampleBoxStatus,
   mergeExampleCaptions,
+  type MergeExamplesResult,
 } from "@/lib/brandVoice";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import {
@@ -125,6 +126,25 @@ export async function readRecentCaptions(
   }
 }
 
+/**
+ * R64 pages-a-4 L1: "Use my recent posts" when it adds nothing, worded from the
+ * counts: a box over five keeps only the first five, and a workspace with no
+ * published posts is told so rather than that its posts are already in the box.
+ */
+export function recentPostsRefusalText(
+  result: Exclude<MergeExamplesResult, { kind: "added" }>,
+): string {
+  if (result.kind === "full") {
+    return result.examples > BRAND_VOICE_MAX_EXAMPLES
+      ? `The box already has ${result.examples} examples and only the first ${BRAND_VOICE_MAX_EXAMPLES} are kept. Delete lines to make room.`
+      : "You already have five examples. Remove one to add another.";
+  }
+  if (result.kind === "no-posts") {
+    return "This workspace has no published posts yet. Type an example of how you write instead.";
+  }
+  return "Your recent published posts have no captions that are not already in the box. Type an example instead.";
+}
+
 interface SettingsFormProps {
   /**
    * The workspace this page was rendered for. POST /api/settings refuses a
@@ -189,8 +209,9 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
   // Adds to the box only (never replaces what was typed); the owner edits and
   // then saves with the rest of the form.
   const fillExamplesFromRecentPosts = async () => {
-    if (mergeExampleCaptions(examplesRef.current, []).kind === "full") {
-      toast.error("You already have five examples. Remove one to add another.");
+    const before = mergeExampleCaptions(examplesRef.current, []);
+    if (before.kind === "full") {
+      toast.error(recentPostsRefusalText(before));
       return;
     }
     setIsFillingExamples(true);
@@ -201,14 +222,8 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
         return;
       }
       const result = mergeExampleCaptions(examplesRef.current, read.captions);
-      if (result.kind === "full") {
-        toast.error("You already have five examples. Remove one to add another.");
-        return;
-      }
-      if (result.kind === "nothing-new") {
-        toast.error(
-          "Your recent published posts have no captions that are not already in the box. Type an example instead.",
-        );
+      if (result.kind !== "added") {
+        toast.error(recentPostsRefusalText(result));
         return;
       }
       setBrandVoiceExamples(result.text);
