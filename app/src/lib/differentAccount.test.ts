@@ -114,9 +114,11 @@ describe("different account on reconnect", () => {
     );
   });
 
-  it("the client's page, LinkedIn: also names the sign-out step for the one who manages the page", () => {
+  // R58 client-journey L2: a Content admin manages the page but can't connect
+  // it, so the step is offered to a Super admin only.
+  it("the client's page, LinkedIn: names the sign-out step for a Super admin of the page", () => {
     expect(linkDifferentAccountMessage("linkedin", "Surf Co page")).toBe(
-      "This connection posts to Surf Co page. If you manage that page, sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that is a Super admin of Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+      "This connection posts to Surf Co page. If you are a Super admin of that page, sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that is a Super admin of Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
     );
   });
 

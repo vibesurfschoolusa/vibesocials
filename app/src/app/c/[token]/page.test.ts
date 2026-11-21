@@ -579,7 +579,7 @@ describe("LinkedIn on the client's page", () => {
   it("a different LinkedIn account: the sentence names the sign-out step", async () => {
     h.listConnections.mockResolvedValue([linkedin({ needsReconnect: true, reconnectSoon: false })]);
     expect(await render({ error: "linkedin_different_account" })).toContain(
-      "This connection posts to Surf Co page. If you manage that page, sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that is a Super admin of Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+      "This connection posts to Surf Co page. If you are a Super admin of that page, sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that is a Super admin of Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
     );
   });
 

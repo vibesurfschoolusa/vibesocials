@@ -183,15 +183,17 @@ export function reconnectDifferentAccountMessage(platform: Platform, connectedNa
  * owner disconnecting it, then the client connecting theirs. R52
  * client-journey L1: for a page, someone who manages it may only have signed
  * in wrongly or left it unticked, so their own step comes first, as in the
- * owners' email. /c only offers a sign-in for a flagged or ending connection,
- * and that row's button is Reconnect. R52 lead review: kept to 45 words, so
+ * owners' email. R58 client-journey L2: a LinkedIn Content admin manages the
+ * page but can't connect it, so that step is a Super admin's. /c only offers a
+ * sign-in for a flagged or ending connection, and that row's button is
+ * Reconnect. R52 lead review: kept to 45 words, so
  * it opens with the page it names and says where to disconnect only to the
  * owner, who knows it.
  */
 export function linkDifferentAccountMessage(platform: Platform, connectedName: string): string {
   const owner = "ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.";
   if (platform === "linkedin") {
-    return `This connection posts to ${connectedName}. If you manage that page, sign out of LinkedIn first (Reconnect shows the steps), then ${signInTo(platform, connectedName)}. If not, ${owner}`;
+    return `This connection posts to ${connectedName}. If you are a Super admin of that page, sign out of LinkedIn first (Reconnect shows the steps), then ${signInTo(platform, connectedName)}. If not, ${owner}`;
   }
   if (PAGE_ACCOUNT[platform]?.listsPages) {
     return `If you manage ${managedPage(platform, connectedName)}, press Reconnect, ${signInTo(platform, connectedName, "it")}. If not, ask the workspace owner to disconnect it, then connect yours.`;
