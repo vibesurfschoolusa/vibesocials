@@ -413,6 +413,8 @@ describe("R53: the lost-file stop only when a post without the file could go", (
     await typeCaption("Surf lesson today");
     expect(lineSays(FILE_LOST_FILE_ONLY_MESSAGE)).toBe(true);
     expect(lineSays("continue without one")).toBe(false);
+    // R54 new-customer L1: nor may the Media field call the file optional.
+    expect(lineSays("Optional: without a file")).toBe(false);
 
     await submit();
     expect(lineSays("None of your connected platforms can publish a post without a photo or video.")).toBe(true);

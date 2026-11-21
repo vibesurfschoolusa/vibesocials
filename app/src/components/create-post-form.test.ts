@@ -43,6 +43,8 @@ import {
   fileLostNoticeShown,
   fileSubmitBlock,
   hasNoFile,
+  MEDIA_OPTIONAL_HINT,
+  mediaOptionalHint,
   isTextPostMode,
   needsSubmitConfirm,
   nextFileLostNotice,
@@ -2051,5 +2053,34 @@ describe("R51: a refused file is one stored line", () => {
 
   it("the line names the file, then the refusal's own step", () => {
     expect(refusedFileLine(big)).toBe("long.mp4 wasn't added. This file is over 512 MB. Choose a shorter or smaller one.");
+  });
+});
+
+// R54 new-customer L1, publishing-flow L1, pages-b L1: the Media field calls
+// the file optional only when a connected platform can take the post as text.
+describe("mediaOptionalHint", () => {
+  it("only Instagram connected, no file: no hint", () => {
+    expect(mediaOptionalHint({ noFile: true, connected: ["instagram"] })).toBeNull();
+  });
+
+  it("only Instagram and TikTok connected, no file: no hint", () => {
+    expect(mediaOptionalHint({ noFile: true, connected: ["instagram", "tiktok"] })).toBeNull();
+  });
+
+  it("Facebook Page and Instagram connected, no file: the hint, naming Facebook", () => {
+    const hint = mediaOptionalHint({ noFile: true, connected: ["facebook_page", "instagram"] });
+    expect(hint).toBe(MEDIA_OPTIONAL_HINT);
+    expect(hint).toContain("Facebook");
+  });
+
+  it("nothing connected, no file: the same hint as today", () => {
+    expect(mediaOptionalHint({ noFile: true, connected: [] })).toBe(
+      "Optional: without a file the post is text only, for Facebook, X, LinkedIn and Google.",
+    );
+  });
+
+  it("a file attached: no hint", () => {
+    expect(mediaOptionalHint({ noFile: false, connected: ["facebook_page", "instagram"] })).toBeNull();
+    expect(mediaOptionalHint({ noFile: false, connected: [] })).toBeNull();
   });
 });

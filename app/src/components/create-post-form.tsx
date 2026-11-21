@@ -353,6 +353,18 @@ export function textGoesNowhere(connected: readonly Platform[]): boolean {
   return connected.length > 0 && !connected.some(platformAcceptsTextOnly);
 }
 
+export const MEDIA_OPTIONAL_HINT =
+  "Optional: without a file the post is text only, for Facebook, X, LinkedIn and Google.";
+
+/**
+ * The Media field's hint, or null. Where no connected platform takes text
+ * alone, the file is not optional: a press without one is refused.
+ */
+export function mediaOptionalHint(state: { noFile: boolean; connected: readonly Platform[] }): string | null {
+  if (!state.noFile || textGoesNowhere(state.connected)) return null;
+  return MEDIA_OPTIONAL_HINT;
+}
+
 /** The sentence by the button after a press on the untouched page, or null. */
 export function untouchedSubmitMessage(state: {
   untouched: boolean;
@@ -3016,10 +3028,8 @@ function CreatePostFormInner({
                     }}
                     className="cursor-pointer"
                   />
-                  {noFile ? (
-                    <p className="text-xs text-muted-foreground">
-                      Optional: without a file the post is text only, for Facebook, X, LinkedIn and Google.
-                    </p>
+                  {mediaOptionalHint({ noFile, connected: connectedPlatforms }) ? (
+                    <p className="text-xs text-muted-foreground">{MEDIA_OPTIONAL_HINT}</p>
                   ) : null}
                 </>
               ) : (
