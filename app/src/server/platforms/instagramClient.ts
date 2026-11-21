@@ -1132,8 +1132,11 @@ export const instagramClient: PlatformClient = {
 
     const story = ctx.instagramMetadata?.placement === "story";
     // G1 (R2 L3): within Instagram's hashtag and mention limits. A Story sends
-    // no caption, so it has nothing to fit.
-    const fitted = story ? { caption, plainMentions: [], droppedHashtags: [] } : fitInstagramTags(caption);
+    // no caption, so it has nothing to fit. R61 platform-clients-2 L1: cut to
+    // 2,200 first, so the notes name only tags and mentions in the text sent.
+    const fitted = story
+      ? { caption, plainMentions: [], droppedHashtags: [] }
+      : fitInstagramTags(computeInstagramCaption(caption));
     const tagsNote = droppedHashtagsNote(fitted.droppedHashtags);
     const mentionsNote = plainMentionsNote(fitted.plainMentions);
 
