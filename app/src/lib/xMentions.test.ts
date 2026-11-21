@@ -63,7 +63,8 @@ describe("removeXMentions", () => {
 
   // R59 fix review L3: the footer is a paragraph of its own.
   it("a mentions-only line inside a paragraph with text is running text", () => {
-    expect(removeXMentions("Line one @a\n@b @c\n\n\n\nLine two")).toBe("Line one a\nb c\n\nLine two");
+    // R60 pages-a-4 L1: the blank lines held no mention, so they stay as written.
+    expect(removeXMentions("Line one @a\n@b @c\n\n\n\nLine two")).toBe("Line one a\nb c\n\n\n\nLine two");
     expect(removeXMentions("Photos by:\n@kai @mia\n\nBook now")).toBe("Photos by:\nkai mia\n\nBook now");
     expect(removeXMentions("Our coaches:\n- @kai\n- @mia")).toBe("Our coaches:\n- kai\n- mia");
   });
@@ -92,6 +93,49 @@ describe("removeXMentions", () => {
 
   it("keeps CRLF line ends on a footer line", () => {
     expect(removeXMentions("Great day\r\n\r\n#surf @kai\r\n#fl")).toBe("Great day\r\n\r\n#surf\r\n#fl");
+  });
+
+  // R60 platform-clients L2: as twitter-text, a mention starts after any
+  // character outside [A-Za-z0-9_!#$%&*@＠], so X reads these as mentions too.
+  it.each([
+    ["Thanks.@kai for the shot", "Thanks.kai for the shot"],
+    ['Shot by "@mia"', 'Shot by "mia"'],
+    ["Waves\u2014@ana all day", "Waves\u2014ana all day"],
+    ["\u{1F4F8}@kai", "\u{1F4F8}kai"],
+    ["Photo:@kai", "Photo:kai"],
+  ])("%s: a mention after punctuation or an emoji loses its @", (text, expected) => {
+    expect(removeXMentions(text)).toBe(expected);
+  });
+
+  it.each(["Email info@surf.com today", "Write to kai_@surf.co", "Hi!@kai", "Score 3@kai", "C#@kai", "a&@kai", "x*@kai"])(
+    "%s: an @ after a letter, digit or one of _!#$%%&*@ is not a mention",
+    (text) => {
+      expect(removeXMentions(text)).toBe(text);
+    },
+  );
+
+  // R60 platform-clients L3: a dotted name is cut when any part of it is a link.
+  it.each([
+    ["Thanks @kai.surf_co today", "Thanks kai today"],
+    ["Ask @surf.co_kai", "Ask surf"],
+    ["Hi @heinrich_.schroder", "Hi heinrich_.schroder"],
+  ])("%s: a name with a link anywhere in it keeps the part before its first dot", (text, expected) => {
+    expect(removeXMentions(text)).toBe(expected);
+  });
+
+  // R60 pages-a-4 L1: only the lines a mention was removed from are tidied.
+  it("an indented price list with an email address comes back unchanged", () => {
+    const text = "Prices:\n  Lesson   $50\n  Board    $20\n\n\n\nBook at info@surf.com  ";
+    expect(removeXMentions(text)).toBe(text);
+  });
+
+  it("a line with a removed mention is tidied; the other lines stay as written", () => {
+    expect(removeXMentions("Prices:\n  Lesson   $50\n  Shot   by @kai  ")).toBe("Prices:\n  Lesson   $50\nShot by kai");
+  });
+
+  it("a footer paragraph still goes whole, and the lines around it stay as written", () => {
+    expect(removeXMentions("  Lesson   $50\n\n#surf   @kai")).toBe("  Lesson   $50\n\n#surf");
+    expect(removeXMentions("  Lesson   $50\n\n@kai @mia\n\n  Board    $20")).toBe("  Lesson   $50\n\n  Board    $20");
   });
 
   it("in running text, the name stays and counts on X", () => {
@@ -165,15 +209,39 @@ describe("removeXMentions and the X count agree on links", () => {
     expect(source).not.toMatch(/new Set\(\[|"(?:com|net|org|surf|co|za)"/);
   });
 
+  // R60 platform-clients L3: the cut and the X count agree on names with a
+  // link in part of them. A cut name was weighed as holding a link, and what is
+  // left holds none; a name kept whole was weighed as plain characters.
+  it.each([
+    ["kai.surf_co", true],
+    ["surf.co_kai", true],
+    ["kai.surf", true],
+    ["a.b.c.com", true],
+    ["kai.co.uk", true],
+    ["kai.Surf_co", false],
+    ["heinrich_.schroder", false],
+    ["kai_surf.co", false],
+    ["x_kai.surf", false],
+    ["vibe_surf.school", false],
+    ["kai.surf.Com", false],
+  ] as const)("@%s: cut %s, as xWeightedLength weighs it", (name, cut) => {
+    const left = removeXMentions(`Hi @${name}`).slice("Hi ".length);
+    expect(left).toBe(cut ? name.slice(0, name.indexOf(".")) : name);
+    expect(xWeightedLength(name) !== name.length).toBe(cut);
+    expect(xWeightedLength(left)).toBe(left.length);
+  });
+
   // R59 third look: the cut agrees with countsAsLink on every shape of name.
   it.each([
     "kai.surf", "kai.Surf", "kai.SURF", "KAI.surf", "surf.co", "surf.Co", "vibesurfschool.za", "vibesurfschool.ZA",
     "kai.com", "kai.Com", "kai.net", "kai.org", "kai.pro", "kai.Pro", "kai.xyzzy", "kai.Thanks", "kai.thanks",
     "www.kai", "www.Kai", "WWW.kai", "www.kai.com", "heinrich_.schroder", "kai_surf.co", "kai_.co", "kai2.com",
     "surf2026.co", "kai.c0m", "kai.co1", "a.b.c.com", "kai.school", "kai.School", "kai.miami",
+    "kai.surf_co", "surf.co_kai", "kai.Surf_co", "kai.pro_x", "x_kai.surf", "kai.surf.Com", "kai.co.uk",
   ])("@%s: cut before its first dot exactly when countsAsLink says link", (name) => {
     const units = textUnits(name);
-    const isLink = units.length === 1 && units[0].link !== null && countsAsLink(units[0].link, units[0].text);
+    // R60 platform-clients L3: any unit that is a link, not only a whole-name one.
+    const isLink = units.some((unit) => unit.link !== null && countsAsLink(unit.link, unit.text));
     expect(removeXMentions(`Hi @${name}`)).toBe(isLink ? `Hi ${name.slice(0, name.indexOf("."))}` : `Hi ${name}`);
   });
 });
