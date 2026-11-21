@@ -1131,7 +1131,9 @@ export function BulkPostsForm({
             onDrop={(event) => {
               event.preventDefault();
               setDragging(false);
-              if (pickerLocked) return;
+              // R56 pages-a-2 L1: a full batch still takes the drop, so handleFiles
+              // adds none and says "You can add up to 20 posts at a time."
+              if (sendingMode !== null) return;
               const dropped = splitDroppedFiles(Array.from(event.dataTransfer.files), "added");
               setDropNote(dropped.message);
               handleFiles(dropped.accepted);
