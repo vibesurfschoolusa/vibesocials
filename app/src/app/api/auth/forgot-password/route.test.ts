@@ -2,21 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // invites/[token]/accept/route.test.ts). route.ts imports `@/lib/db`,
-// `@/lib/rateLimit`, `@/lib/accountToken`, and `@/lib/accountEmails` at module
-// scope, so all must be mocked before route.ts is imported below. `@/lib/logger`
-// is left REAL (its console sink is spied where a catch path is exercised).
+// `@/lib/rateLimit` and `@/lib/accountEmails` at module scope, so they are
+// mocked before route.ts is imported below. `@/lib/accountToken` is REAL, over
+// an in-memory token table (R56: which links still work after a send).
+// `@/lib/logger` is left REAL (its console sink is spied where a catch path is
+// exercised).
 const {
   checkRateLimitMock,
   findUniqueUserMock,
-  transactionMock,
-  issueAccountTokenMock,
+  tokenTable,
   buildPasswordResetEmailMock,
   deliverAccountEmailMock,
 } = vi.hoisted(() => ({
   checkRateLimitMock: vi.fn(),
   findUniqueUserMock: vi.fn(),
-  transactionMock: vi.fn(),
-  issueAccountTokenMock: vi.fn(),
+  tokenTable: { current: null as unknown },
   buildPasswordResetEmailMock: vi.fn(),
   deliverAccountEmailMock: vi.fn(),
 }));
@@ -26,18 +26,23 @@ vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 vi.mock("@/lib/db", () => ({
   prisma: {
     user: { findUnique: findUniqueUserMock },
-    $transaction: transactionMock,
+    get accountToken() {
+      return tokenTable.current;
+    },
   },
 }));
-
-vi.mock("@/lib/accountToken", () => ({ issueAccountToken: issueAccountTokenMock }));
 
 vi.mock("@/lib/accountEmails", () => ({
   buildPasswordResetEmail: buildPasswordResetEmailMock,
   deliverAccountEmail: deliverAccountEmailMock,
 }));
 
+import { hashAccountToken } from "@/lib/accountToken";
+import { makeFakeAccountTokenStore } from "@/lib/accountToken.fakeStore";
+
 import { POST } from "./route";
+
+let store: ReturnType<typeof makeFakeAccountTokenStore>;
 
 const BUILT_EMAIL = { subject: "Reset your Vibe Socials password", html: "<html>", text: "text" };
 
@@ -52,17 +57,13 @@ function req(body: unknown, headers: Record<string, string> = {}) {
 beforeEach(() => {
   checkRateLimitMock.mockReset();
   findUniqueUserMock.mockReset();
-  transactionMock.mockReset();
-  issueAccountTokenMock.mockReset();
   buildPasswordResetEmailMock.mockReset();
   deliverAccountEmailMock.mockReset();
 
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   findUniqueUserMock.mockResolvedValue(null);
-  // The route wraps issuance in a $transaction; invoke the callback with a
-  // structural tx (issueAccountToken is mocked, so the shape is irrelevant).
-  transactionMock.mockImplementation(async (cb: (tx: unknown) => unknown) => cb({ accountToken: {} }));
-  issueAccountTokenMock.mockResolvedValue("raw-reset-token");
+  store = makeFakeAccountTokenStore();
+  tokenTable.current = store.db.accountToken;
   buildPasswordResetEmailMock.mockReturnValue(BUILT_EMAIL);
   deliverAccountEmailMock.mockResolvedValue(true);
 });
@@ -159,7 +160,7 @@ describe("POST /api/auth/forgot-password", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true });
-    expect(issueAccountTokenMock).not.toHaveBeenCalled();
+    expect(store.rows).toEqual([]);
     expect(deliverAccountEmailMock).not.toHaveBeenCalled();
   });
 
@@ -171,10 +172,11 @@ describe("POST /api/auth/forgot-password", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true });
 
-    expect(issueAccountTokenMock).toHaveBeenCalledWith(expect.anything(), "user-9", "password_reset");
-    expect(buildPasswordResetEmailMock).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "known@x.com", rawToken: "raw-reset-token" }),
-    );
+    expect(store.rows).toHaveLength(1);
+    expect(store.rows[0]).toMatchObject({ userId: "user-9", type: "password_reset" });
+    const { rawToken } = buildPasswordResetEmailMock.mock.calls[0][0];
+    expect(buildPasswordResetEmailMock).toHaveBeenCalledWith(expect.objectContaining({ to: "known@x.com" }));
+    expect(store.rows[0].tokenHash).toBe(hashAccountToken(rawToken));
     // Delivery is best-effort and never branched on (no-oracle), but it IS
     // attempted with the built email for the known user.
     expect(deliverAccountEmailMock).toHaveBeenCalledWith("known@x.com", BUILT_EMAIL);
@@ -196,7 +198,7 @@ describe("POST /api/auth/forgot-password", () => {
   it("still returns 200 { ok: true } when issuance throws (failure must not leak as an oracle)", async () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     findUniqueUserMock.mockResolvedValue({ id: "user-1", email: "known@x.com" });
-    transactionMock.mockRejectedValue(new Error("db down"));
+    tokenTable.current = { create: vi.fn().mockRejectedValue(new Error("db down")), deleteMany: vi.fn() };
 
     const response = await POST(req({ email: "known@x.com" }));
 
@@ -204,5 +206,60 @@ describe("POST /api/auth/forgot-password", () => {
     await expect(response.json()).resolves.toEqual({ ok: true });
 
     consoleSpy.mockRestore();
+  });
+
+  // R56 new-customer L1, pages-a L4: the earlier link is retired only once the
+  // new one's email is accepted, and none of it reaches the answer.
+  describe("which link works after a request", () => {
+    const OLD = hashAccountToken("earlier-link");
+    const known = { id: "user-1", email: "known@x.com" };
+
+    it("delivery accepted: the earlier link is retired and only the new one works", async () => {
+      findUniqueUserMock.mockResolvedValue(known);
+      store.seed({ userId: "user-1", type: "password_reset", tokenHash: OLD });
+      await POST(req({ email: "known@x.com" }));
+      const { rawToken } = buildPasswordResetEmailMock.mock.calls[0][0];
+      expect(store.hashes()).toEqual([hashAccountToken(rawToken)]);
+    });
+
+    it("delivery refused: the earlier link keeps working and the new one is removed", async () => {
+      findUniqueUserMock.mockResolvedValue(known);
+      deliverAccountEmailMock.mockResolvedValue(false);
+      store.seed({ userId: "user-1", type: "password_reset", tokenHash: OLD });
+      await POST(req({ email: "known@x.com" }));
+      expect(store.hashes()).toEqual([OLD]);
+    });
+
+    it("two requests in a row, both accepted: only the newest link works", async () => {
+      findUniqueUserMock.mockResolvedValue(known);
+      await POST(req({ email: "known@x.com" }));
+      await POST(req({ email: "known@x.com" }));
+      const newest = buildPasswordResetEmailMock.mock.calls[1][0].rawToken;
+      expect(store.hashes()).toEqual([hashAccountToken(newest)]);
+    });
+
+    it("a used link is never deleted", async () => {
+      findUniqueUserMock.mockResolvedValue(known);
+      const usedAt = new Date("2026-11-19T00:00:00.000Z");
+      store.seed({ userId: "user-1", type: "password_reset", tokenHash: OLD, usedAt });
+      await POST(req({ email: "known@x.com" }));
+      expect(store.rows.find((row) => row.tokenHash === OLD)?.usedAt).toEqual(usedAt);
+    });
+
+    it("answers byte-identically for an unknown address and a known one, delivery accepted or refused", async () => {
+      const answers: string[] = [];
+      for (const [user, delivered] of [
+        [null, true],
+        [known, true],
+        [known, false],
+      ] as const) {
+        findUniqueUserMock.mockResolvedValueOnce(user);
+        deliverAccountEmailMock.mockResolvedValueOnce(delivered);
+        const response = await POST(req({ email: user ? "known@x.com" : "ghost@x.com" }));
+        answers.push(`${response.status} ${response.headers.get("content-type")} ${await response.text()}`);
+      }
+      expect(new Set(answers).size).toBe(1);
+      expect(answers[0]).toBe('200 application/json {"ok":true}');
+    });
   });
 });

@@ -137,10 +137,8 @@ export async function POST(request: Request) {
     try {
       if (process.env.RESEND_API_KEY) {
         const baseUrl = process.env.NEXTAUTH_URL ?? "";
-        const rawToken = await issueAccountToken(prisma, user.id, "email_verify");
-        const delivered = await deliverAccountEmail(
-          user.email,
-          buildVerifyEmail({ to: user.email, rawToken, baseUrl }),
+        const delivered = await issueAccountToken(prisma, user.id, "email_verify", (rawToken) =>
+          deliverAccountEmail(user.email, buildVerifyEmail({ to: user.email, rawToken, baseUrl })),
         );
         // R53 new-customer L2: false (Resend refused or timed out) went unlogged.
         // No address: it is personal data.

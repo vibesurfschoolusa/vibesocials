@@ -85,18 +85,16 @@ export async function POST(request: Request) {
     });
 
     if (user) {
-      // Issue a fresh single-use token (invalidating any older unused one) and
-      // create it atomically via issueAccountToken's delete+create.
-      const rawToken = await prisma.$transaction((tx) =>
-        issueAccountToken(tx, user.id, "password_reset"),
+      // A fresh single-use link; an older unused one is retired only once this
+      // email is accepted, so a failed send leaves the earlier link working
+      // (R56 new-customer L1). Best-effort: the boolean is intentionally not
+      // branched on (no oracle).
+      await issueAccountToken(prisma, user.id, "password_reset", (rawToken) =>
+        deliverAccountEmail(
+          user.email,
+          buildPasswordResetEmail({ to: user.email, rawToken, baseUrl: process.env.NEXTAUTH_URL ?? "" }),
+        ),
       );
-      const resetEmail = buildPasswordResetEmail({
-        to: user.email,
-        rawToken,
-        baseUrl: process.env.NEXTAUTH_URL ?? "",
-      });
-      // Best-effort; the boolean is intentionally not branched on (no oracle).
-      await deliverAccountEmail(user.email, resetEmail);
     }
   } catch (error) {
     // Never surface issuance/delivery failures to the caller — doing so would

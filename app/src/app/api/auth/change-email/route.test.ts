@@ -60,6 +60,8 @@ function request(body: unknown): Request {
   });
 }
 
+const NEW_CREATED_AT = new Date("2026-11-20T10:00:00.000Z");
+
 const GOOD = { newEmail: " New@Example.com ", currentPassword: "the-password" };
 
 beforeAll(async () => {
@@ -88,7 +90,7 @@ beforeEach(() => {
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   userFindUniqueMock.mockResolvedValue(null);
   requestDeleteManyMock.mockResolvedValue({ count: 0 });
-  requestCreateMock.mockResolvedValue({});
+  requestCreateMock.mockResolvedValue({ id: "req_new", createdAt: NEW_CREATED_AT });
   deliverAccountEmailMock.mockResolvedValue(true);
   vi.stubEnv("RESEND_API_KEY", "re_test_key");
   vi.stubEnv("NEXTAUTH_URL", "https://app.example.com");
@@ -176,7 +178,6 @@ describe("POST /api/auth/change-email", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true });
-    expect(requestDeleteManyMock).toHaveBeenCalledWith({ where: { userId: "user-1", usedAt: null } });
     const data = requestCreateMock.mock.calls[0][0].data;
     expect(data.userId).toBe("user-1");
     expect(data.newEmail).toBe("new@example.com");
@@ -250,5 +251,34 @@ describe("POST /api/auth/change-email", () => {
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
     }
+  });
+
+  // R56 new-customer L1: the previous pending change stays until the new
+  // change's email is accepted.
+  it("email accepted: the pending changes made before this one are retired, after the send", async () => {
+    const response = await POST(request(GOOD));
+    expect(response.status).toBe(200);
+    expect(requestCreateMock.mock.calls[0][0].select).toEqual({ id: true, createdAt: true });
+    expect(requestDeleteManyMock).toHaveBeenCalledTimes(1);
+    expect(requestDeleteManyMock).toHaveBeenCalledWith({
+      where: { userId: "user-1", usedAt: null, createdAt: { lt: NEW_CREATED_AT } },
+    });
+    expect(requestCreateMock.mock.invocationCallOrder[0]).toBeLessThan(
+      deliverAccountEmailMock.mock.invocationCallOrder[0],
+    );
+    expect(deliverAccountEmailMock.mock.invocationCallOrder[0]).toBeLessThan(
+      requestDeleteManyMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("email refused: the earlier pending change is kept and only the new one is removed; the answer is as before", async () => {
+    deliverAccountEmailMock.mockResolvedValue(false);
+    const response = await POST(request(GOOD));
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "We couldn't send the confirmation email just now. Your email is unchanged. Please try again in a few minutes.",
+    });
+    expect(requestDeleteManyMock).toHaveBeenCalledTimes(1);
+    expect(requestDeleteManyMock).toHaveBeenCalledWith({ where: { id: "req_new", usedAt: null } });
   });
 });

@@ -107,23 +107,36 @@ export async function POST(request: Request) {
     }
 
     const { raw, hash } = generateAccountToken();
-    await prisma.$transaction(async (tx) => {
-      // Only the newest link works, as with the other account links.
-      await tx.emailChangeRequest.deleteMany({ where: { userId: user.id, usedAt: null } });
-      await tx.emailChangeRequest.create({
-        data: {
-          userId: user.id,
-          newEmail,
-          tokenHash: hash,
-          expiresAt: new Date(now.getTime() + EMAIL_CHANGE_TTL_MS),
-        },
-      });
+    const created = await prisma.emailChangeRequest.create({
+      data: {
+        userId: user.id,
+        newEmail,
+        tokenHash: hash,
+        expiresAt: new Date(now.getTime() + EMAIL_CHANGE_TTL_MS),
+      },
+      select: { id: true, createdAt: true },
     });
 
-    const delivered = await deliverAccountEmail(
-      newEmail,
-      buildEmailChangeEmail({ to: newEmail, rawToken: raw, baseUrl: process.env.NEXTAUTH_URL ?? "" }),
-    );
+    // Only the newest link works, as with the other account links, but the
+    // previous pending change is retired only once this email is accepted
+    // (R56 new-customer L1, as lib/accountToken.ts issueAccountToken): by
+    // createdAt, so two requests at once can't retire each other's.
+    let delivered = false;
+    try {
+      delivered = await deliverAccountEmail(
+        newEmail,
+        buildEmailChangeEmail({ to: newEmail, rawToken: raw, baseUrl: process.env.NEXTAUTH_URL ?? "" }),
+      );
+    } finally {
+      if (!delivered) {
+        await prisma.emailChangeRequest.deleteMany({ where: { id: created.id, usedAt: null } });
+      }
+    }
+    if (delivered) {
+      await prisma.emailChangeRequest.deleteMany({
+        where: { userId: user.id, usedAt: null, createdAt: { lt: created.createdAt } },
+      });
+    }
     if (!delivered) {
       return NextResponse.json(
         { error: "We couldn't send the confirmation email just now. Your email is unchanged. Please try again in a few minutes." },

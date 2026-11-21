@@ -102,7 +102,11 @@ beforeEach(() => {
 
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   addressHeldUntilMock.mockResolvedValue(null);
-  issueAccountTokenMock.mockResolvedValue("raw-verify-token");
+  // The real helper hands the raw token to the send and answers its result.
+  issueAccountTokenMock.mockImplementation(
+    async (_db: unknown, _userId: string, _type: string, deliver: (raw: string) => Promise<boolean>) =>
+      deliver("raw-verify-token"),
+  );
   buildVerifyEmailMock.mockReturnValue({ subject: "Verify your email address", html: "<html>", text: "text" });
   deliverAccountEmailMock.mockResolvedValue(true);
 
@@ -421,7 +425,7 @@ describe("POST /api/auth/register", () => {
     });
     // Proof the hook actually ran (issued + attempted delivery) and its
     // rejection was swallowed rather than propagated.
-    expect(issueAccountTokenMock).toHaveBeenCalledWith(expect.anything(), "user-1", "email_verify");
+    expect(issueAccountTokenMock).toHaveBeenCalledWith(expect.anything(), "user-1", "email_verify", expect.any(Function));
     expect(deliverAccountEmailMock).toHaveBeenCalledTimes(1);
     const logged = JSON.stringify(warnSpy.mock.calls);
     expect(logged).toContain("[register] verification email failed");

@@ -55,17 +55,17 @@ export async function POST() {
   }
 
   try {
-    // Issue a fresh single-use token (invalidating any older unused one)
-    // atomically via issueAccountToken's delete+create.
-    const rawToken = await prisma.$transaction((tx) => issueAccountToken(tx, user.id, "email_verify"));
-    const verifyEmail = buildVerifyEmail({
-      to: user.email,
-      rawToken,
-      baseUrl: process.env.NEXTAUTH_URL ?? "",
-    });
-    // deliverAccountEmail never throws; false means the email service did not
-    // take the email (R5 new-customer L2), so the person must not read "sent".
-    const delivered = await deliverAccountEmail(user.email, verifyEmail);
+    // A fresh single-use link; the older unused one is retired only once this
+    // email is accepted, so a failed resend leaves the link already in the
+    // inbox working (R56 new-customer L1). deliverAccountEmail never throws;
+    // false means the email service did not take the email (R5 new-customer
+    // L2), so the person must not read "sent".
+    const delivered = await issueAccountToken(prisma, user.id, "email_verify", (rawToken) =>
+      deliverAccountEmail(
+        user.email,
+        buildVerifyEmail({ to: user.email, rawToken, baseUrl: process.env.NEXTAUTH_URL ?? "" }),
+      ),
+    );
     if (!delivered) {
       return NextResponse.json({ error: SEND_FAILED }, { status: 502 });
     }

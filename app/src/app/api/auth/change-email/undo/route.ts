@@ -1,7 +1,7 @@
 import { after, NextResponse } from "next/server";
 
 import { buildPasswordResetEmail, deliverAccountEmail } from "@/lib/accountEmails";
-import { hashAccountToken, issueAccountToken } from "@/lib/accountToken";
+import { createAccountToken, hashAccountToken } from "@/lib/accountToken";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
@@ -110,7 +110,9 @@ export async function POST(request: Request) {
       if (restored.count === 0) throw new ChangedAgain();
       await tx.accountToken.deleteMany({ where: { userId: record.userId, usedAt: null } });
       await tx.emailChangeRequest.deleteMany({ where: { userId: record.userId, usedAt: null } });
-      return issueAccountToken(tx, record.userId, "password_reset", now);
+      // Every unused link was just dropped, so there is no older one to keep
+      // or retire: the create-only half, inside the same write.
+      return (await createAccountToken(tx, record.userId, "password_reset", now)).raw;
     });
     if (!resetToken) return refuseUsed();
 

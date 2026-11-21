@@ -42,8 +42,8 @@ export function generateAccountToken(): { raw: string; hash: string } {
 }
 
 /**
- * Minimal Prisma surface {@link issueAccountToken} needs — just the two calls
- * it makes, not the full `AccountTokenDelegate`. Structural, mirroring
+ * Minimal Prisma surface the functions below need — just the two calls they
+ * make, not the full `AccountTokenDelegate`. Structural, mirroring
  * `lib/workspace.ts`'s `PrismaClientLike`: both the top-level `prisma` singleton
  * and a `$transaction(async (tx) => ...)` callback's `tx` structurally qualify,
  * and tests can pass a plain object exposing only `deleteMany`/`create`.
@@ -56,33 +56,61 @@ export type PrismaClientLike2 = {
 };
 
 /**
- * Issues a fresh single-use token of `type` for `userId`, returning the RAW
+ * Stores a fresh single-use token of `type` for `userId` and returns the RAW
  * token (the caller emails it once, in a link fragment — never persists it).
- *
- * First deletes any still-UNUSED token of the same type for the user, so
- * re-requesting (e.g. a second password reset) invalidates the older link and
- * only the newest one works. Already-used tokens are left untouched as an audit
- * trail. Runs the delete + create against the caller-supplied `tx` so a route
- * can wrap issuance in a larger transaction.
+ * Deletes nothing: a caller that emails the link uses {@link issueAccountToken},
+ * which retires the older links once the email is accepted.
  */
-export async function issueAccountToken(
+export async function createAccountToken(
   tx: PrismaClientLike2,
   userId: string,
   type: AccountTokenType,
   now: Date = new Date(),
-): Promise<string> {
+): Promise<{ raw: string; id: string; createdAt: Date }> {
   const { raw, hash } = generateAccountToken();
-
-  await tx.accountToken.deleteMany({ where: { userId, type, usedAt: null } });
-
-  await tx.accountToken.create({
+  const created = await tx.accountToken.create({
     data: {
       userId,
       type,
       tokenHash: hash,
       expiresAt: new Date(now.getTime() + TTL_MS_BY_TYPE[type]),
     },
+    select: { id: true, createdAt: true },
   });
+  return { raw, id: created.id, createdAt: created.createdAt };
+}
 
-  return raw;
+/**
+ * Issues a fresh token of `type` for `userId` and hands the raw token to
+ * `deliver`, which emails it and says whether the email service accepted it.
+ *
+ * R56 new-customer L1: only the newest link works, but an older unused link is
+ * retired only once the new one's email is accepted. Deleting first left a
+ * person whose send failed with no working link at all. So: create, deliver,
+ * then on acceptance delete the unused tokens of the type created BEFORE this
+ * one (by createdAt, so two concurrent sends can't retire each other's links
+ * and the newest wins); on refusal or a throw, delete only the new one, which
+ * nobody received. Used tokens are never touched (an audit trail).
+ */
+export async function issueAccountToken(
+  db: PrismaClientLike2,
+  userId: string,
+  type: AccountTokenType,
+  deliver: (rawToken: string) => Promise<boolean>,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const issued = await createAccountToken(db, userId, type, now);
+  let delivered = false;
+  try {
+    delivered = await deliver(issued.raw);
+  } finally {
+    if (!delivered) {
+      await db.accountToken.deleteMany({ where: { id: issued.id, usedAt: null } });
+    }
+  }
+  if (!delivered) return false;
+  await db.accountToken.deleteMany({
+    where: { userId, type, usedAt: null, createdAt: { lt: issued.createdAt } },
+  });
+  return true;
 }

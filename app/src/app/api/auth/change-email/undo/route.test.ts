@@ -13,11 +13,11 @@ const {
   requestDeleteManyMock,
   followMock,
   afterMock,
-  issueAccountTokenMock,
+  createAccountTokenMock,
   deliverAccountEmailMock,
 } = vi.hoisted(() => ({
   afterMock: vi.fn(),
-  issueAccountTokenMock: vi.fn(),
+  createAccountTokenMock: vi.fn(),
   deliverAccountEmailMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   findUniqueMock: vi.fn(),
@@ -35,7 +35,7 @@ vi.mock("next/server", async (importOriginal) => ({
 }));
 vi.mock("@/lib/accountToken", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/accountToken")>()),
-  issueAccountToken: issueAccountTokenMock,
+  createAccountToken: createAccountTokenMock,
 }));
 vi.mock("@/lib/accountEmails", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/accountEmails")>()),
@@ -92,13 +92,13 @@ beforeEach(() => {
     requestDeleteManyMock,
     followMock,
     afterMock,
-    issueAccountTokenMock,
+    createAccountTokenMock,
     deliverAccountEmailMock,
   ]) {
     mock.mockReset();
   }
   afterMock.mockImplementation(() => undefined);
-  issueAccountTokenMock.mockResolvedValue("raw-reset-token");
+  createAccountTokenMock.mockResolvedValue({ raw: "raw-reset-token", id: "tok_1", createdAt: new Date() });
   deliverAccountEmailMock.mockResolvedValue(true);
   vi.stubEnv("NEXTAUTH_URL", "https://app.example.com");
   checkRateLimitMock.mockResolvedValue({ allowed: true });
@@ -176,7 +176,7 @@ describe("POST /api/auth/change-email/undo", () => {
 
   it("emails a fresh password-reset link to the restored address", async () => {
     await POST(request({ token: "undo-token" }));
-    expect(issueAccountTokenMock.mock.calls[0].slice(1, 3)).toEqual(["user-1", "password_reset"]);
+    expect(createAccountTokenMock.mock.calls[0].slice(1, 3)).toEqual(["user-1", "password_reset"]);
     const [to, email] = deliverAccountEmailMock.mock.calls[0];
     expect(to).toBe("old@example.com");
     expect(email.text).toContain("https://app.example.com/reset-password#raw-reset-token");
