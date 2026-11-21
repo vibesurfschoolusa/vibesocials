@@ -22,6 +22,7 @@ import {
   accountCheckFailedMessage,
   accountCheckFailedPlatform,
   connectedAccountName,
+  connectionShownName,
   linkDifferentAccountMessage,
   linkedInReconnectSignInStep,
 } from "@/lib/differentAccount";
@@ -219,10 +220,8 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
           {platforms.map((platform) => {
             const connection = byPlatform.get(platform);
             const working = connection && !connection.needsReconnect;
-            // R8-client-journey L2: a LinkedIn identifier is an opaque profile id, a
-            // Facebook Page's a numeric id; neither is shown.
-            const idShown = platform !== "linkedin" && platform !== "facebook_page";
-            const name = connection?.username || (idShown ? connection?.accountIdentifier : null) || null;
+            // R60 pages-a L2: the name Settings shows, by the same rule (never an opaque id).
+            const name = connection ? connectionShownName(connection) : null;
             const connected = name ? `Connected: ${name}` : "Connected";
             // R56: the label starts with the visible text and names the platform, as the rows repeat.
             const form = (label: string, accessibleName = `${label} ${PLATFORM_LABELS[platform]}`) => (

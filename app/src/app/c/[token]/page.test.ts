@@ -228,6 +228,7 @@ describe("the connect link page", () => {
   });
 
   it("a working nameless TikTok row says Connected; X and Instagram keep their fallback", async () => {
+    for (const name of ["X_CONSUMER_KEY", "X_CONSUMER_SECRET", "X_CALLBACK_URL"]) vi.stubEnv(name, "v");
     h.findLink.mockResolvedValue({ ...LINK, platforms: ["instagram", "tiktok", "x"] });
     h.listConnections.mockResolvedValue([
       { platform: "tiktok", accountIdentifier: "-000AbOpenId", username: null, locationName: null, needsReconnect: false, reconnectSoon: false },

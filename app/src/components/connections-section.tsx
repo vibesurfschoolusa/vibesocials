@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import type { ConnectionSummary } from "@/lib/connectionSummary";
+import { connectionShownName } from "@/lib/differentAccount";
 import {
   PLATFORM_CONNECT_REQUIREMENTS,
   PLATFORM_MATURITY_NOTES,
@@ -182,10 +183,9 @@ export function ConnectionsSection({
           const isGoogleBusinessProfile = key === "google_business_profile";
           // A Business Profile has no account name to show until a location is
           // chosen (lib/connectionSummary.ts names it after that location).
-          // R59 new-customer-2 L1: TikTok's accountIdentifier is its opaque
-          // open_id, so a TikTok row with no name says "Connected" instead.
-          const username =
-            connection?.username ?? (key === "tiktok" ? null : connection?.accountIdentifier || null);
+          // R60 pages-a L2: the one rule for the name shown (never an opaque
+          // id); a row with none says "Connected" instead.
+          const username = connection ? connectionShownName(connection) : null;
           const locationName = connection?.locationName ?? null;
 
           return (

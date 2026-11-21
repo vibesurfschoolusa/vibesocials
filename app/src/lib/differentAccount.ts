@@ -34,22 +34,29 @@ export function differentAccountPlatform(code: string | null | undefined): Platf
 }
 
 /**
- * A connection's name as Settings shows it ("Connected as ..."). R8-client-
- * journey L2: a LinkedIn connection's stored name is its company page
- * (saveConnection.ts), and its identifier is the member's opaque profile id,
- * so without the name it is "the connected LinkedIn page".
+ * R60 pages-a L2: identifiers that are opaque ids, never a name to show:
+ * LinkedIn's member profile id (its stored name is the company page,
+ * saveConnection.ts), a Facebook Page's numeric id, TikTok's open_id and a
+ * Business Profile's placeholder. The one rule for every screen: Settings,
+ * /c and the sentences below.
  */
-export function connectedAccountName(connection: {
-  platform: Platform;
-  username: string | null;
-  accountIdentifier: string;
-}): string {
-  if (connection.platform === "linkedin") return connection.username || "the connected LinkedIn page";
-  // R8 review: a Facebook Page's identifier is its numeric id.
-  if (connection.platform === "facebook_page") return connection.username || "the connected Facebook Page";
-  // R59 fix review L1: a TikTok identifier is its opaque open_id, never shown.
-  if (connection.platform === "tiktok") return connection.username || "the connected TikTok account";
-  return connection.username || connection.accountIdentifier || `the connected ${platformLabel(connection.platform)} account`;
+const OPAQUE_IDENTIFIER: ReadonlySet<Platform> = new Set(["linkedin", "facebook_page", "tiktok", "google_business_profile"]);
+
+type NamedConnection = { platform: Platform; username: string | null; accountIdentifier: string };
+
+/** The name a screen shows for a connection, or null when it has none (the row then reads "Connected"). */
+export function connectionShownName(connection: NamedConnection): string | null {
+  if (connection.username) return connection.username;
+  return OPAQUE_IDENTIFIER.has(connection.platform) ? null : connection.accountIdentifier || null;
+}
+
+/** A connection's name in a sentence: its shown name, else "the connected <Platform> account" (or page). */
+export function connectedAccountName(connection: NamedConnection): string {
+  const shown = connectionShownName(connection);
+  if (shown) return shown;
+  if (connection.platform === "linkedin") return "the connected LinkedIn page";
+  if (connection.platform === "facebook_page") return "the connected Facebook Page";
+  return `the connected ${platformLabel(connection.platform)} account`;
 }
 
 /**
