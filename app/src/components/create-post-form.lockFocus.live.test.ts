@@ -341,6 +341,41 @@ describe("SendLock takes its one child's place (R65 publishing-flow L2)", () => 
     expect(source.match(/<SendLock/g)?.length).toBe(uses.length);
   });
 
+  it("no SendLock wraps AttachedPhotos: it takes disabled={sendLocksFields} itself", () => {
+    const source = readFileSync(path.join(__dirname, "create-post-form.tsx"), "utf8");
+    expect(source).not.toMatch(/<SendLock locked=\{sendLocksFields\}>\s*<AttachedPhotos/);
+    expect(source).toMatch(/<AttachedPhotos[^<]*?disabled=\{sendLocksFields\}[^<]*?\/>/);
+  });
+
+  it("on the page: the photos have no wrapper, and their controls lock during a waiting Schedule and unlock after", async () => {
+    postAnswer = REFUSED;
+    await mount();
+    await typeCaption("Surf lesson today");
+    await pressSchedule();
+    await pick(photo("s1"), photo("s2"));
+    const list = find(container, (n) => n.nodeName === "OL" && n.attributes?.["aria-label"] === "Attached photos");
+    if (!list) throw new Error("no attached photos");
+    expect(list.parentNode?.parentNode?.nodeName).not.toBe("FIELDSET");
+    const label = (n: FakeNode) => String(n.attributes?.["aria-label"] ?? n.attributes?.id ?? "");
+    const photoControls = () => [
+      ...findAll(container, (n) => n.nodeName === "BUTTON" && /^(Remove|Move|Retry) photo /.test(label(n))),
+      ...findAll(container, (n) => n.nodeName === "INPUT" && label(n).startsWith("alt-photo-")),
+      buttonTexted("Remove all"),
+    ];
+    // At the ends of the set an arrow is disabled anyway.
+    const offWithoutLock = () => photoControls().filter((n) => disabledNow(n) && !/(1 earlier|2 later)$/.test(label(n)));
+    expect(photoControls().length).toBeGreaterThanOrEqual(9);
+    expect(offWithoutLock()).toEqual([]);
+    postStalls = true;
+    await submit();
+    expect(posted).toHaveLength(1);
+
+    for (const node of photoControls()) expect(disabledNow(node), label(node)).toBe(true);
+    await act(async () => postRelease!());
+    await settle();
+    expect(offWithoutLock()).toEqual([]);
+  }, 10_000);
+
   it("on the page: a photo leaves no empty fieldset for the missing cover", async () => {
     await mount();
     await pick(photo("still"));
@@ -422,6 +457,26 @@ describe("Create: the lock keeps keyboard focus (R65 new-customer L1, pages-b L1
 
     expect(isSubmitButton(active())).toBe(true);
     await releaseUpload("alt2");
+  }, 10_000);
+
+  it("Enter in a photo's alt text in a set during Schedule: focus is on the submit button", async () => {
+    await mount();
+    await typeCaption("Surf lesson today");
+    await pressSchedule();
+    await pick(photo("set5a"), photo("set5b"));
+    const altField = find(container, (n) => n.nodeName === "INPUT" && String(n.attributes?.id ?? "").startsWith("alt-photo-"));
+    if (!altField) throw new Error("no photo alt text");
+    await focus(altField);
+    expect(active()).toBe(altField);
+    // A set sends once every photo is up, so the wait is the save itself.
+    postStalls = true;
+    await submit();
+    expect(posted).toHaveLength(1);
+    expect(disabledNow(altField)).toBe(true);
+
+    expect(active()).toBe(formSubmit());
+    await act(async () => postRelease!());
+    await settle();
   }, 10_000);
 
   it("pressing the Schedule button itself: focus is unchanged", async () => {

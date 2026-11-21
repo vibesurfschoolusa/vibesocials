@@ -3222,18 +3222,17 @@ function CreatePostFormInner({
               )}
 
               {photoSet.length > 0 && (
-                <SendLock locked={sendLocksFields}>
-                  <AttachedPhotos
-                    photos={photoSet}
-                    onRemove={removeAttachedPhoto}
-                    onMove={moveAttachedPhoto}
-                    onRetry={retryAttachedPhoto}
-                    onRemoveAll={removeAllPhotos}
-                    removeAllClearsCaption={removeAllClearsTheCaption}
-                    onDescribe={(key, text) => changePhotoSet((prev) => patchPhoto(prev, key, { altText: text }))}
-                    writeDescription={writePhotoDescription}
-                  />
-                </SendLock>
+                <AttachedPhotos
+                  photos={photoSet}
+                  onRemove={removeAttachedPhoto}
+                  onMove={moveAttachedPhoto}
+                  onRetry={retryAttachedPhoto}
+                  onRemoveAll={removeAllPhotos}
+                  removeAllClearsCaption={removeAllClearsTheCaption}
+                  onDescribe={(key, text) => changePhotoSet((prev) => patchPhoto(prev, key, { altText: text }))}
+                  writeDescription={writePhotoDescription}
+                  disabled={sendLocksFields}
+                />
               )}
               <PreparingPhotosStatus photos={photoSet} />
 

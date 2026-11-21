@@ -683,7 +683,8 @@ describe("whereDescriptionGoes", () => {
 describe("Write it for me while busy", () => {
   const source = readFileSync(new URL("./attached-photos.tsx", import.meta.url), "utf8");
   it("is loading, not disabled, while writing", () => {
-    expect(source).toContain("loading={writing} disabled={!onWrite}");
+    // R65: the send lock disables it too; a send can't start while it writes (the AI wait holds it).
+    expect(source).toContain("loading={writing} disabled={!onWrite || disabled}");
   });
 });
 
@@ -714,8 +715,8 @@ describe("PreparingPhotosStatus", () => {
 
   it("Create draws it outside the attached set, so it is there before the first pick", () => {
     const form = readFileSync(new URL("../create-post-form.tsx", import.meta.url), "utf8");
-    // R64 fix review L1: the set sits in the send lock; the status stays outside it.
-    expect(form).toMatch(/\{photoSet\.length > 0 && \(\s*<SendLock locked=\{sendLocksFields\}>\s*<AttachedPhotos[^]*?\/>\s*<\/SendLock>\s*\)\}\s*<PreparingPhotosStatus photos=\{photoSet\} \/>/);
+    // R65: the set is locked through its own disabled prop, with no wrapper; the status stays outside it.
+    expect(form).toMatch(/\{photoSet\.length > 0 && \(\s*<AttachedPhotos[^<]*?disabled=\{sendLocksFields\}[^<]*?\/>\s*\)\}\s*<PreparingPhotosStatus photos=\{photoSet\} \/>/);
     const own = readFileSync(new URL("./attached-photos.tsx", import.meta.url), "utf8");
     expect(own).not.toMatch(/\{preparing && \(/);
   });
@@ -773,5 +774,88 @@ describe("selectedMediaOf", () => {
   it("a reused item is itself", () => {
     const item = { id: "m1" };
     expect(selectedMediaOf({ single: item, set: [] })).toBe(item);
+  });
+});
+
+// R65 publishing-flow L2: Create locks the set during a waiting send through
+// this prop, so no wrapper takes the set's place and its mt-2 gap is as before.
+describe("AttachedPhotos - disabled", () => {
+  const noop = () => {};
+  const render = (photos: AttachedPhoto[], disabled?: boolean) =>
+    renderToStaticMarkup(
+      createElement(AttachedPhotos, {
+        writeDescription: () => Promise.resolve(null),
+        photos,
+        onRemove: noop,
+        onMove: noop,
+        onRetry: noop,
+        onRemoveAll: noop,
+        removeAllClearsCaption: false,
+        onDescribe: noop,
+        ...(disabled === undefined ? {} : { disabled }),
+      }),
+    );
+  const set = () => [photo("a"), photo("b", { status: "failed", error: "No.", blob: null }), photo("c")];
+  /** Each control's opening tag, by its name. */
+  function controls(html: string): Map<string, string> {
+    const found = new Map<string, string>();
+    for (const tag of html.match(/<(button|input)\b[^>]*>/g) ?? []) {
+      const name = /aria-label="([^"]+)"/.exec(tag)?.[1] ?? /id="([^"]+)"/.exec(tag)?.[1];
+      if (name) found.set(name, tag);
+    }
+    const removeAll = /<button\b[^>]*>Remove all<\/button>/.exec(html)?.[0];
+    if (removeAll) found.set("Remove all", removeAll);
+    return found;
+  }
+  const isDisabled = (tag: string) => / disabled=""/.test(tag);
+  const NAMES = [
+    "Move photo 1 earlier",
+    "Move photo 1 later",
+    "Remove photo 1",
+    "Move photo 2 earlier",
+    "Remove photo 2",
+    "Retry photo 2",
+    "Remove photo 3",
+    "alt-a",
+    "Write it for me: Photo 1: describe this photo (alt text)",
+    "alt-b",
+    "alt-c",
+    "Remove all",
+  ];
+
+  it("with disabled: every control that changes the post is disabled", () => {
+    const found = controls(render(set(), true));
+    for (const name of NAMES) {
+      expect(found.has(name), name).toBe(true);
+      expect(isDisabled(found.get(name)!), name).toBe(true);
+    }
+    for (const [name, tag] of found) expect(isDisabled(tag), name).toBe(true);
+  });
+
+  it("without disabled: as now, only the end arrows and an unuploaded photo's Write it for me are disabled", () => {
+    for (const html of [render(set()), render(set(), false)]) {
+      const found = controls(html);
+      const off = [...found].filter(([, tag]) => isDisabled(tag)).map(([name]) => name).sort();
+      expect(off).toEqual(
+        ["Move photo 1 earlier", "Move photo 3 later", "Write it for me: Photo 2: describe this photo (alt text)"].sort(),
+      );
+      for (const name of NAMES) expect(found.has(name), name).toBe(true);
+    }
+  });
+
+  it("PhotoDescriptionField alone: disabled locks the field and Write it for me", () => {
+    const html = renderToStaticMarkup(
+      createElement(PhotoDescriptionField, {
+        id: "post-alt-text",
+        label: "Describe this photo (alt text)",
+        value: "",
+        onChange: () => {},
+        onWrite: () => Promise.resolve(null),
+        disabled: true,
+      }),
+    );
+    const found = controls(html);
+    expect(isDisabled(found.get("post-alt-text")!)).toBe(true);
+    expect(isDisabled(found.get("Write it for me: Describe this photo (alt text)")!)).toBe(true);
   });
 });

@@ -149,12 +149,15 @@ export function PhotoDescriptionField({
   value,
   onChange,
   onWrite,
+  disabled = false,
 }: {
   id: string;
   label: string;
   value: string;
   onChange(text: string): void;
   onWrite: (() => Promise<string | null>) | null;
+  /** R65: Create's send lock (sendLocksFields): the field and its button can't change the post. */
+  disabled?: boolean;
 }) {
   const [writing, setWriting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -189,6 +192,7 @@ export function PhotoDescriptionField({
           value={value}
           maxLength={ALT_TEXT_MAX}
           onChange={(event) => onChange(event.target.value)}
+          disabled={disabled}
           placeholder="What is in the photo, for someone who can't see it"
           aria-describedby={`${id}-count`}
           className="h-9"
@@ -199,7 +203,7 @@ export function PhotoDescriptionField({
           size="sm"
           onClick={write}
           aria-label={`Write it for me: ${label}`}
-          loading={writing} disabled={!onWrite}
+          loading={writing} disabled={!onWrite || disabled}
         >
           {!writing && <Sparkles className="h-4 w-4" aria-hidden />}
           Write it for me
@@ -401,6 +405,12 @@ export interface AttachedPhotosProps {
    * Null: nothing to write.
    */
   writeDescription(blob: UploadedBlob, photo: File): Promise<string | null>;
+  /**
+   * R65 publishing-flow L2: Create's send lock (sendLocksFields). Every control
+   * that changes the set or its descriptions is disabled. A prop, not a
+   * wrapping fieldset, so the set's own mt-2 keeps its gap.
+   */
+  disabled?: boolean;
 }
 
 export function AttachedPhotos({
@@ -412,6 +422,7 @@ export function AttachedPhotos({
   removeAllClearsCaption: clearsCaption,
   onDescribe,
   writeDescription,
+  disabled = false,
 }: AttachedPhotosProps) {
   const progress = photoSetProgress(photos);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -428,6 +439,7 @@ export function AttachedPhotos({
             onRemove={() => onRemove(photo.key)}
             onMove={(direction) => onMove(photo.key, direction)}
             onRetry={() => onRetry(photo.key)}
+            disabled={disabled}
           />
         ))}
       </ol>
@@ -441,6 +453,7 @@ export function AttachedPhotos({
               value={photo.altText ?? ""}
               onChange={(text) => onDescribe(photo.key, text)}
               onWrite={photo.blob ? () => writeDescription(photo.blob as UploadedBlob, photo.file) : null}
+              disabled={disabled}
             />
           </li>
         ))}
@@ -468,7 +481,7 @@ export function AttachedPhotos({
       )}
       {photos.length >= 2 && (
         <>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmOpen(true)}>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmOpen(true)} disabled={disabled}>
             Remove all
           </Button>
           <ConfirmDialog
@@ -496,6 +509,7 @@ function PhotoTile({
   onRemove,
   onMove,
   onRetry,
+  disabled,
 }: {
   photo: AttachedPhoto;
   position: number;
@@ -504,6 +518,7 @@ function PhotoTile({
   onRemove(): void;
   onMove(direction: -1 | 1): void;
   onRetry(): void;
+  disabled: boolean;
 }) {
   const [url, setUrl] = useState<string | null>(null);
   const earlierRef = useRef<HTMLButtonElement>(null);
@@ -547,7 +562,7 @@ function PhotoTile({
             focusAfterPress(event.currentTarget, () => laterRef.current);
             onMove(-1);
           }}
-          disabled={isFirst}
+          disabled={isFirst || disabled}
           aria-label={`Move photo ${position} earlier`}
         >
           <ChevronLeft className="h-4 w-4" aria-hidden />
@@ -560,7 +575,7 @@ function PhotoTile({
             focusAfterPress(event.currentTarget, () => earlierRef.current);
             onMove(1);
           }}
-          disabled={isLast}
+          disabled={isLast || disabled}
           aria-label={`Move photo ${position} later`}
         >
           <ChevronRight className="h-4 w-4" aria-hidden />
@@ -569,6 +584,7 @@ function PhotoTile({
           type="button"
           className={ICON_BUTTON}
           onClick={onRemove}
+          disabled={disabled}
           aria-label={`Remove photo ${position}`}
         >
           <X className="h-4 w-4" aria-hidden />
@@ -580,6 +596,7 @@ function PhotoTile({
           <button
             type="button"
             onClick={onRetry}
+            disabled={disabled}
             aria-label={`Retry photo ${position}`}
             className="text-xs font-medium text-primary underline-offset-4 hover:underline"
           >
