@@ -95,7 +95,7 @@ describe("POST /api/posts/[postJobId]/cancel-series", () => {
     const res = await POST(req, ctx("job-2"));
 
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 2, notCancelled: 0, changed: 0 });
+    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 2, notCancelled: 0, alreadyCancelled: 0, gone: 0, changed: 0 });
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { id: "job-2", workspaceId: "ws-1" },
       select: { status: true, scheduledFor: true, seriesId: true },
@@ -144,7 +144,7 @@ describe("POST /api/posts/[postJobId]/cancel-series", () => {
     const res = await POST(req, ctx("job-2"));
 
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 1, changed: 0 });
+    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 1, alreadyCancelled: 0, gone: 0, changed: 0 });
   });
 
   // R59 publishing-flow L4: the writes are pinned to the approval fields, so a
@@ -166,8 +166,8 @@ describe("POST /api/posts/[postJobId]/cancel-series", () => {
     const res = await POST(req, ctx("job-2"));
 
     expect(res.status).toBe(200);
-    // job-5 is gone: it moved on too.
-    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 2, changed: 1 });
+    // R60 publishing-flow L3: job-5 is gone, counted as deleted, not as started.
+    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 1, alreadyCancelled: 0, gone: 1, changed: 1 });
     expect(findManyMock).toHaveBeenLastCalledWith({
       where: { id: { in: ["job-3", "job-4", "job-5"] }, workspaceId: "ws-1" },
       select: { id: true, status: true },
@@ -183,7 +183,7 @@ describe("POST /api/posts/[postJobId]/cancel-series", () => {
     const res = await POST(req, ctx("job-2"));
 
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 1, changed: 0 });
+    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 1, alreadyCancelled: 0, gone: 0, changed: 0 });
     errors.mockRestore();
   });
 
@@ -354,5 +354,52 @@ describe("POST /api/posts/[postJobId]/cancel-series: a post that moved on", () =
     const res = await POST(req, ctx("job-2"));
     expect(res.status).toBe(404);
     await expect(res.json()).resolves.toEqual({ error: "This post no longer exists." });
+  });
+});
+
+// R60 publishing-flow L3: a later post a teammate cancelled or deleted at the
+// same moment was counted in notCancelled, which the toast words as "had
+// already started publishing". notCancelled now counts only posts that started
+// (pending, in progress, completed or failed); the others have their own counts.
+describe("POST /api/posts/[postJobId]/cancel-series: why a missed post was missed", () => {
+  function missed(reread: { id: string; status: string }[]) {
+    findManyMock.mockResolvedValueOnce([row("job-2"), row("job-3")]).mockResolvedValueOnce(reread);
+    updateManyMock.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+  }
+
+  it("cancelled by someone else: alreadyCancelled", async () => {
+    missed([{ id: "job-3", status: "cancelled" }]);
+    const res = await POST(req, ctx("job-2"));
+    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 0, alreadyCancelled: 1, gone: 0, changed: 0 });
+  });
+
+  it("deleted: gone", async () => {
+    missed([]);
+    const res = await POST(req, ctx("job-2"));
+    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 0, alreadyCancelled: 0, gone: 1, changed: 0 });
+  });
+
+  it.each(["pending", "in_progress", "completed", "failed"])("%s: started publishing (notCancelled)", async (status) => {
+    missed([{ id: "job-3", status }]);
+    const res = await POST(req, ctx("job-2"));
+    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 1, alreadyCancelled: 0, gone: 0, changed: 0 });
+  });
+
+  it("a mix: each in its own count", async () => {
+    findManyMock
+      .mockResolvedValueOnce([row("job-2"), row("job-3"), row("job-4"), row("job-5"), row("job-6")])
+      .mockResolvedValueOnce([
+        { id: "job-3", status: "cancelled" },
+        { id: "job-4", status: "in_progress" },
+        { id: "job-6", status: "scheduled" },
+      ]);
+    updateManyMock
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 });
+    const res = await POST(req, ctx("job-2"));
+    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 1, alreadyCancelled: 1, gone: 1, changed: 1 });
   });
 });

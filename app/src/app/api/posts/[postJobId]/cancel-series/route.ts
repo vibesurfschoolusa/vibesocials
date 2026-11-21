@@ -34,8 +34,10 @@ const MUTATE_RATE_LIMIT = { route: "posts/mutate", limit: 60, windowMs: 5 * 60 *
  * that route's ATOMIC conditional update (id + workspace + a cancelable
  * status, pinned to the approval columns it was read with), so a post the
  * scheduler claims at the same instant is not touched. The updates go in one
- * batch; one that matches nothing is counted in `notCancelled` when it moved
- * on, and in `changed` when it is still a draft or scheduled.
+ * batch; one that matches nothing is read again and counted by why: in
+ * `notCancelled` when it started publishing, `alreadyCancelled` when someone
+ * else cancelled it, `gone` when it was deleted, and `changed` when it is still
+ * a draft or scheduled.
  */
 export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
@@ -135,13 +137,18 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   }
 
   // R59 publishing-flow L4: a missed post still draft or scheduled changed in
-  // the meantime (`changed`); only one that moved on is `notCancelled`, so a
-  // tab reading only that still says those had started publishing.
-  let stillCancellable = 0;
+  // the meantime (`changed`). R60 publishing-flow L3: one a teammate cancelled
+  // (`alreadyCancelled`) or deleted (`gone`) at the same moment has its own
+  // count, so `notCancelled` holds only posts that started publishing, and a
+  // tab reading only that still words it truly.
+  const counts = { notCancelled: missed.length, alreadyCancelled: 0, gone: 0, changed: 0 };
   if (missed.length > 0) {
     try {
       const reread = await prisma.postJob.findMany({ where: { id: { in: missed }, workspaceId }, select: { id: true, status: true } });
-      stillCancellable = reread.filter((post) => MUTABLE_POST_JOB_STATUSES.includes(post.status)).length;
+      counts.changed = reread.filter((post) => MUTABLE_POST_JOB_STATUSES.includes(post.status)).length;
+      counts.alreadyCancelled = reread.filter((post) => post.status === "cancelled").length;
+      counts.gone = missed.length - reread.length;
+      counts.notCancelled = missed.length - counts.changed - counts.alreadyCancelled - counts.gone;
     } catch (error) {
       // The cancel has committed: a count we can't read must not turn it into
       // a 500. Every missed post then reads as notCancelled, the old answer.
@@ -149,8 +156,5 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     }
   }
 
-  return NextResponse.json(
-    { ok: true, cancelled, notCancelled: missed.length - stillCancellable, changed: stillCancellable },
-    { status: 200 },
-  );
+  return NextResponse.json({ ok: true, cancelled, ...counts }, { status: 200 });
 }

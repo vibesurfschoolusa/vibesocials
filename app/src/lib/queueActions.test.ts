@@ -890,3 +890,35 @@ describe("seriesCancelToast", () => {
     expect(seriesCancelToast({ cancelled: "2", changed: "x" })).toBe("0 posts cancelled.");
   });
 });
+
+// R60 publishing-flow L3: a post someone else cancelled or deleted at the same
+// moment has its own line; notCancelled now counts only posts that started.
+describe("seriesCancelToast: cancelled or deleted by someone else", () => {
+  it("one already cancelled", () => {
+    expect(seriesCancelToast({ cancelled: 2, notCancelled: 0, alreadyCancelled: 1, gone: 0, changed: 0 })).toBe(
+      "2 posts cancelled. 1 was already cancelled.",
+    );
+    expect(seriesCancelToast({ cancelled: 1, notCancelled: 0, alreadyCancelled: 2 })).toBe("1 post cancelled. 2 were already cancelled.");
+  });
+  it("one deleted", () => {
+    expect(seriesCancelToast({ cancelled: 2, notCancelled: 0, alreadyCancelled: 0, gone: 1, changed: 0 })).toBe(
+      "2 posts cancelled. 1 was deleted.",
+    );
+    expect(seriesCancelToast({ cancelled: 1, gone: 2 })).toBe("1 post cancelled. 2 were deleted.");
+  });
+  it("one started publishing: as before", () => {
+    expect(seriesCancelToast({ cancelled: 1, notCancelled: 1, alreadyCancelled: 0, gone: 0, changed: 0 })).toBe(
+      "1 post cancelled. 1 had already started publishing, so it was not cancelled.",
+    );
+  });
+  it("a mix: started, already cancelled, deleted, then changed", () => {
+    expect(seriesCancelToast({ cancelled: 1, notCancelled: 1, alreadyCancelled: 1, gone: 1, changed: 1 })).toBe(
+      "1 post cancelled. 1 had already started publishing, so it was not cancelled. 1 was already cancelled. 1 was deleted. 1 changed in the meantime, so it was not cancelled. Try again.",
+    );
+  });
+  it("the old body (notCancelled only): as before", () => {
+    expect(seriesCancelToast({ ok: true, cancelled: 2, notCancelled: 1 })).toBe(
+      "2 posts cancelled. 1 had already started publishing, so it was not cancelled.",
+    );
+  });
+});

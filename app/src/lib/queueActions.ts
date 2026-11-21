@@ -502,8 +502,10 @@ export function editTimeToSend(input: {
 /**
  * Cancel series' success toast. `notCancelled` counts posts that had started
  * publishing; R59 publishing-flow L4: `changed` counts posts that changed in
- * the meantime and are still cancellable, so they can be tried again. A server
- * from before `changed` leaves it out, and the toast reads as it did.
+ * the meantime and are still cancellable, so they can be tried again. R60
+ * publishing-flow L3: `alreadyCancelled` and `gone` count posts someone else
+ * cancelled or deleted at the same moment. A server from before a count leaves
+ * it out, and the toast reads as it did.
  */
 export function seriesCancelToast(data: unknown): string {
   const r = asRecord(data);
@@ -511,10 +513,15 @@ export function seriesCancelToast(data: unknown): string {
   const cancelled = count(r.cancelled);
   const started = count(r.notCancelled);
   const changed = count(r.changed);
+  const alreadyCancelled = count(r.alreadyCancelled);
+  const gone = count(r.gone);
   const them = (n: number) => (n === 1 ? "it was" : "they were");
+  const was = (n: number) => (n === 1 ? "was" : "were");
   return (
     `${cancelled} ${cancelled === 1 ? "post" : "posts"} cancelled.` +
     (started > 0 ? ` ${started} had already started publishing, so ${them(started)} not cancelled.` : "") +
+    (alreadyCancelled > 0 ? ` ${alreadyCancelled} ${was(alreadyCancelled)} already cancelled.` : "") +
+    (gone > 0 ? ` ${gone} ${was(gone)} deleted.` : "") +
     (changed > 0 ? ` ${changed} changed in the meantime, so ${them(changed)} not cancelled. Try again.` : "")
   );
 }
