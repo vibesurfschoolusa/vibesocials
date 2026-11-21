@@ -9,7 +9,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(navigation.query),
 }));
 
-import { LinkedInSetupDialog } from "./linkedin-setup-dialog";
+import { LinkedInSetupDialog, linkedInVanityName } from "./linkedin-setup-dialog";
 
 // The markup React builds on a first render. With `document` present this is
 // the render hydration compares against the server's HTML.
@@ -76,5 +76,24 @@ describe("LinkedInSetupDialog: who may connect", () => {
     const source = readFileSync(new URL("./linkedin-setup-dialog.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
     expect(source).toContain("and it must be a Super admin of the page.");
     expect(source).not.toContain("administrator");
+  });
+});
+
+// R60 new-customer-2 L1: a typed "LinkedIn.com/company/..." was sent whole as the vanity name.
+describe("LinkedInSetupDialog: the page address typed in", () => {
+  it("a capitalised host gives the vanity name, lowercased", () => {
+    expect(linkedInVanityName("LinkedIn.com/company/vibe-surf")).toBe("vibe-surf");
+    expect(linkedInVanityName("HTTPS://WWW.LINKEDIN.COM/COMPANY/Vibe-Surf/")).toBe("vibe-surf");
+  });
+
+  it("a page's admin address gives its vanity name", () => {
+    expect(linkedInVanityName("https://www.linkedin.com/company/vibe-surf/admin/")).toBe("vibe-surf");
+  });
+
+  it("a bare vanity name and a numeric id, as now", () => {
+    expect(linkedInVanityName("  Vibe Surf School ")).toBe("vibe-surf-school");
+    expect(linkedInVanityName("vibe-surf/")).toBe("vibe-surf");
+    expect(linkedInVanityName("82188987")).toBe("82188987");
+    expect(linkedInVanityName("linkedin.com/company/82188987")).toBe("82188987");
   });
 });
