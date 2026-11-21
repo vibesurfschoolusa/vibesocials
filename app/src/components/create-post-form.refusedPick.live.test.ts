@@ -52,6 +52,7 @@ import {
   FILE_LOST_FILE_ONLY_MESSAGE,
   FILE_LOST_MESSAGE,
   FILE_LOST_PRESS_TOAST,
+  SHARE_LOST_TOAST,
   UNTOUCHED_SUBMIT_MESSAGE,
 } from "./create-post-form";
 
@@ -136,6 +137,8 @@ function textOutsideToasts(node: FakeNode): string {
   return node.childNodes.map(textOutsideToasts).join("");
 }
 const lineSays = (text: string) => textOutsideToasts(body).includes(text);
+/** Said in a toast, not on the page itself. */
+const toastSays = (text: string) => pageSays(text) && !lineSays(text);
 const pick = (...files: File[]) => run(() => props(byId("post-media")).onChange({ target: { files } }));
 const typeCaption = (value: string) => run(() => props(byId("post-caption")).onChange({ target: { value } }));
 function button(text: string): FakeNode {
@@ -653,5 +656,68 @@ describe("R54: a shared file that didn't arrive", () => {
     await openShared(["x"], "");
     expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
     expect(replaced).toEqual([]);
+  });
+});
+
+// R55 new-customer L2, publishing-flow L1: a share that brought no file was
+// told only by the notice far below the form; on a phone the person saw an
+// empty Media field and no word. It is said at once in a toast, as a library
+// load that fails is, and the notice and its stop stay.
+describe("R55: a shared file that didn't arrive is said at once", () => {
+  function share(stored: Response | null) {
+    const entries = new Map<string, Response>();
+    if (stored) entries.set("/shared-file", stored);
+    vi.stubGlobal("caches", {
+      open: async () => ({
+        match: async (key: string) => entries.get(key),
+        delete: async (key: string) => entries.delete(key),
+      }),
+    });
+  }
+  const storedAt = (at: number) =>
+    new Response("photo", { headers: { "Content-Type": "image/jpeg", "X-File-Name": "wave.jpg", "X-Shared-At": String(at) } });
+  async function openShared(platforms: string[]) {
+    await act(async () => root.unmount());
+    conn.platforms = platforms;
+    nav.params = new URLSearchParams("shared=1");
+    Object.assign(window as object, {
+      location: { href: "http://localhost/posts/new?shared=1" },
+      history: { state: null, replaceState: () => {} },
+    });
+    root = createRoot(container as unknown as HTMLElement);
+    await mount();
+    await settle();
+  }
+
+  it("the sentence", () => {
+    expect(SHARE_LOST_TOAST).toBe("The shared photo or video didn't arrive. Add it again.");
+  });
+
+  it("no file: the toast plus the notice", async () => {
+    share(null);
+    await openShared(["x"]);
+    expect(toastSays(SHARE_LOST_TOAST)).toBe(true);
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(true);
+  });
+
+  it("a stale file: the toast plus the notice", async () => {
+    share(storedAt(Date.now() - 2 * 60 * 60 * 1000));
+    await openShared(["x"]);
+    expect(toastSays(SHARE_LOST_TOAST)).toBe(true);
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(true);
+  });
+
+  it("a fresh file: no toast, attached", async () => {
+    share(storedAt(Date.now() - 1000));
+    await openShared(["x"]);
+    expect(pageSays(SHARE_LOST_TOAST)).toBe(false);
+    expect(pageSays("wave.jpg")).toBe(true);
+  });
+
+  it("the form not shown yet: nothing", async () => {
+    share(null);
+    await openShared([]);
+    expect(pageSays(SHARE_LOST_TOAST)).toBe(false);
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
   });
 });

@@ -717,6 +717,8 @@ export const FILE_LOST_PRESS_TOAST =
 export const FILE_LOST_MESSAGE = "The photo or video could not be added. Add it again, or continue without one.";
 /** The notice where no connected platform takes text alone: going on without the file can go nowhere (R53 L1). */
 export const FILE_LOST_FILE_ONLY_MESSAGE = "The photo or video could not be added. Add it again.";
+/** R55 new-customer L2: said at once when a share brought no file, as a failed library load is. */
+export const SHARE_LOST_TOAST = "The shared photo or video didn't arrive. Add it again.";
 
 /** The lost-file notice's sentence: it offers to go on without the file only where that can be sent. */
 export function fileLostMessage(connected: readonly Platform[]): string {
@@ -2277,9 +2279,15 @@ function CreatePostFormInner({
   // R54 client-journey: a share that brought no file (none stored, or stale)
   // is a file the person meant to attach that didn't arrive: the lost-file
   // notice and its stop, so a caption alone doesn't silently post as text.
+  // R55 new-customer L2: the notice is far below the form; on a phone the
+  // person saw an empty Media field and no word, so a toast says it at once.
   const attachSharedFile = useEffectEvent((file: File | null) => {
-    if (file) void attachPickedFile(file);
-    else loseFile("share-failed");
+    if (file) {
+      void attachPickedFile(file);
+      return;
+    }
+    toast.error(SHARE_LOST_TOAST);
+    loseFile("share-failed");
   });
   const sharedParam = searchParams.get("shared");
   const sharedTakenRef = useRef(false);
