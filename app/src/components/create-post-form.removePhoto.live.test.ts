@@ -515,6 +515,8 @@ describe("Create: the media changed while it uploads", () => {
       await settle();
 
       expect(posted).toHaveLength(0);
+      // Nor is the replacement attached or uploaded after the page is gone.
+      expect(uploadsOf("slowprep")).toHaveLength(0);
       expect(pageSays("nothing was posted")).toBe(false);
       expect(pageSays(UNEXPECTED)).toBe(false);
       expect(consoleError).not.toHaveBeenCalled();
