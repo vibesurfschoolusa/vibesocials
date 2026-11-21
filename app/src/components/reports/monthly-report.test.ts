@@ -420,3 +420,13 @@ describe("MonthlyReportView - a Feed and Story post", () => {
     expect(render(report())).not.toContain("Feed and Story");
   });
 });
+
+// R57 pages-b sweep (#282's rule): every post repeats View post, so each
+// link's name starts with its text and names the platform and the post.
+describe("MonthlyReportView: View post names its post", () => {
+  it("names the platform, the Story and the caption, then the new-tab hint", () => {
+    const html = render(report());
+    expect(html).toContain('aria-label="View post on Instagram Story &quot;Dawn patrol&quot; (opens in a new tab)"');
+    expect(html).toContain('aria-label="View post on LinkedIn &quot;Old one&quot; (opens in a new tab)"');
+  });
+});

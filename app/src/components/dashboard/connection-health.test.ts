@@ -177,3 +177,14 @@ describe("ConnectionHealth when the read failed", () => {
     expect(card).toContain('Pick<UseConnectionsResult, "connections" | "loading" | "error" | "reload">');
   });
 });
+
+// R57 pages-b sweep (#282's rule): every row repeats these links, so each
+// one's name starts with its text and names the platform.
+describe("ConnectionHealth row links name their platform", () => {
+  it("Reconnect, Connect, Ended and Ends soon", () => {
+    expect(render([{ platform: "instagram", connected: true, needsReconnect: true }])).toMatch(/aria-label="Reconnect Instagram"/);
+    expect(render([{ platform: "x", connected: false }])).toMatch(/aria-label="Connect X"[^>]*>Connect<\/a>/);
+    expect(render([{ platform: "linkedin", connected: true, expiry: "ended" }])).toContain('aria-label="Ended: LinkedIn"');
+    expect(render([{ platform: "linkedin", connected: true, expiry: "ends_soon" }])).toContain('aria-label="Ends soon: LinkedIn"');
+  });
+});
