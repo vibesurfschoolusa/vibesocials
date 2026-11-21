@@ -5,6 +5,7 @@ import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { signedOutConnectRedirect } from "@/lib/signedOutConnect";
+import { checkRateLimit } from "@/lib/rateLimit";
 
 /**
  * OAuth 1.0a signature generation
@@ -34,6 +35,12 @@ function generateOAuthSignature(
 }
 
 const HANDSHAKE_TTL_MS = 10 * 60 * 1000;
+/**
+ * R61 security-billing-2 L1: each start makes one request-token call to X on
+ * the app's shared key and writes one handshake, so starts are limited per
+ * person, as the client-link start limits the same call.
+ */
+const X_STARTS_PER_HOUR = 30;
 /** How long past its expiry a client link's handshake is kept for the callback. */
 const LINK_HANDSHAKE_KEPT_MS = 24 * 60 * 60 * 1000;
 
@@ -61,6 +68,17 @@ export async function GET(request: Request) {
     console.error("[X OAuth 1.0a] Missing environment variables");
     return oauthErrorRedirect("x", "config_missing", process.env.NEXTAUTH_URL);
   }
+
+  // Fails closed: a store that can't answer must not open unlimited calls to X.
+  const limit = await checkRateLimit({
+    userId: user.id,
+    route: "auth/x/start",
+    limit: X_STARTS_PER_HOUR,
+    windowMs: 60 * 60 * 1000,
+    failClosed: true,
+  });
+  if (limit.unavailable) return oauthErrorRedirect("x", "limit_unchecked", process.env.NEXTAUTH_URL);
+  if (!limit.allowed) return oauthErrorRedirect("x", "too_many_tries", process.env.NEXTAUTH_URL);
 
   try {
     const timestamp = Math.floor(Date.now() / 1000).toString();

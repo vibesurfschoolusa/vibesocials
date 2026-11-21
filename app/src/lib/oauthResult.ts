@@ -308,6 +308,22 @@ function describeCode(
       };
     }
     const label = labelFromCode(error);
+    // R61 security-billing-2 L1: the X Connect start's per-person limit
+    // (api/auth/x/start), and its store that couldn't answer. Each names the
+    // button the row shows.
+    const tryButton = button ? `try ${button} again` : "try again";
+    if (error.endsWith("_too_many_tries")) {
+      return {
+        variant: "danger",
+        message: `Too many tries to connect ${label ?? "the account"} in the last hour. Wait a few minutes, then ${tryButton}.`,
+      };
+    }
+    if (error.endsWith("_limit_unchecked")) {
+      return {
+        variant: "danger",
+        message: `We couldn't check the connect limit just now. ${capitalized(tryButton)} in a minute.`,
+      };
+    }
     // A "*_denied" code (Google's access_denied, X's auth_denied), or
     // LinkedIn's own "no" (user_cancelled_login, user_cancelled_authorize),
     // which its callback passes on (R44 pages-a L7). Any other provider code
