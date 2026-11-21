@@ -87,8 +87,9 @@ function record(overrides: Record<string, unknown> = {}) {
 
 const USED = "This link was already used. If you just confirmed it, your email has changed.";
 // R29 OO1 (security L2): the row may be gone after a confirmed change, so no "unchanged".
+// R56 pages-a-2 L2: a new request retires the one before it.
 const DEAD =
-  "This link has expired or was already used. If you already confirmed the change, sign in with the new address. If not, ask for the change again in Settings, Account.";
+  "This link has expired or was already used. If you asked for the change more than once, open the newest email. If you already confirmed the change, sign in with the new address. If not, ask for the change again in Settings, Account.";
 
 beforeEach(() => {
   for (const mock of [

@@ -109,7 +109,7 @@ export function buildVerifyEmail(opts: BuildAccountEmailOptions): AccountEmail {
     actionLabel: "Verify your email address",
     path: "/verify-email",
     expiryNote:
-      "This link expires in 7 days. If you didn't create a Vibe Socials account, you can safely ignore this email.",
+      "This link expires in 7 days. If you asked more than once, only the link in the newest email works. If you didn't create a Vibe Socials account, you can safely ignore this email.",
   });
   return { subject, html, text };
 }
@@ -127,7 +127,7 @@ export function buildEmailChangeEmail(opts: BuildAccountEmailOptions): AccountEm
     actionLabel: "Use this email address",
     path: "/verify-email/new-address",
     expiryNote:
-      "This link expires in 24 hours. If you didn't ask for this, ignore this email: nothing changes.",
+      "This link expires in 24 hours. If you asked more than once, only the link in the newest email works. If you didn't ask for this, ignore this email: nothing changes.",
   });
   return { subject, html, text };
 }

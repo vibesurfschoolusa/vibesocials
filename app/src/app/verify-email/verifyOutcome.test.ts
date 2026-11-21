@@ -70,8 +70,10 @@ describe("verifyView", () => {
 
   // Review: the link may belong to another account than the one signed in,
   // so a dead link is answered about the link, never about this account.
+  // R56 new-customer L2: a resend retires the link before it, so the dead-link
+  // view, which offers a new link, says only the newest email's link works.
   const DEAD =
-    "This link has expired or was already used. If it is for another account, sign in to that account first.";
+    "This link has expired or was already used. If you asked for a link more than once, open the newest email. If it is for another account, sign in to that account first.";
 
   it("a dead link is answered about the link, whoever reads it", () => {
     for (const account of ["unverified", "signed_out", "unknown"] as const) {

@@ -31,7 +31,7 @@ const deadLinkResponse = () =>
   NextResponse.json(
     {
       error:
-        "This link has expired or was already used. If you already confirmed the change, sign in with the new address. If not, ask for the change again in Settings, Account.",
+        "This link has expired or was already used. If you asked for the change more than once, open the newest email. If you already confirmed the change, sign in with the new address. If not, ask for the change again in Settings, Account.",
       reason: "not_valid",
     },
     { status: 400 },

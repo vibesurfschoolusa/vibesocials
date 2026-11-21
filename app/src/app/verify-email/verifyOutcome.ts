@@ -147,7 +147,7 @@ export function verifyView(
     offerResend: account === "unverified",
     title: "This link isn't valid",
     message:
-      "This link has expired or was already used. If it is for another account, sign in to that account first.",
+      "This link has expired or was already used. If you asked for a link more than once, open the newest email. If it is for another account, sign in to that account first.",
   };
 }
 

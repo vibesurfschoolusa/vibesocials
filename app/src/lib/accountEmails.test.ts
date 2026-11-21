@@ -83,6 +83,29 @@ describe("buildPasswordResetEmail: the newest link", () => {
   });
 });
 
+// R56 new-customer L2, pages-a-2 L2: the verify and email-change links work
+// the same way, so their emails say so too; the reset email is unchanged.
+describe("the newest link, in the verify and email-change emails", () => {
+  const LINE = "If you asked more than once, only the link in the newest email works.";
+  for (const [name, build] of [
+    ["buildVerifyEmail", buildVerifyEmail],
+    ["buildEmailChangeEmail", buildEmailChangeEmail],
+  ] as const) {
+    it(`${name} carries the line once in both the text and the html`, () => {
+      const { html, text } = build({ to: "user@example.com", rawToken: RAW_TOKEN, baseUrl: BASE_URL });
+      expect(countOccurrences(text, LINE)).toBe(1);
+      expect(countOccurrences(html, LINE)).toBe(1);
+    });
+  }
+
+  it("the reset email's note is unchanged", () => {
+    const { text } = buildPasswordResetEmail({ to: "user@example.com", rawToken: RAW_TOKEN, baseUrl: BASE_URL });
+    expect(text).toContain(
+      "This link expires in 60 minutes. If you asked more than once, only the link in the newest email works. If you didn't request a password reset, you can safely ignore this email — your password won't change.",
+    );
+  });
+});
+
 describe("buildVerifyEmail", () => {
   it("uses a sentence-case subject", () => {
     const { subject } = buildVerifyEmail({
