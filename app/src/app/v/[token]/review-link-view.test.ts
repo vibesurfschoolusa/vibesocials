@@ -67,6 +67,23 @@ describe("ReviewPostCard", () => {
     expect(html).toMatch(/<button[^>]*w-full[^>]*>Ask for a change<\/button>/);
   });
 
+  // R56 pages-b L2: up to 100 cards repeat these buttons, so each names its post.
+  it("names the post on Looks good and Ask for a change, and keeps their text", () => {
+    const html = render(post());
+    expect(html).toMatch(/<button[^>]*aria-label="Looks good &quot;Sunday session&quot;"[^>]*>Looks good<\/button>/);
+    expect(html).toMatch(/<button[^>]*aria-label="Ask for a change &quot;Sunday session&quot;"[^>]*>Ask for a change<\/button>/);
+    expect(render(post({ caption: "" }))).toContain('aria-label="Looks good &quot;Untitled post&quot;"');
+  });
+
+  it("names the post on Send, Cancel and Dismiss too (states that need a press first)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
+    for (const text of ["Send", "Cancel", "Dismiss"]) {
+      expect(source).toContain("aria-label={`" + text + " \"${cardName}\"`}");
+    }
+  });
+
   it("shows a video with controls", () => {
     expect(render(post({ media: { url: "https://x.example/a.mp4", mimeType: "video/mp4" } }))).toContain("<video");
   });

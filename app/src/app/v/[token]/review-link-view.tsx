@@ -15,6 +15,7 @@ import {
 } from "@/lib/clientLinkLimit";
 import { focusAfterPress, focusFirstOf } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { labelName } from "@/lib/queueLabelName";
 import { useRetryFocus } from "@/lib/useRetryFocus";
 import {
   REVIEW_ALREADY_APPROVED_MESSAGE,
@@ -345,6 +346,8 @@ export function ReviewPostCard({
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const askRef = useRef<HTMLButtonElement>(null);
   const state = stateText(post);
+  // R56: the buttons repeat on every card, so each one's accessible name carries the post's caption, as the Queue's do.
+  const cardName = labelName(post.caption);
   // R30 lead review: one card of many, so only a change of its state is read out.
   useAnnounceOnShow(() => state ?? "", true, false);
   // Whole characters, as the server counts them (an emoji is one, not two).
@@ -499,7 +502,7 @@ export function ReviewPostCard({
                 {noteLength}/{REVIEW_NOTE_MAX}. {changeNoteHint(post)}
               </p>
               <div className="flex flex-col gap-2 sm:flex-row">
-                <Button ref={sendRef} type="submit" size="lg" className="w-full sm:w-auto" loading={busy} disabled={gone || limited || noteTooShort || noteTooLong}>
+                <Button ref={sendRef} type="submit" size="lg" aria-label={`Send "${cardName}"`} className="w-full sm:w-auto" loading={busy} disabled={gone || limited || noteTooShort || noteTooLong}>
                   Send
                 </Button>
                 <Button
@@ -507,6 +510,7 @@ export function ReviewPostCard({
                   size="lg"
                   className="w-full sm:w-auto"
                   variant="ghost"
+                  aria-label={`Cancel "${cardName}"`}
                   disabled={gone || busy}
                   onClick={(event) => {
                     focusAfterPress(event.currentTarget, () => askRef.current);
@@ -524,6 +528,7 @@ export function ReviewPostCard({
                 size="lg"
                 className="w-full sm:w-auto"
                 loading={busy}
+                aria-label={`Looks good "${cardName}"`}
                 disabled={gone || limited || post.state === "approved"}
                 onClick={(event) => void decide({ decision: "approve", version: post.version }, event.currentTarget)}
               >
@@ -535,6 +540,7 @@ export function ReviewPostCard({
                 className="w-full sm:w-auto"
                 variant="outline"
                 ref={askRef}
+                aria-label={`Ask for a change "${cardName}"`}
                 // R41 review: under a limit, a typed note can still be opened, to read and keep.
                 disabled={gone || busy || (limited && noteTooShort)}
                 onClick={(event) => {
@@ -559,6 +565,7 @@ export function ReviewPostCard({
             type="button"
             variant="outline"
             size="md"
+            aria-label={`Dismiss "${cardName}"`}
             onClick={(event) => {
               const pressed = event.currentTarget;
               const target = dismissFocusTarget(pressed.closest("li"), document);
