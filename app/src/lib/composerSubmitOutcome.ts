@@ -73,10 +73,14 @@ function dispatchUnmarkedText(button: DispatchFailedButton, withoutResults: bool
       : "Publishing didn't start. This card can show the post as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there.";
   }
   const done = button === "Approve" ? "approved" : "saved";
+  // R61 publishing-flow-2 L1: Create's buttons (Publish post, Publish without a
+  // photo, Publish now) and the Queue's Publish now aren't named "Post" or
+  // "Publish", so the sentence names no button; Approve is the card's own.
+  const again = button === "Approve" ? "Don't press Approve again." : "Don't publish it again.";
   if (withoutResults) {
-    return `The post was ${done} but didn't start. ${RETRIED_ON_ITS_OWN_TEXT} Don't press ${button} again.`;
+    return `The post was ${done} but didn't start. ${RETRIED_ON_ITS_OWN_TEXT} ${again}`;
   }
-  return `The post was ${done} but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press ${button} again.`;
+  return `The post was ${done} but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. ${again}`;
 }
 
 /** How a claimed post stands after a failed start (the 503's `resultsMarked` and `withoutResults`). */

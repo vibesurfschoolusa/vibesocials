@@ -66,7 +66,17 @@ describe("composerSubmitOutcome", () => {
       composerSubmitOutcome({ ok: false, mode: "now", body: { ...DISPATCH_FAILED_BODY, resultsMarked: false } }),
     ).toEqual({ kind: "dispatch_failed", resetForm: true, toast: COMPOSER_DISPATCH_UNMARKED_MESSAGE });
     expect(COMPOSER_DISPATCH_UNMARKED_MESSAGE).toBe(
-      "The post was saved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press Post again.",
+      "The post was saved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't publish it again.",
+    );
+  });
+
+  // R61 publishing-flow-2 L1: Create has no "Post" button (it has Publish post,
+  // Publish without a photo, Publish now), so the sentence names none.
+  it("Create's unmarked case names no button, and the marked case is as before", () => {
+    expect(COMPOSER_DISPATCH_UNMARKED_MESSAGE).not.toMatch(/press \w+ again/);
+    expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false })).toBe(COMPOSER_DISPATCH_UNMARKED_MESSAGE);
+    expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: true })).toBe(
+      "Saved, but publishing couldn't start — retry it from Activity.",
     );
   });
 
@@ -248,7 +258,7 @@ describe("dispatchFailedText for Send again", () => {
 describe("dispatchFailedText - no results and not marked", () => {
   it("Publish and Approve: tried again on its own; its card says what next if that fails too", () => {
     expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false, withoutResults: true }, "Publish")).toBe(
-      "The post was saved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card. Don't press Publish again.",
+      "The post was saved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card. Don't publish it again.",
     );
     expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false, withoutResults: true }, "Approve")).toBe(
       "The post was approved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card. Don't press Approve again.",

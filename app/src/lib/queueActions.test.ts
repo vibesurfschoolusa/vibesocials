@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { otherHalfPatch } from "@/app/queue/pairActions";
+import { COMPOSER_DISPATCH_UNMARKED_MESSAGE } from "@/lib/composerSubmitOutcome";
 
 import {
   applyJobPatch,
@@ -643,7 +644,12 @@ describe("queueFailureText", () => {
 
   it("not marked: it can show as publishing for about two hours; don't press the button again", () => {
     expect(queueFailureText({ ...DISPATCH, resultsMarked: false }, "Couldn't publish this post.", "Publish")).toBe(
-      "The post was saved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press Publish again.",
+      "The post was saved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't publish it again.",
+    );
+    // R61 publishing-flow-2 L1: the Queue's button is "Publish now"; the
+    // sentence names no button and reads as Create's.
+    expect(queueFailureText({ ...DISPATCH, resultsMarked: false }, "Couldn't publish this post.", "Publish")).toBe(
+      COMPOSER_DISPATCH_UNMARKED_MESSAGE,
     );
     expect(queueFailureText({ ...DISPATCH, resultsMarked: false }, "Couldn't approve this post.", "Approve")).toBe(
       "The post was approved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press Approve again.",
