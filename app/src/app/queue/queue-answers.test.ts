@@ -137,11 +137,11 @@ describe("Queue: a refused post action, one rule", () => {
   it("Edit, a scheduled post: the dialog stays open with the route's sentence, Save off, and a reload when the rule says so", () => {
     const failed = between("const errorData = (await response.json()", "const outcome = editOutcome(data);");
     expect(failed).toMatch(
-      /const refusal = postActionRefusal\(response\.status, errorData, "Couldn't save your changes\."\);\s+if \(refusal\.movedOn\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(answerCode\(errorData\) === POST_CHANGED_CODE \? editChangedText\(false\) : editMovedOnText\(refusal\.text\)\);\s+if \(refusal\.reload\) onStale\(\);\s+return;\s+\}\s+toast\.error\(refusal\.text\);/,
+      /const refusal = postActionRefusal\(response\.status, errorData, "Couldn't save your changes\."\);\s+if \(refusal\.movedOn\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(answerCode\(errorData\) === POST_CHANGED_CODE \? editChangedText\(false\) : editMovedOnText\(refusal\.text\)\);\s+if \(refusal\.reload\) onStale\(\);\s+return;\s+\}\s+if \(response\.status === 400\) setRefused\(refusal\.text\);\s+else toast\.error\(refusal\.text\);/,
     );
     expect(failed).not.toContain("onClose()");
     expect(view).toMatch(/<Button ref=\{saveRef\} onClick=\{handleSave\} loading=\{saving\} disabled=\{captionOver \|\| movedOn !== null\}>/);
-    expect(view).toMatch(/\{movedOn \? \(\s+<Alert ref=\{movedOnRef\} tabIndex=\{-1\} variant="danger" className="outline-none">\s+\{movedOn\}\s+<\/Alert>/);
+    expect(view).toMatch(/\{movedOn \?\? refused \? \(\s+<Alert ref=\{movedOnRef\} tabIndex=\{-1\} variant="danger" className="outline-none">\s+\{movedOn \?\? refused\}\s+<\/Alert>/);
     expect(EDIT_COPY_YOUR_TEXT).toBe("Copy your text if you want to keep it, then press Cancel.");
   });
 

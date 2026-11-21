@@ -546,10 +546,16 @@ type DialogFetch = (url: string, init: { method: string; headers: Record<string,
  * The Edit dialog's fetch for lib/scheduleDraft.ts, keeping the code of the
  * last answer read, so the dialog words a lost race by its code.
  */
-function keepingLastCode(fetchImpl: DialogFetch): { fetchFn: DialogFetch; lastCode: () => unknown } {
+function keepingLastCode(fetchImpl: DialogFetch): {
+  fetchFn: DialogFetch;
+  lastCode: () => unknown;
+  lastStatus: () => number | null;
+} {
   let last: unknown = null;
+  let lastStatus: number | null = null;
   const fetchFn: DialogFetch = async (url, init) => {
     const response = await fetchImpl(url, init);
+    lastStatus = response.status;
     return {
       ok: response.ok,
       status: response.status,
@@ -560,7 +566,7 @@ function keepingLastCode(fetchImpl: DialogFetch): { fetchFn: DialogFetch; lastCo
       },
     };
   };
-  return { fetchFn, lastCode: () => last };
+  return { fetchFn, lastCode: () => last, lastStatus: () => lastStatus };
 }
 
 /**
@@ -662,6 +668,9 @@ function QueueEditDialog({
   const [saving, setSaving] = useState(false);
   // R30 publishing L1: why this post can't be edited any more (the route's 409), or null.
   const [movedOn, setMovedOn] = useState<string | null>(null);
+  // R64 pages-a L2: a PATCH 400's sentence (the X refusal has three steps) stays in the
+  // dialog until the next save, since a toast closes before it can be read. Save stays on.
+  const [refused, setRefused] = useState<string | null>(null);
   const saveRef = useRef<HTMLButtonElement>(null);
   const movedOnRef = useRef<HTMLDivElement>(null);
   // Picker `min` (now + buffer). Lazy useState initializer computes it once at
@@ -672,6 +681,7 @@ function QueueEditDialog({
   );
 
   const handleSave = async () => {
+    setRefused(null);
     const trimmed = caption.trim();
     if (!trimmed) {
       toast.error(emptyCaptionMessage(job));
@@ -745,7 +755,8 @@ function QueueEditDialog({
             if (refusal.reload) onStale();
             return;
           }
-          toast.error(refusal.text);
+          if (response.status === 400) setRefused(refusal.text);
+          else toast.error(refusal.text);
           return;
         }
         const data = await response.json().catch(() => null);
@@ -811,6 +822,11 @@ function QueueEditDialog({
           setSaving(false);
           return;
         }
+        if (result.reason === "caption_save_failed" && answers.lastStatus() === 400) {
+          setRefused(result.error);
+          setSaving(false);
+          return;
+        }
         toast.error(result.error);
         // R27 MM4 review: a lost answer may have scheduled it, so the Queue is read again too.
         if (result.reason === "unreadable_response" || result.reason === "no_answer") onStale();
@@ -872,9 +888,9 @@ function QueueEditDialog({
         </div>
         {coverEditNote(job) ? <p className="text-sm text-muted-foreground">{coverEditNote(job)}</p> : null}
         {model.notice ? <p className="text-sm text-muted-foreground">{model.notice}</p> : null}
-        {movedOn ? (
+        {movedOn ?? refused ? (
           <Alert ref={movedOnRef} tabIndex={-1} variant="danger" className="outline-none">
-            {movedOn}
+            {movedOn ?? refused}
           </Alert>
         ) : null}
       </DialogBody>

@@ -225,7 +225,7 @@ describe("Queue: the Edit dialog keeps a PATCH 400 on screen", () => {
     await click(dialogButton("Save and schedule"));
     expect(line()).toBeNull();
     publishAnswers.push(() =>
-      Response.json({ postJob: { id: "job-a", status: "scheduled", scheduledFor: "2099-01-01T10:00:00.000Z" } }),
+      Response.json({ id: "job-a", status: "scheduled", scheduledFor: "2099-01-01T10:00:00.000Z" }),
     );
     await click(dialogButton("Save and schedule"));
     expect(findAll(container, (n) => n.attributes?.["data-dialog"] === "edit")).toHaveLength(0);
