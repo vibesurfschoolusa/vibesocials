@@ -126,3 +126,25 @@ describe("UploadFileRow: same-named files", () => {
     expect(form).toMatch(/files\.map\(\(item, index\) => \(\s*<FileRow[^>]*position=\{index \+ 1\}/);
   });
 });
+
+// R60 pages-a-2 L1: a failed file's bar is drawn full, so a screen reader must
+// hear its status, not "100 percent".
+describe("UploadFileRow: the bar of a failed file", () => {
+  const failed = item({ status: "failed", error: "The sentence." });
+
+  it("a failed row's bar gives its status as the value text", () => {
+    const html = render(failed, null, undefined, "refused");
+    expect(html).toContain('aria-valuetext="Not sent"');
+  });
+
+  it("a may-have-arrived row's bar says so", () => {
+    const html = render(failed, null, undefined, "maybe");
+    expect(html).toContain('aria-valuetext="May have arrived"');
+  });
+
+  it("a sending row's bar gives only its percentage, as now", () => {
+    const html = render(item({ status: "sending", progress: 41.6 }));
+    expect(html).toContain('aria-valuenow="42"');
+    expect(html).not.toContain("aria-valuetext");
+  });
+});
