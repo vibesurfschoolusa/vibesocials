@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { LoadError } from "@/components/load-error";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { Card } from "@/components/ui/card";
+import { platformListAlert } from "@/components/create-post-form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useConnections } from "@/hooks/useConnections";
@@ -925,6 +926,11 @@ export function BulkPostsForm({
   };
   const googleShown = selectedPlatforms.includes("google_business_profile");
   const googleError = googleShown ? bulkGoogleMetadataError(googleMetadata) : null;
+  // Both finish buttons are disabled with nothing ticked; say why, in Create's own sentence.
+  const noPlatformLine =
+    connections && !connectionsError && offeredPlatforms.length > 0
+      ? platformListAlert({ selectedCount: selectedPlatforms.length, allDisabled: false, noFile: false, triedSend: false })
+      : null;
   const batchCheck: BulkBatchCheck = { selectedPlatforms, stories, googleError };
   // Once a row's check passes its press is over; a later edit that fails a
   // check again waits for the next press (React's set-state-while-rendering).
@@ -1227,6 +1233,11 @@ export function BulkPostsForm({
               ))}
             </div>
           )}
+          {noPlatformLine ? (
+            <p id="bulk-no-platform" className="text-xs text-destructive" role="alert">
+              {noPlatformLine}
+            </p>
+          ) : null}
           <p className="text-sm text-muted-foreground">{BULK_TIKTOK_NOTE}</p>
           {youtubePrivacyShown(
             selectedPlatforms,
@@ -1474,6 +1485,7 @@ export function BulkPostsForm({
             className="w-full sm:w-auto"
             disabled={busy || sendingMode === "draft" || selectedPlatforms.length === 0}
             loading={sendingMode === "schedule"}
+            aria-describedby={noPlatformLine ? "bulk-no-platform" : undefined}
             onClick={(event) => void finish("schedule", event.currentTarget)}
           >
             Schedule all
@@ -1484,6 +1496,7 @@ export function BulkPostsForm({
             className="w-full sm:w-auto"
             disabled={busy || sendingMode === "schedule" || selectedPlatforms.length === 0}
             loading={sendingMode === "draft"}
+            aria-describedby={noPlatformLine ? "bulk-no-platform" : undefined}
             onClick={(event) => void finish("draft", event.currentTarget)}
           >
             Save all as drafts
