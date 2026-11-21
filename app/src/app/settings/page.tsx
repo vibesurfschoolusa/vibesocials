@@ -5,6 +5,7 @@ import Link from "next/link";
 
 import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
+import { countPostsOnce } from "@/lib/countOnce";
 import { SettingsForm } from "@/components/settings-form";
 import { PostingSlotsForm } from "@/components/posting-slots-form";
 import { readPostingSlots } from "@/lib/postingSlots";
@@ -548,7 +549,10 @@ async function loadWorkspaceDeletion(
 ): Promise<WorkspaceDeletionInfo> {
   const [memberCount, scheduledCount, refusal, paidPlan] = await Promise.all([
     getWorkspaceMemberCount(workspaceId),
-    prisma.postJob.count({ where: { workspaceId, status: "scheduled" } }),
+    // R62 client-journey-2 L1: a Feed and Story pair is one post.
+    prisma.postJob
+      .findMany({ where: { workspaceId, status: "scheduled" }, select: { id: true, storyOfPostJobId: true } })
+      .then(countPostsOnce),
     workspaceDeletionRefusal(workspaceId, userId),
     workspacesHavePaidPlan([workspaceId]),
   ]);

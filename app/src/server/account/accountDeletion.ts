@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 
+import { countPostsOnce } from "@/lib/countOnce";
 import { prisma } from "@/lib/db";
 
 import { POST_PUBLISHING_MESSAGE, isOnlyWorkspace, isPostPublishing } from "./deleteWorkspace";
@@ -129,15 +130,18 @@ export async function accountDeletionPreview(userId: string): Promise<AccountDel
   const deleteIds = new Set(plan.deleteWorkspaceIds);
   const blockedIds = new Set(plan.blocked.map((b) => b.workspaceId));
 
+  // R62 client-journey-2 L1: a Feed and Story post is two jobs but one post,
+  // so each workspace's jobs are counted with countPostsOnce.
   const scheduled =
     deleteIds.size > 0
-      ? await prisma.postJob.groupBy({
-          by: ["workspaceId"],
+      ? await prisma.postJob.findMany({
           where: { workspaceId: { in: [...deleteIds] }, status: "scheduled" },
-          _count: { _all: true },
+          select: { id: true, storyOfPostJobId: true, workspaceId: true },
         })
       : [];
-  const scheduledBy = new Map(scheduled.map((row) => [row.workspaceId, row._count._all]));
+  const jobsBy = new Map<string, typeof scheduled>();
+  for (const job of scheduled) jobsBy.set(job.workspaceId, [...(jobsBy.get(job.workspaceId) ?? []), job]);
+  const scheduledBy = new Map([...jobsBy].map(([workspaceId, jobs]) => [workspaceId, countPostsOnce(jobs)]));
 
   return {
     deleteWorkspaces: workspaces
