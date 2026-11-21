@@ -16,6 +16,7 @@ import {
   Trash2,
 } from "lucide-react";
 
+import { pickerItemName } from "@/app/posts/bulk/media-picker-dialog";
 import { CaptionCounter } from "@/components/caption-counter";
 import { ExternalLink } from "@/components/external-link";
 import { Alert } from "@/components/ui/alert";
@@ -313,7 +314,7 @@ function MediaThumbnail({ item }: { item: MediaItemDto }) {
           )}
         </div>
       )}
-      <span className="sr-only">{`Open ${item.originalFilename}`}</span>
+      <span className="sr-only">{`Open ${pickerItemName(item)}`}</span>
     </ExternalLink>
   );
 }
@@ -343,7 +344,7 @@ export function MediaCard({ item, onReuse, onDeleteRequest, selected, canSelect,
           checked={selected}
           disabled={!selected && !canSelect}
           onChange={() => onToggleSelect(item)}
-          aria-label={`Select ${item.originalFilename} for Add many`}
+          aria-label={`Select ${pickerItemName(item)} for Add many`}
         />
       </span>
       <div className="space-y-2 p-3">
@@ -391,7 +392,7 @@ export function MediaCard({ item, onReuse, onDeleteRequest, selected, canSelect,
             variant="outline"
             size="sm"
             className="w-full min-w-0 sm:w-auto sm:flex-1"
-            aria-label={`Use in new post ${item.originalFilename}`}
+            aria-label={`Use in new post ${pickerItemName(item)}`}
             onClick={() => onReuse(item)}
           >
             <Repeat className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -402,7 +403,7 @@ export function MediaCard({ item, onReuse, onDeleteRequest, selected, canSelect,
             variant="ghost"
             size="sm"
             className="w-full flex-shrink-0 text-muted-foreground hover:text-destructive sm:h-8 sm:w-8 sm:px-0"
-            aria-label={`Delete ${item.originalFilename}`}
+            aria-label={`Delete ${pickerItemName(item)}`}
             onClick={() => onDeleteRequest(item)}
           >
             <Trash2 className="h-4 w-4" aria-hidden />

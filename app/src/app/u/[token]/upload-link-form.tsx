@@ -71,15 +71,17 @@ export type SummaryFailure = ClientFileFailure & { name: string };
  * R53 fix review M1: the failed files as the summary reads them, from the
  * whole failure each kept (`ourSide` included), so it reads what the rows do.
  * A failed file with none kept may have arrived, with its row's sentence.
+ * R59 client-journey L2: two files can share a name, so each is named by its
+ * place in the list, as its row is ("2. IMG_0001.JPG").
  */
 export function summaryFailures(
   files: Pick<PickedFile, "key" | "file" | "status" | "error">[],
   failures: Partial<Record<string, ClientFileFailure>>,
 ): SummaryFailure[] {
-  return files.flatMap((item) => {
+  return files.flatMap((item, index) => {
     if (item.status !== "failed") return [];
     const failure = failures[item.key] ?? { kind: "maybe" as const, message: item.error ?? UNKNOWN_FAILURE_MESSAGE };
-    return [{ ...failure, name: item.file.name }];
+    return [{ ...failure, name: `${index + 1}. ${item.file.name}` }];
   });
 }
 

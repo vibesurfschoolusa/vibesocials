@@ -550,9 +550,9 @@ describe("summaryFailures: the form's failed files, as the summary reads them", 
       { fetch: async () => tokenIssued(), put: () => Promise.reject(new BlobStoreSuspendedError()) },
     ]);
     expect(failures.map((failure) => [failure.name, failure.kind, failure.ourSide])).toEqual([
-      ["file-1.jpg", "network", true],
-      ["file-2.jpg", "network", true],
-      ["file-3.jpg", "network", true],
+      ["1. file-1.jpg", "network", true],
+      ["2. file-2.jpg", "network", true],
+      ["3. file-3.jpg", "network", true],
     ]);
     const html = summary(failures);
     expect(html).toContain(`None of the 3 files arrived. The reason is under each file. ${OUR_SIDE_SUMMARY}`);
@@ -574,6 +574,26 @@ describe("summaryFailures: the form's failed files, as the summary reads them", 
       { key: "a", file: file("a.jpg"), status: "sent" as const, progress: 100, error: null },
       { key: "b", file: file("b.jpg"), status: "failed" as const, progress: 0, error: "Row sentence." },
     ];
-    expect(summaryFailures(files, {})).toEqual([{ name: "b.jpg", kind: "maybe", message: "Row sentence." }]);
+    expect(summaryFailures(files, {})).toEqual([{ name: "2. b.jpg", kind: "maybe", message: "Row sentence." }]);
+  });
+
+  // R59 client-journey L2: two different files can share a name, so the summary
+  // names each by its place in the list, as its row does ("2. IMG_0001.JPG").
+  it("two same-named files: the summary names each by its position", () => {
+    const file = () => new File(["abc"], "IMG_0001.JPG", { type: "image/jpeg" });
+    const files = [
+      { key: "a", file: file(), status: "sent" as const, progress: 100, error: null },
+      { key: "b", file: file(), status: "failed" as const, progress: 0, error: null },
+      { key: "c", file: file(), status: "failed" as const, progress: 0, error: null },
+    ];
+    const failures: Record<string, ClientFileFailure> = {
+      b: { kind: "maybe", message: "May have arrived." },
+      c: { kind: "network", message: "No answer." },
+    };
+    const named = summaryFailures(files, failures);
+    expect(named.map((failure) => failure.name)).toEqual(["2. IMG_0001.JPG", "3. IMG_0001.JPG"]);
+    const html = renderToStaticMarkup(createElement(UploadSummary, { sentCount: 1, failures: named, total: 3 }));
+    expect(html).toContain("2. IMG_0001.JPG may have arrived");
+    expect(html).toContain("The button below tries only 3. IMG_0001.JPG again.");
   });
 });
