@@ -119,8 +119,8 @@ describe("ReviewCard: small screens and screen readers", () => {
           reviewId: "r1",
           reviewer: { displayName: "Maria", isAnonymous: false },
           starRating: "FIVE",
-          createTime: "2026-11-01T00:00:00Z",
-          updateTime: "2026-11-01T00:00:00Z",
+          createTime: "2026-11-12T12:00:00Z",
+          updateTime: "2026-11-12T12:00:00Z",
         },
         needsReply: true,
         isReplyOpen: false,
@@ -221,9 +221,25 @@ describe("ReviewCard: a refused reply", () => {
 // one's name starts with its text and names the reviewer.
 describe("ReviewCard: the repeated buttons name the reviewer", () => {
   it("Reply to review and Draft AI response", () => {
-    const html = card("Maria Lopez");
-    expect(html).toMatch(/aria-label="Reply to review by Maria Lopez"[^>]*>.*Reply to review<\/button>/);
-    expect(html).toMatch(/aria-label="Draft AI response to the review by Maria Lopez"[^>]*>.*Draft AI response<\/button>/);
+    const html = card("Maria Lopez", { createTime: "2026-11-12T12:00:00Z" });
+    expect(html).toMatch(/aria-label="Reply to review by Maria Lopez, Nov 12, 2026"[^>]*>.*Reply to review<\/button>/);
+    expect(html).toMatch(/aria-label="Draft AI response to the review by Maria Lopez, Nov 12, 2026"[^>]*>.*Draft AI response<\/button>/);
+  });
+
+  // R58 pages-b L2: every nameless reviewer is "A Google user", so the date tells them apart.
+  it("two nameless reviews on different days have different names", () => {
+    const names = (html: string) =>
+      [/aria-label="(Reply to review by [^"]*)"/, /aria-label="(Draft AI response to the review by [^"]*)"/].map((re) => re.exec(html)?.[1]);
+    const a = names(card("A Google user", { createTime: "2026-11-12T12:00:00Z" }));
+    const b = names(card("A Google user", { createTime: "2026-11-14T12:00:00Z" }));
+    expect(a).toEqual(["Reply to review by A Google user, Nov 12, 2026", "Draft AI response to the review by A Google user, Nov 12, 2026"]);
+    expect(b).toEqual(["Reply to review by A Google user, Nov 14, 2026", "Draft AI response to the review by A Google user, Nov 14, 2026"]);
+  });
+
+  it("the date in the name is the one the card shows", () => {
+    const html = card("Maria", { createTime: "2026-11-12T12:00:00Z" });
+    expect(html).toContain(">Nov 12, 2026</span>");
+    expect(html).toContain('aria-label="Reply to review by Maria, Nov 12, 2026"');
   });
 
   it("while drafting, the name starts with Generating…", () => {
@@ -234,8 +250,8 @@ describe("ReviewCard: the repeated buttons name the reviewer", () => {
           reviewId: "r1",
           reviewer: { displayName: "Maria Lopez", isAnonymous: false },
           starRating: "FIVE",
-          createTime: "2026-11-01T00:00:00Z",
-          updateTime: "2026-11-01T00:00:00Z",
+          createTime: "2026-11-12T12:00:00Z",
+          updateTime: "2026-11-12T12:00:00Z",
         },
         needsReply: true,
         isReplyOpen: false,
@@ -249,6 +265,6 @@ describe("ReviewCard: the repeated buttons name the reviewer", () => {
         onDraftAI: () => {},
       }),
     );
-    expect(html).toContain('aria-label="Generating… a reply to the review by Maria Lopez"');
+    expect(html).toContain('aria-label="Generating… a reply to the review by Maria Lopez, Nov 12, 2026"');
   });
 });

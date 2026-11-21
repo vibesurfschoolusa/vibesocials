@@ -22,6 +22,15 @@ function formatDate(dateString: string) {
   });
 }
 
+/**
+ * The reviewer in a card button's name. R58 pages-b L2: every nameless
+ * reviewer is "A Google user", so the name carries the date the card shows
+ * too, and each review's buttons read differently.
+ */
+export function reviewButtonName(review: Pick<GoogleReview, "reviewer" | "createTime">): string {
+  return `${review.reviewer.displayName}, ${formatDate(review.createTime)}`;
+}
+
 interface ReviewCardProps {
   review: GoogleReview;
   needsReply: boolean;
@@ -149,7 +158,7 @@ export function ReviewCard({
                   <Button
                     id={replyButtonId(review.reviewId)}
                     type="button"
-                    aria-label={`Reply to review by ${review.reviewer.displayName}`}
+                    aria-label={`Reply to review by ${reviewButtonName(review)}`}
                     onClick={onOpenReply}
                   >
                     <MessageSquare aria-hidden className="h-4 w-4" />
@@ -159,7 +168,7 @@ export function ReviewCard({
                     id={draftButtonId(review.reviewId)}
                     drafting={isGeneratingAI}
                     onDraft={onDraftAI}
-                    reviewer={review.reviewer.displayName}
+                    reviewer={reviewButtonName(review)}
                   />
                 </div>
               )}
