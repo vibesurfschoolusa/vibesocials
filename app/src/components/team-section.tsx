@@ -87,7 +87,7 @@ export function inviteCreatedText(replaced: boolean): string {
  * wording and toast.
  */
 export const INVITE_UNREAD_TEXT =
-  "Couldn't read the current invite link, so a link you already sent may still work. Try again to see it. A new link turns off any old one.";
+  "Couldn't read the current invite link, so a link you already sent may be active. Try again to see it. A new link turns off any old one.";
 
 /** What a failed Create invite link says, from the answer it got. */
 export function inviteFailureText(status: number, data: { error?: unknown } | null): string {
