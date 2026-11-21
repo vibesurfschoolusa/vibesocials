@@ -39,7 +39,7 @@ export function linkedInAccountDialogCopy(mode: LinkedInAccountDialogMode): Link
       "LinkedIn connects whichever LinkedIn account is signed in to this browser, without asking. To choose the account:",
     steps: [
       "Click “Open LinkedIn sign-out” and sign out in the new tab. If that tab shows a sign-in page instead, you’re already signed out: close it.",
-      "Come back here and click Continue. LinkedIn asks you to sign in: use the account that manages your company page.",
+      "Come back here and click Continue. LinkedIn asks you to sign in: use an account that is a Super admin of your company page.",
     ],
     shortcut: "Already signed in to LinkedIn with the right account? Just click Continue.",
     continueLabel: mode === "switch" ? "Disconnect & continue" : "Continue",

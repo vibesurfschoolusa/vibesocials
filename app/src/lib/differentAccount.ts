@@ -58,9 +58,13 @@ export function connectedAccountName(connection: {
  * that manages that Page (`linkedPage`). The platform's name for the account
  * signed in with, or no entry where the connection is the account itself.
  * `listsPages`: the sign-in then lists the Pages to tick (Meta's dialog).
+ * `superAdmin`: only a Super admin of the page can connect it (R57 pages-a-3
+ * L1: LinkedIn's callback accepts only its approved ADMINISTRATOR pages).
  */
-const PAGE_ACCOUNT: Partial<Record<Platform, { account: string; linkedPage?: true; listsPages?: true }>> = {
-  linkedin: { account: "LinkedIn" },
+const PAGE_ACCOUNT: Partial<
+  Record<Platform, { account: string; linkedPage?: true; listsPages?: true; superAdmin?: true }>
+> = {
+  linkedin: { account: "LinkedIn", superAdmin: true },
   facebook_page: { account: "Facebook", listsPages: true },
   instagram: { account: "Facebook", linkedPage: true, listsPages: true },
 };
@@ -92,7 +96,8 @@ export function linkedPageNotReturned(platform: Platform, name: string): string 
 }
 
 /**
- * "sign in to <name>", or "sign in with a <platform> account that manages <the page>".
+ * "sign in to <name>", or "sign in with a <platform> account that manages <the page>"
+ * (LinkedIn: "that is a Super admin of <the page>").
  * `namedAs` ("it", "that Page"): for a sentence that has just named the page,
  * the short form refers back to it instead of naming it again (R52 lead
  * review: banners kept to 45 words). Only a sign-in that lists the Pages has one.
@@ -101,7 +106,8 @@ export function signInTo(platform: Platform, name: string, namedAs?: string): st
   const entry = PAGE_ACCOUNT[platform];
   if (!entry) return `sign in to ${name}`;
   const page = entry.listsPages && namedAs ? namedAs : managedPage(platform, name);
-  const signIn = `sign in with a ${entry.account} account that manages ${page}`;
+  const role = entry.superAdmin ? "is a Super admin of" : "manages";
+  const signIn = `sign in with a ${entry.account} account that ${role} ${page}`;
   if (!entry.listsPages) return signIn;
   // R51 second look: someone who manages the Page but left it unticked in
   // Meta's list signed in rightly; ticking it is their step. R52
