@@ -232,8 +232,35 @@ describe("ReviewCard: the repeated buttons name the reviewer", () => {
       [/aria-label="(Reply to review by [^"]*)"/, /aria-label="(Draft AI response to the review by [^"]*)"/].map((re) => re.exec(html)?.[1]);
     const a = names(card("A Google user", { createTime: "2026-11-12T12:00:00Z" }));
     const b = names(card("A Google user", { createTime: "2026-11-14T12:00:00Z" }));
-    expect(a).toEqual(["Reply to review by A Google user, Nov 12, 2026", "Draft AI response to the review by A Google user, Nov 12, 2026"]);
-    expect(b).toEqual(["Reply to review by A Google user, Nov 14, 2026", "Draft AI response to the review by A Google user, Nov 14, 2026"]);
+    expect(a).toEqual([
+      "Reply to review by A Google user, 5 stars, Nov 12, 2026",
+      "Draft AI response to the review by A Google user, 5 stars, Nov 12, 2026",
+    ]);
+    expect(b).toEqual([
+      "Reply to review by A Google user, 5 stars, Nov 14, 2026",
+      "Draft AI response to the review by A Google user, 5 stars, Nov 14, 2026",
+    ]);
+  });
+
+  // R59 pages-b L2: two nameless reviews from one day; the rating tells them apart.
+  it("two nameless reviews on the same day with different ratings have different names", () => {
+    const names = (html: string) =>
+      [/aria-label="(Reply to review by [^"]*)"/, /aria-label="(Draft AI response to the review by [^"]*)"/].map((re) => re.exec(html)?.[1]);
+    const a = names(card("A Google user", { createTime: "2026-11-12T12:00:00Z", starRating: "ONE" }));
+    const b = names(card("A Google user", { createTime: "2026-11-12T12:00:00Z", starRating: "FOUR" }));
+    expect(a).toEqual([
+      "Reply to review by A Google user, 1 star, Nov 12, 2026",
+      "Draft AI response to the review by A Google user, 1 star, Nov 12, 2026",
+    ]);
+    expect(b).toEqual([
+      "Reply to review by A Google user, 4 stars, Nov 12, 2026",
+      "Draft AI response to the review by A Google user, 4 stars, Nov 12, 2026",
+    ]);
+  });
+
+  it("a named reviewer's name has no rating, as before", () => {
+    const html = card("Maria Lopez", { createTime: "2026-11-12T12:00:00Z", starRating: "TWO" });
+    expect(html).toContain('aria-label="Reply to review by Maria Lopez, Nov 12, 2026"');
   });
 
   it("the date in the name is the one the card shows", () => {

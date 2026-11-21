@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { nameInitial } from "@/lib/accountInitials";
 import { cn } from "@/lib/cn";
-import type { GoogleReview } from "./types";
+import { STAR_RATINGS, type GoogleReview } from "./types";
 import { StarRating } from "./star-rating";
 import { DraftAIButton, ReplyForm, draftButtonId } from "./reply-form";
 import { replyButtonId } from "./reviews-page";
@@ -22,13 +22,20 @@ function formatDate(dateString: string) {
   });
 }
 
+/** What server/googleReviews.ts names a reviewer Google gives no name for. */
+const NAMELESS_REVIEWER = "A Google user";
+
 /**
  * The reviewer in a card button's name. R58 pages-b L2: every nameless
  * reviewer is "A Google user", so the name carries the date the card shows
- * too, and each review's buttons read differently.
+ * too, and each review's buttons read differently. R59 pages-b L2: two
+ * nameless reviews can share a day, so theirs carry the star rating as well.
  */
-export function reviewButtonName(review: Pick<GoogleReview, "reviewer" | "createTime">): string {
-  return `${review.reviewer.displayName}, ${formatDate(review.createTime)}`;
+export function reviewButtonName(review: Pick<GoogleReview, "reviewer" | "createTime" | "starRating">): string {
+  const stars = STAR_RATINGS[review.starRating];
+  const rating =
+    review.reviewer.displayName === NAMELESS_REVIEWER && stars ? `, ${stars} ${stars === 1 ? "star" : "stars"}` : "";
+  return `${review.reviewer.displayName}${rating}, ${formatDate(review.createTime)}`;
 }
 
 interface ReviewCardProps {
