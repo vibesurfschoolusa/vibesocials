@@ -270,3 +270,22 @@ describe("ConnectionsSection: the Business Profile card's Google sign-in", () =>
     expect(signIn(render({}))).toEqual([]);
   });
 });
+
+// R57 pages-b L2 (#282's rule): every platform's card repeats Connect and How
+// to connect, so each one's name starts with its text and names the platform.
+describe("ConnectionsSection names each card's controls by platform", () => {
+  it("Connect <platform> and How to connect <platform>", () => {
+    const html = render({});
+    for (const label of ["YouTube", "Instagram", "Google Business Profile"]) {
+      expect(html).toMatch(new RegExp(`aria-label="Connect ${label}"[^>]*>Connect</a>`));
+      expect(html).toContain(`aria-label="How to connect ${label} (opens in a new tab)"`);
+    }
+  });
+
+  it("Coming soon, for a platform with no sign-in yet, names it too", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./connections-section.tsx", import.meta.url)), "utf8");
+    expect(source).toContain("aria-label={`Coming soon: ${label}`}");
+  });
+});

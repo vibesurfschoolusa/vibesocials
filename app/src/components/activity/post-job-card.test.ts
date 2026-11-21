@@ -773,7 +773,7 @@ describe("PostJobCard - repeated buttons name the post", () => {
 
   it("View on <platform>, with its new-tab hint", () => {
     const out = html(job({ results: [result({ platform: "x", externalPostId: "123", externalPostUrl: "https://x.com/i/status/123" })] }));
-    expect(out).toContain('aria-label="View on X (opens in a new tab) &quot;Two spots left today&quot;"');
+    expect(out).toContain('aria-label="View on X &quot;Two spots left today&quot; (opens in a new tab)"');
   });
 
   it("a card with no caption is named Untitled post", () => {

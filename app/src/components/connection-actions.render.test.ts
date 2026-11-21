@@ -214,3 +214,23 @@ describe("Settings connection row, a member's Ends soon", () => {
     expect(html).not.toContain("The workspace owner");
   });
 });
+
+// R57 pages-b L2 (#282's rule): every connected row repeats these, so each
+// one's name starts with its text and names the platform.
+describe("Settings connection row names its platform", () => {
+  it("Switch account and Disconnect", () => {
+    for (const [platform, label] of [["linkedin", "LinkedIn"], ["instagram", "Instagram"]] as const) {
+      const html = row({ platform });
+      expect(html).toMatch(new RegExp(`aria-label="Switch account ${label}"[^>]*>Switch account</button>`));
+      expect(html).toMatch(new RegExp(`aria-label="Disconnect ${label}"[^>]*>Disconnect</button>`));
+    }
+  });
+
+  it("Reconnect, LinkedIn's button and another platform's link", () => {
+    expect(row({ platform: "linkedin", needsReconnect: true })).toMatch(/aria-label="Reconnect LinkedIn"[^>]*>Reconnect<\/button>/);
+    expect(row({ platform: "x", needsReconnect: true })).toMatch(/aria-label="Reconnect X"[^>]*>Reconnect<\/a>/);
+    expect(row({ platform: "x", reconnectSoon: true, endsAt: "2026-12-01T00:00:00.000Z" })).toMatch(
+      /aria-label="Reconnect X"[^>]*>Reconnect<\/a>/,
+    );
+  });
+});

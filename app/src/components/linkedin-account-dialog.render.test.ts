@@ -94,3 +94,12 @@ describe("LinkedIn dialog: the sign-out button on a phone", () => {
     }
   });
 });
+
+// R57 pages-b L2 (#282's rule): Connect repeats on every unconnected card, so LinkedIn's names its platform.
+describe("LinkedIn Connect button", () => {
+  it("is named Connect LinkedIn and keeps its text", async () => {
+    const { LinkedInConnectButton } = await import("./linkedin-account-dialog");
+    const html = renderToStaticMarkup(createElement(LinkedInConnectButton, { workspaceId: "ws-1" }));
+    expect(html).toMatch(/aria-label="Connect LinkedIn"[^>]*>Connect<\/button>/);
+  });
+});
