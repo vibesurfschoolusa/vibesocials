@@ -12,7 +12,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: 
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 
-import { AdminPauseControls } from "./admin-controls";
+import { AdminBillingControls, AdminLimitsForm, AdminPauseControls } from "./admin-controls";
 
 let root: Root;
 let container: FakeNode;
@@ -143,5 +143,74 @@ describe("the pause reason field", () => {
     expect(props(reason).value).toBe("Spam reports ");
     const { validatePauseBody } = await import("@/server/admin/actions");
     expect(validatePauseBody({ reason: "Spam\r\nreports\u0007" })).toEqual({ ok: true, reason: "Spam reports" });
+  });
+});
+
+// R58 pages-a-3 L1: every change route answers a missing workspace, and a
+// signed-out operator, with the same bare 404. The controls word it themselves.
+describe("a 404 on any control says what may have happened", () => {
+  const GONE = "This workspace no longer exists, or you were signed out. Reload the page to see.";
+  const notFound = () => Promise.resolve(Response.json({ error: "Not found" }, { status: 404 }));
+  const limitsField = { field: "limitPostsPerDay", label: "Posts a day", value: null, defaultLabel: "20", max: 1000 };
+
+  async function saveLimits() {
+    await act(async () => root.render(createElement(AdminLimitsForm, { workspaceId: "ws-1", fields: [limitsField] })));
+    const input = find(container, (n) => n.nodeName === "INPUT")!;
+    await act(async () => {
+      props(input).onChange({ target: { value: "5" } });
+    });
+    const form = find(container, (n) => n.nodeName === "FORM")!;
+    await act(async () => {
+      void props(form).onSubmit({ preventDefault: () => {} });
+    });
+    await settle();
+  }
+
+  async function billing(button: string) {
+    await act(async () =>
+      root.render(createElement(AdminBillingControls, { workspaceId: "ws-1", exempt: false, trialEndDate: "2026-12-01" })),
+    );
+    await press(button);
+  }
+
+  it("Save limits", async () => {
+    fetchMock.mockImplementation(notFound);
+    await saveLimits();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(statusText()).toBe(GONE);
+  });
+
+  it("Pause workspace", async () => {
+    fetchMock.mockImplementation(notFound);
+    await act(async () => root.render(createElement(AdminPauseControls, { workspaceId: "ws-1", paused: false })));
+    const reason = find(container, (n) => n.nodeName === "TEXTAREA")!;
+    await act(async () => {
+      props(reason).onChange({ target: { value: "Spam reports" } });
+    });
+    await press("Pause workspace");
+    expect(statusText()).toBe(GONE);
+  });
+
+  it("Resume workspace", async () => {
+    fetchMock.mockImplementation(notFound);
+    await act(async () => root.render(createElement(AdminPauseControls, { workspaceId: "ws-1", paused: true })));
+    await press("Resume workspace");
+    expect(statusText()).toBe(GONE);
+  });
+
+  it.each(["Exempt this workspace", "End the trial now", "Set the trial's end"])("%s", async (button) => {
+    fetchMock.mockImplementation(notFound);
+    await billing(button);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(statusText()).toBe(GONE);
+  });
+
+  it("other errors: the route's own sentence, else the general one, as before", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(Response.json({ error: "Pick a day from tomorrow." }, { status: 400 })));
+    await billing("Set the trial's end");
+    expect(statusText()).toBe("Pick a day from tomorrow.");
+    fetchMock.mockImplementation(() => Promise.resolve(Response.json({}, { status: 500 })));
+    await press("End the trial now");
+    expect(statusText()).toBe("That did not work. Reload the page and try again.");
   });
 });

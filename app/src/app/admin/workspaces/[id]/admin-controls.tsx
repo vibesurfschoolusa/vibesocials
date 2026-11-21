@@ -19,6 +19,8 @@ export type LimitFieldView = { field: string; label: string; value: number | nul
 /** R28 NN2: the change may have been saved before the answer was lost. */
 export const CHANGE_MAYBE_SAVED_MESSAGE = answerLostText("the change may have been saved", "Reload the page to see.");
 
+const WORKSPACE_GONE_MESSAGE = "This workspace no longer exists, or you were signed out. Reload the page to see.";
+
 async function post(url: string, body: unknown): Promise<{ ok: boolean; error?: string; changed?: boolean }> {
   try {
     const response = await fetchOrNoAnswer(url, {
@@ -27,6 +29,9 @@ async function post(url: string, body: unknown): Promise<{ ok: boolean; error?: 
       body: JSON.stringify(body),
     });
     const data = (await response.json().catch(() => null)) as { error?: string; changed?: boolean } | null;
+    // R58 pages-a-3 L1: the routes answer a missing workspace and a signed-out
+    // operator with one bare 404 (it reveals nothing), so the page words it.
+    if (response.status === 404) return { ok: false, error: WORKSPACE_GONE_MESSAGE };
     if (!response.ok) return { ok: false, error: data?.error ?? "That did not work. Reload the page and try again." };
     return { ok: true, changed: data?.changed };
   } catch (caught) {
