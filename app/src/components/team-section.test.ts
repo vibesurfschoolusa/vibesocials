@@ -415,3 +415,15 @@ describe("Team: the owner's own greyed Make member", () => {
     }
   });
 });
+
+// R56 new-customer L3: member rows repeat Make member, Make owner and Remove; each
+// names its member so a screen reader can tell them apart. Visible text is unchanged.
+describe("Team: member row buttons name their member", () => {
+  const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+  for (const text of ["Make member", "Make owner", "Remove"]) {
+    it(`${text} keeps its text and its accessible name starts with it and names the member`, () => {
+      expect(source).toContain("aria-label={`" + text + " ${personLabel(member, true)}`}");
+      expect(source).toMatch(new RegExp(">[ \n]*" + text + "[ \n]*</Button>"));
+    });
+  }
+});

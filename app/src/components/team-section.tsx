@@ -1317,19 +1317,26 @@ function OwnerView({
                       className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                       disabled={ownerCount < 2}
                       title={makeMemberBlockedTitle(members, onlyWorkspace)}
+                      aria-label={`Make member ${personLabel(member, true)}`}
                       onClick={() => setDemoteTarget(member)}
                     >
                       Make member
                     </Button>
                   ) : (
                     <>
-                      <Button size="sm" variant="ghost" onClick={() => setPromoteTarget(member)}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`Make owner ${personLabel(member, true)}`}
+                        onClick={() => setPromoteTarget(member)}
+                      >
                         Make owner
                       </Button>
                       <Button
                         size="sm"
                         variant="ghost"
                         className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        aria-label={`Remove ${personLabel(member, true)}`}
                         onClick={() => setRemoveTarget(member)}
                       >
                         Remove
