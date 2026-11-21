@@ -7,7 +7,10 @@
  * Hindi and Thai vowel signs, and an accent typed as its own character, so
  * "#हिन्दी" and "#café" are whole and no tag starts after a mark.
  */
-const HASHTAG_PATTERN = /(?<![\p{L}\p{M}\p{N}_&#])#[\p{L}\p{M}\p{N}_]+/gu;
+// R60 platform-clients L1: as twitter-text, the variation selectors U+FE0E and
+// U+FE0F (which end "☀️" and "❤️") are the one exception, so "☀️#summer" is a
+// tag; and a "#" that U+FE0F or U+20E3 follows is the keycap "#️⃣", not a tag.
+const HASHTAG_PATTERN = /(?<=^|[^\p{L}\p{M}\p{N}_&#]|[︎️])#(?![️⃣])[\p{L}\p{M}\p{N}_]+/gu;
 
 /** Every hashtag in `text`, "#" included, in order, each with its index. */
 export function hashtagsIn(text: string): RegExpExecArray[] {
