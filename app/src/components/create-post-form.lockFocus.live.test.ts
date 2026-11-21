@@ -54,7 +54,7 @@ vi.mock("@vercel/blob/client", () => ({
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { ToastProvider } from "@/components/ui/toast";
-import { CreatePostForm, SendLock } from "./create-post-form";
+import { CreatePostForm } from "./create-post-form";
 
 let root: Root;
 let container: FakeNode;
@@ -325,36 +325,7 @@ describe('Create: "Use a different file instead" during a waiting send (R65 publ
   }, 10_000);
 });
 
-describe("SendLock takes its one child's place (R65 publishing-flow L2)", () => {
-  async function renderLock(child: unknown) {
-    await act(async () => {
-      root.render(createElement(SendLock, { locked: false } as Parameters<typeof SendLock>[0], child as never));
-    });
-  }
-
-  it("with a child: a block fieldset with min-w-0, not contents, wrapping exactly that child", async () => {
-    await renderLock(createElement("div", { className: "space-y-2" }, "Cover"));
-    expect(container.childNodes).toHaveLength(1);
-    const fieldset = container.childNodes[0]!;
-    expect(fieldset.nodeName).toBe("FIELDSET");
-    const classes = String(fieldset.attributes.class ?? "").split(/\s+/);
-    expect(classes).toContain("min-w-0");
-    expect(classes).not.toContain("contents");
-    // The parent's space-y gap is a margin on the fieldset (zero specificity in
-    // Tailwind v4), so the fieldset sets no margin of its own.
-    expect(classes.filter((name) => /^-?m[trblxyse]?-/.test(name))).toEqual([]);
-    expect(fieldset.childNodes).toHaveLength(1);
-    expect(fieldset.childNodes[0]!.nodeName).toBe("DIV");
-    expect(fieldset.childNodes[0]!.attributes.class).toBe("space-y-2");
-  });
-
-  it("with null or false: renders nothing", async () => {
-    await renderLock(null);
-    expect(container.childNodes).toHaveLength(0);
-    await renderLock(false);
-    expect(container.childNodes).toHaveLength(0);
-  });
-
+describe("Create adds nothing around its parts (R65 publishing-flow L2, review L1)", () => {
   it("R65 review L1: the cover, alt text, YouTube and Story parts take disabled={sendLocksFields} and sit where they sat at 0071194, with nothing around them", () => {
     const source = readFileSync(path.join(__dirname, "create-post-form.tsx"), "utf8");
     const count = (re: RegExp) => source.match(re)?.length ?? 0;
@@ -364,10 +335,41 @@ describe("SendLock takes its one child's place (R65 publishing-flow L2)", () => 
     expect(count(/&& \(\s*<PhotoDescriptionField[^<]*?disabled=\{sendLocksFields\}[^<]*?\/>\s*\)\}/g)).toBe(2);
     expect(count(/&& \(\s*<YouTubePostSettings[^<]*?disabled=\{sendLocksFields\}[^<]*?\/>\s*\)\}/g)).toBe(1);
     expect(count(/&& \(\s*<StoryPlacementSettings[^<]*?disabled=\{sendLocksFields\}[^<]*?\/>\s*\)\}/g)).toBe(2);
-    // Pending a decision on google-post-settings.tsx (BA1.md): the Google box is the only part still in a SendLock.
-    const uses = [...source.matchAll(/<SendLock locked=\{sendLocksFields\}>([^]*?)<\/SendLock>/g)].map((m) => m[1]!.trim());
-    expect(uses.map((inner) => /^<([A-Z]\w*)/.exec(inner)?.[1])).toEqual(["GooglePostBox"]);
+    expect(count(/&& \(\s*<GooglePostBox[^<]*?disabled=\{sendLocksFields\}[^<]*?\/>\s*\)\}/g)).toBe(1);
   });
+
+  it("create-post-form.tsx has no SendLock, and only the one fieldset it had at 0071194", () => {
+    const source = readFileSync(path.join(__dirname, "create-post-form.tsx"), "utf8");
+    expect(source).not.toContain("SendLock");
+    expect(source.match(/<fieldset/g)?.length).toBe(1);
+  });
+
+  it("on the page: the Google box opens and closes while a send waits, and its fields are locked", async () => {
+    postAnswer = REFUSED;
+    await mount();
+    await typeCaption("Surf lesson today");
+    await pressSchedule();
+    await pick(photo("gbox"));
+    const summary = () => {
+      const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.["aria-controls"] === "google-post-box-settings");
+      if (!hit) throw new Error("no Google box button");
+      return hit;
+    };
+    expect(summary().attributes["aria-expanded"]).toBe("false");
+    postStalls = true;
+    await submit();
+    expect(posted).toHaveLength(1);
+
+    expect(disabledNow(summary())).toBe(false);
+    expect(disabledNow(byId("google-post-type"))).toBe(true);
+    await run(() => props(summary()).onClick());
+    expect(summary().attributes["aria-expanded"]).toBe("true");
+    await run(() => props(summary()).onClick());
+    expect(summary().attributes["aria-expanded"]).toBe("false");
+    await act(async () => postRelease!());
+    await settle();
+    expect(disabledNow(byId("google-post-type"))).toBe(false);
+  }, 10_000);
 
   it("no SendLock wraps AttachedPhotos: it takes disabled={sendLocksFields} itself", () => {
     const source = readFileSync(path.join(__dirname, "create-post-form.tsx"), "utf8");

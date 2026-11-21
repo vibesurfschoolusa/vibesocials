@@ -200,3 +200,56 @@ describe("GooglePostBox", () => {
     }
   });
 });
+
+// R65 review L1: Create locks the Google fields during a waiting send through
+// this prop, with nothing wrapped around the box; opening and closing it
+// changes nothing in the post, so its summary button stays usable.
+describe("GooglePostBox - disabled", () => {
+  const html = (metadata: GoogleBusinessPostMetadata, disabled?: boolean) =>
+    renderToStaticMarkup(
+      createElement(GooglePostBox, {
+        metadata,
+        onChange: () => {},
+        open: true,
+        onOpenChange: () => {},
+        ...(disabled === undefined ? {} : { disabled }),
+      }),
+    );
+  const fields = (markup: string) => markup.match(/<(input|select|textarea)\b[^>]*>/g) ?? [];
+  const off = (tag: string) => / disabled=""/.test(tag);
+  const update: GoogleBusinessPostMetadata = { postType: "update", button: { type: "BOOK", url: "https://e.com/book" } };
+
+  it("with disabled: every field is disabled, for an update, an event and an offer", () => {
+    for (const metadata of [update, event, offer]) {
+      const found = fields(html(metadata, true));
+      expect(found.length).toBeGreaterThan(1);
+      for (const tag of found) expect(off(tag), tag).toBe(true);
+    }
+    // Every field of the settings is covered: an event and an offer between them show all of them.
+    const ids = new Set([...fields(html(event, true)), ...fields(html(offer, true))].map((tag) => /id="([^"]+)"/.exec(tag)?.[1]));
+    for (const id of ["google-post-type", "google-event-title", "google-event-start-date", "google-offer-title", "google-offer-terms"]) {
+      expect(ids.has(id), id).toBe(true);
+    }
+  });
+
+  it("with disabled: the open/close summary button stays usable", () => {
+    const summary = html(update, true).match(/<button\b[^>]*aria-controls="google-post-box-settings"[^>]*>/)?.[0];
+    expect(summary).toBeDefined();
+    expect(off(summary!)).toBe(false);
+  });
+
+  it("without disabled: as now, no field is disabled", () => {
+    for (const metadata of [update, event, offer]) {
+      for (const markup of [html(metadata), html(metadata, false)]) {
+        for (const tag of fields(markup)) expect(off(tag), tag).toBe(false);
+      }
+    }
+  });
+
+  it("GooglePostSettings alone takes the same prop", () => {
+    const markup = renderToStaticMarkup(
+      createElement(GooglePostSettings, { metadata: event, onChange: () => {}, disabled: true } as Parameters<typeof GooglePostSettings>[0]),
+    );
+    for (const tag of fields(markup)) expect(off(tag), tag).toBe(true);
+  });
+});

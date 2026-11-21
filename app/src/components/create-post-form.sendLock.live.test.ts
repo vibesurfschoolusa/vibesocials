@@ -350,6 +350,8 @@ describe("Create: a waiting Schedule locks every control that shapes the post (R
     postStalls = true;
     await submit();
     expect(posted).toHaveLength(1);
+    // R65 review L1: opening or closing the box changes nothing in the post.
+    expect(locked(googleBoxButton())).toBe(false);
 
     await expectLockedThenUnlocked(
       [
@@ -357,7 +359,7 @@ describe("Create: a waiting Schedule locks every control that shapes the post (R
         ["Caption from media", () => [buttonTexted("Caption from media")]],
         ["Alt text", () => [byId("post-alt-text")]],
         ["Write it for me", () => [labelled("Write it for me: Describe this photo (alt text)")]],
-        ["Google box", () => [googleBoxButton()]],
+        ["Google fields", () => [byId("google-post-type"), byId("google-button-type")]],
       ],
       async () => {
         await act(async () => postRelease!());
