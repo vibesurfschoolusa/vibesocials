@@ -3119,9 +3119,13 @@ function CreatePostFormInner({
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-medium text-foreground">Media</p>
+                {/* R65 publishing-flow L1: a reuse send never waits on an upload, so
+                    nothing stops it; dismissing the item mid-send would post the
+                    item anyway and lose it from the form. */}
                 <button
                   type="button"
                   onClick={handleDismissReuse}
+                  disabled={sendLocksFields}
                   className="text-xs font-medium text-primary underline-offset-4 hover:underline"
                 >
                   Use a different file instead
