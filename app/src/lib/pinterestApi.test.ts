@@ -230,3 +230,30 @@ describe("pinterestDescriptionLength and pinterestCountHint", () => {
     expect(pinterestCountHint("\u{1F468}‍\u{1F469}‍\u{1F467}")).toBe(HINT);
   });
 });
+
+/** A caption whose cut at `budget` (the limit less the ellipsis) falls inside "#surfschool", after "#sur". */
+function tagCutCaption(budget: number): { caption: string; wholeWords: string } {
+  const wholeWords = "Waves ".repeat(Math.ceil(budget / 6)).slice(0, budget - 6) + "!";
+  return { caption: `${wholeWords} #surfschool #floridasurf`, wholeWords };
+}
+
+// R64 platform-clients L1: the 800-character description cut ends at a whole word.
+describe("fitPinterestDescription cuts at a whole word", () => {
+  it("a cut inside \"#surfschool\" ends at the word before it", () => {
+    const { caption, wholeWords } = tagCutCaption(797);
+    expect(fitPinterestDescription(caption)).toBe(`${wholeWords}...`);
+  });
+
+  it("a cut inside \"#surfschool\" after emoji of 2 code points, counted in code points", () => {
+    // 100 hearts are 100 characters and 200 code points.
+    const hearts = "❤️".repeat(100);
+    const { caption, wholeWords } = tagCutCaption(597);
+    const fitted = fitPinterestDescription(hearts + caption);
+    expect(fitted).toBe(`${hearts}${wholeWords}...`);
+    expect(pinterestDescriptionLength(fitted)).toBeLessThanOrEqual(PINTEREST_DESCRIPTION_MAX);
+  });
+
+  it("a script with no spaces keeps the plain cut", () => {
+    expect(fitPinterestDescription(`Surf school ${"波".repeat(1000)}`)).toBe(`Surf school ${"波".repeat(785)}...`);
+  });
+});

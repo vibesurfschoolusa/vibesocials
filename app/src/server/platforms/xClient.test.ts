@@ -3268,3 +3268,21 @@ describe("xClient: the app-credential warning", () => {
     vi.unstubAllEnvs();
   });
 });
+
+/** A caption whose cut at `budget` (the limit less the ellipsis) falls inside "#surfschool", after "#sur". */
+function tagCutCaption(budget: number): { caption: string; wholeWords: string } {
+  const wholeWords = "Waves ".repeat(Math.ceil(budget / 6)).slice(0, budget - 6) + "!";
+  return { caption: `${wholeWords} #surfschool #floridasurf`, wholeWords };
+}
+
+// R64 platform-clients L1: X's 280 cut ends at a whole word, by X's weight.
+describe("computeTweetText cuts at a whole word", () => {
+  it("a cut inside \"#surfschool\" ends at the word before it", () => {
+    const { caption, wholeWords } = tagCutCaption(277);
+    expect(computeTweetText(caption)).toBe(`${wholeWords}...`);
+  });
+
+  it("a script with no spaces keeps the plain cut", () => {
+    expect(computeTweetText(`Surf school ${"波".repeat(300)}`)).toBe(`Surf school ${"波".repeat(132)}...`);
+  });
+});

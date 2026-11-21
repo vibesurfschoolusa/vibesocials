@@ -1630,3 +1630,21 @@ describe("googleBusinessProfileClient: a 401 on the post with a token that ran o
     );
   });
 });
+
+/** A caption whose cut at `budget` (the limit less the ellipsis) falls inside "#surfschool", after "#sur". */
+function tagCutCaption(budget: number): { caption: string; wholeWords: string } {
+  const wholeWords = "Waves ".repeat(Math.ceil(budget / 6)).slice(0, budget - 6) + "!";
+  return { caption: `${wholeWords} #surfschool #floridasurf`, wholeWords };
+}
+
+// R64 platform-clients L1: the 1,500-character summary cut ends at a whole word.
+describe("computeGbpPostSummary cuts at a whole word", () => {
+  it("a cut inside \"#surfschool\" ends at the word before it", () => {
+    const { caption, wholeWords } = tagCutCaption(1497);
+    expect(computeGbpPostSummary(caption)).toBe(`${wholeWords}...`);
+  });
+
+  it("a script with no spaces keeps the plain cut", () => {
+    expect(computeGbpPostSummary(`Surf school ${"波".repeat(2000)}`)).toBe(`Surf school ${"波".repeat(1485)}...`);
+  });
+});

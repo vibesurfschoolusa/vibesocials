@@ -74,3 +74,28 @@ describe("YouTube's description rule", () => {
     expect(youtubeCountHint("I <3 caf\u00e9")).toBe("YouTube counts accented letters, curly quotes, emoji, < and > as 2 or more.");
   });
 });
+
+/** A caption whose cut at `budget` (the limit less the ellipsis) falls inside "#surfschool", after "#sur". */
+function tagCutCaption(budget: number): { caption: string; wholeWords: string } {
+  const wholeWords = "Waves ".repeat(Math.ceil(budget / 6)).slice(0, budget - 6) + "!";
+  return { caption: `${wholeWords} #surfschool #floridasurf`, wholeWords };
+}
+
+// R64 platform-clients L1: the 5,000-byte description cut ends at a whole word.
+describe("fitYouTubeDescription cuts at a whole word", () => {
+  it("a cut inside \"#surfschool\" ends at the word before it, in bytes", () => {
+    const { caption, wholeWords } = tagCutCaption(4997);
+    expect(fitYouTubeDescription(caption)).toBe(`${wholeWords}…`);
+  });
+
+  it("a cut inside \"#surfschool\" after wide characters, counted in bytes", () => {
+    // 1,000 "é" are 2,000 bytes and 1,000 characters.
+    const { caption, wholeWords } = tagCutCaption(2997);
+    const wide = "é".repeat(1000);
+    expect(fitYouTubeDescription(wide + caption)).toBe(`${wide}${wholeWords}…`);
+  });
+
+  it("a script with no spaces keeps the plain cut", () => {
+    expect(fitYouTubeDescription(`Surf school ${"波".repeat(2000)}`)).toBe(`Surf school ${"波".repeat(1661)}…`);
+  });
+});

@@ -698,3 +698,25 @@ describe("buildPlatformPreview on the other platforms, unchanged by Pinterest's 
     }
   });
 });
+
+/** A caption whose cut at `budget` (the limit less the ellipsis) falls inside "#surfschool", after "#sur". */
+function tagCutCaption(budget: number): { caption: string; wholeWords: string } {
+  const wholeWords = "Waves ".repeat(Math.ceil(budget / 6)).slice(0, budget - 6) + "!";
+  return { caption: `${wholeWords} #surfschool #floridasurf`, wholeWords };
+}
+
+// R64 platform-clients L1: the preview cuts X, YouTube, Google Business Profile
+// and Pinterest at a whole word, with each client's own function.
+describe("buildPlatformPreview cuts every platform at a whole word", () => {
+  it.each([
+    ["x", 277, "...", computeTweetText],
+    ["youtube", 4997, "…", fitYouTubeDescription],
+    ["google_business_profile", 1497, "...", computeGbpPostSummary],
+    ["pinterest", 797, "...", fitPinterestDescription],
+  ] as const)("%s: a cut inside \"#surfschool\" ends at the word before it, as the client sends", (platform, budget, ellipsis, client) => {
+    const { caption, wholeWords } = tagCutCaption(budget);
+    const { rendered } = buildPlatformPreview({ platform, caption });
+    expect(rendered).toBe(`${wholeWords}${ellipsis}`);
+    expect(rendered).toBe(client(caption));
+  });
+});
