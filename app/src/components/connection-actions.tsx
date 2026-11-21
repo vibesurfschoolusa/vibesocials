@@ -224,6 +224,8 @@ export function ConnectionActions({
 
   const isTikTok = platform === "tiktok";
   const isLinkedIn = platform === "linkedin";
+  // R57 pages-b L2: every row repeats these controls, so each one's name carries the platform.
+  const label = platformLabel(platform as Platform);
   const authUrl = withWorkspaceId(`/api/auth/${platform}/start`, workspaceId);
 
   // Read each time the Disconnect dialog opens, from no number, so it never
@@ -357,11 +359,11 @@ export function ConnectionActions({
   // dialog then starts the same sign-in); other platforms go straight to it.
   function reconnectButton(variant: "destructive" | "primary" | "outline") {
     return isLinkedIn ? (
-      <Button size="sm" variant={variant} onClick={() => setReconnectOpen(true)}>
+      <Button size="sm" variant={variant} aria-label={`Reconnect ${label}`} onClick={() => setReconnectOpen(true)}>
         Reconnect
       </Button>
     ) : (
-      <a href={authUrl} className={buttonVariants({ variant, size: "sm" })}>
+      <a href={authUrl} aria-label={`Reconnect ${label}`} className={buttonVariants({ variant, size: "sm" })}>
         Reconnect
       </a>
     );
@@ -396,13 +398,14 @@ export function ConnectionActions({
         ) : (
           <Badge variant="success">Connected</Badge>
         )}
-        <Button size="sm" variant="outline" onClick={() => setSwitchOpen(true)}>
+        <Button size="sm" variant="outline" aria-label={`Switch account ${label}`} onClick={() => setSwitchOpen(true)}>
           Switch account
         </Button>
         <Button
           size="sm"
           variant="ghost"
           className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+          aria-label={`Disconnect ${label}`}
           onClick={openDisconnect}
         >
           Disconnect

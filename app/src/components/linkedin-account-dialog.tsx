@@ -20,6 +20,7 @@ import {
   type LinkedInAccountDialogMode,
 } from "@/lib/linkedinAccount";
 import { linkedInReconnectSignInStep } from "@/lib/differentAccount";
+import { platformLabel } from "@/lib/platforms";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 import { useResetOnReturnFromCache } from "@/components/returnFromCache";
 
@@ -149,7 +150,7 @@ export function LinkedInConnectButton({ workspaceId }: { workspaceId: string }) 
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+      <Button size="sm" variant="outline" aria-label={`Connect ${platformLabel("linkedin")}`} onClick={() => setOpen(true)}>
         Connect
       </Button>
       <LinkedInAccountDialog workspaceId={workspaceId} open={open} onOpenChange={setOpen} mode="connect" />

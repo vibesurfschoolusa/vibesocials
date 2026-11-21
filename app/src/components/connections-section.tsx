@@ -22,7 +22,7 @@ import {
 import { PLATFORM_GUIDES, platformHelpHref } from "@/lib/platformGuides";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 import type { Platform } from "@prisma/client";
-import { ExternalLink } from "@/components/external-link";
+import { ExternalLink, NEW_TAB_HINT } from "@/components/external-link";
 import { Badge } from "@/components/ui/badge";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -250,6 +250,7 @@ export function ConnectionsSection({
                     {!connection && !readOnly ? (
                       <ExternalLink
                         href={platformHelpHref(key)}
+                        aria-label={`How to connect ${label} ${NEW_TAB_HINT}`}
                         className="mt-1 inline-block text-xs font-medium text-primary underline-offset-4 hover:underline"
                       >
                         How to connect
@@ -279,11 +280,16 @@ export function ConnectionsSection({
                     // linkedin.com: offer to sign out first (lib/linkedinAccount.ts).
                     <LinkedInConnectButton workspaceId={workspaceId} />
                   ) : href ? (
-                    <ButtonLink href={withWorkspaceId(href, workspaceId)} variant="outline" size="sm">
+                    <ButtonLink
+                      href={withWorkspaceId(href, workspaceId)}
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Connect ${label}`}
+                    >
                       Connect
                     </ButtonLink>
                   ) : (
-                    <Button size="sm" variant="secondary" disabled>
+                    <Button size="sm" variant="secondary" disabled aria-label={`Coming soon: ${label}`}>
                       Coming soon
                     </Button>
                   )}

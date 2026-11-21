@@ -740,7 +740,7 @@ export function PostJobCard({
               <ExternalLink
                 key={result.platform}
                 href={url}
-                aria-label={`View on ${platformLabel(result.platform)} ${NEW_TAB_HINT} "${name}"`}
+                aria-label={`View on ${platformLabel(result.platform)} "${name}" ${NEW_TAB_HINT}`}
                 className="rounded text-xs font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
               >
                 View on {platformLabel(result.platform)}
