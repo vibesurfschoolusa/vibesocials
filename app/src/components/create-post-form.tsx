@@ -2750,7 +2750,7 @@ function CreatePostFormInner({
   // the press, after the upload, and the success clears it, so an edit made while
   // a Schedule or Save draft sends would be dropped unseen. Those fields lock
   // until the send ends, and so does every other control that shapes the post
-  // (R64 fix review L1; TikTok's settings are frozen code and stay as they are).
+  // (R64 fix review L1; the frozen platform settings named in the brief stay as they are).
   // The file stays changeable, which stops the send (R63).
   // Publish now's dialog covers the form while it sends.
   const sendLocksFields = uploadLoading && !confirmPublishOpen;
