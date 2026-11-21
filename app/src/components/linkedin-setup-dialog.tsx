@@ -176,7 +176,7 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
         )}
         <Alert variant="info" title="Company pages only">
           This app posts to LinkedIn company pages, not personal profiles. The LinkedIn account
-          signed in to this browser is the one being connected, and it must be an administrator
+          signed in to this browser is the one being connected, and it must be a Super admin
           of the page. Wrong account?{" "}
           <ExternalLink href={LINKEDIN_SIGN_OUT_URL} className="font-medium underline underline-offset-2">
             Sign out of LinkedIn

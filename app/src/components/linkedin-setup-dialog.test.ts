@@ -68,3 +68,13 @@ describe("LinkedInSetupDialog: the empty-field error", () => {
     expect(source).toMatch(/<Input\s+ref=\{inputRef\}\s+id="vanity-name"/);
   });
 });
+
+// R56 new-customer-2 L2: the post check needs a Super admin, as every other screen says.
+describe("LinkedInSetupDialog: who may connect", () => {
+  it("says Super admin, in the words of the no-pages sentence", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("./linkedin-setup-dialog.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
+    expect(source).toContain("and it must be a Super admin of the page.");
+    expect(source).not.toContain("administrator");
+  });
+});
