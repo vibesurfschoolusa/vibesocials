@@ -33,6 +33,7 @@ import { MediaLibrary } from "./media-library";
 
 let root: Root;
 let container: FakeNode;
+let doc: { activeElement: unknown };
 const fetchMock = vi.fn();
 let mediaPost: (body: Record<string, unknown>) => Promise<Response>;
 
@@ -117,6 +118,7 @@ beforeEach(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const made = makeDocument();
   container = made.container;
+  doc = made.doc as unknown as { activeElement: unknown };
   vi.stubGlobal("window", made.doc.defaultView);
   vi.stubGlobal("document", made.doc);
   h.upload.mockReset();
@@ -192,6 +194,34 @@ describe("Media library upload: changes made while it runs", () => {
     expect(posted()).toEqual([expect.objectContaining({ filename: "first.jpg" })]);
     expect(h.success).toHaveBeenCalledWith("Media uploaded successfully.");
     expect(fileShown("second.jpg")).toBe(true);
+  }, 5_000);
+
+  // R65 fix review L1: rebuilding the input would drop focus to the page body.
+  it("a file picked during the upload: after success the input is the same element, and focus stays on it", async () => {
+    const blob = deferred<{ url: string }>();
+    h.upload.mockReturnValue(blob.promise);
+    await pick(photo("first.jpg"));
+    await submit();
+
+    await pick(photo("second.jpg"));
+    const input = byId("media-file");
+    doc.activeElement = input;
+    blob.resolve({ url: "https://blob.example/first.jpg" });
+    await settle();
+
+    expect(h.success).toHaveBeenCalledWith("Media uploaded successfully.");
+    expect(byId("media-file")).toBe(input);
+    expect(doc.activeElement).toBe(input);
+    expect(find(container, (n) => n === input)).toBe(input);
+  }, 5_000);
+
+  it("a normal upload: the file input is reset, a new element, as before", async () => {
+    h.upload.mockResolvedValue({ url: "https://blob.example/a.jpg" });
+    await pick(photo("plain.jpg"));
+    const input = byId("media-file");
+    await submit();
+    expect(h.success).toHaveBeenCalledWith("Media uploaded successfully.");
+    expect(byId("media-file")).not.toBe(input);
   }, 5_000);
 
   it("a normal upload: as before, the caption and file are sent and both are cleared", async () => {
