@@ -806,11 +806,11 @@ describe("describeOAuthResult: the connect limit", () => {
   it("x_too_many_tries names Connect for a new row and Reconnect for an existing one", () => {
     expect(settings("x_too_many_tries", "connect")).toEqual({
       variant: "danger",
-      message: "Too many tries to connect X in the last hour. Wait a few minutes, then try Connect again.",
+      message: "Too many tries to connect X in the last hour. Wait up to an hour, then try Connect again.",
       platform: "x",
     });
     expect(settings("x_too_many_tries", "reconnect")?.message).toBe(
-      "Too many tries to connect X in the last hour. Wait a few minutes, then try Reconnect again.",
+      "Too many tries to connect X in the last hour. Wait up to an hour, then try Reconnect again.",
     );
   });
 

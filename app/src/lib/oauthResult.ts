@@ -315,7 +315,7 @@ function describeCode(
     if (error.endsWith("_too_many_tries")) {
       return {
         variant: "danger",
-        message: `Too many tries to connect ${label ?? "the account"} in the last hour. Wait a few minutes, then ${tryButton}.`,
+        message: `Too many tries to connect ${label ?? "the account"} in the last hour. Wait up to an hour, then ${tryButton}.`,
       };
     }
     if (error.endsWith("_limit_unchecked")) {
