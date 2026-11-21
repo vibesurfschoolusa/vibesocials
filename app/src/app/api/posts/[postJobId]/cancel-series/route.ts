@@ -11,6 +11,7 @@ import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
 import { finishPostJob } from "@/server/jobs/failPendingResults";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 import { readJsonObject } from "@/lib/http";
+import { logger } from "@/lib/logger";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 interface PostJobRouteContext {
@@ -142,12 +143,17 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // R59 publishing-flow L4: a missed post still draft or scheduled changed in
   // the meantime (`changed`); only one that moved on is `notCancelled`, so a
   // tab reading only that still says those had started publishing.
-  const stillCancellable =
-    missed.length === 0
-      ? 0
-      : (
-          await prisma.postJob.findMany({ where: { id: { in: missed }, workspaceId }, select: { id: true, status: true } })
-        ).filter((post) => MUTABLE_POST_JOB_STATUSES.includes(post.status)).length;
+  let stillCancellable = 0;
+  if (missed.length > 0) {
+    try {
+      const reread = await prisma.postJob.findMany({ where: { id: { in: missed }, workspaceId }, select: { id: true, status: true } });
+      stillCancellable = reread.filter((post) => MUTABLE_POST_JOB_STATUSES.includes(post.status)).length;
+    } catch (error) {
+      // The cancel has committed: a count we can't read must not turn it into
+      // a 500. Every missed post then reads as notCancelled, the old answer.
+      logger.error("[posts] Couldn't count the series posts that changed in the meantime", { error, postJobId });
+    }
+  }
 
   return NextResponse.json(
     { ok: true, cancelled, notCancelled: missed.length - stillCancellable, changed: stillCancellable },

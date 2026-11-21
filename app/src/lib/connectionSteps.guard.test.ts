@@ -20,9 +20,11 @@ const SRC = path.join(__dirname, "..");
 /**
  * A text that tells its reader to connect or reconnect ("connected",
  * "connection" and "reconnecting" describe, so they don't match), or that puts
- * a step word it was handed before "in Settings" or after "owner can".
+ * a step word it was handed before "in Settings" or after "owner can", or
+ * right before the platform and then the retry ("${step} ${label}, then retry").
  */
-const STEP = /\b(?:re)?connect\b(?!_)|\breconnected in Settings\b|\$\{\}[^.;]*\bin Settings\b|\bowner can \$\{\}/i;
+const STEP =
+  /\b(?:re)?connect\b(?!_)|\breconnected in Settings\b|\$\{\}[^.;]*\bin Settings\b|\bowner can \$\{\}|\$\{\} \$\{\}(?:, then retry|; then)/i;
 /** The step's own codes ("connect" | "reconnect"), compared in code, never shown. */
 const CODE = /^(?:re)?connect$/;
 /** Never read by a person: a log line's "[tag] ..." and an id such as a step's "notify-gbp-reconnect-${}". */
@@ -94,6 +96,7 @@ const PUBLISH_PATH: Record<string, Record<string, string>> = {
   },
   "server/notifications/postOutcomeEmail.ts": {},
   "server/jobs/failPendingResults.ts": {},
+  "server/jobs/posting.ts": {},
   "server/jobs/inngest-functions.ts": {
     "This platform needs to be reconnected in Settings before publishing.":
       "publishToPlatform's flagged row: the connection exists, so always reconnect (wording kept for old and new rows)",
@@ -133,6 +136,20 @@ describe("the guard itself", () => {
     const planted = `${readFileSync(path.join(SRC, file), "utf8")}\nexport const PLANTED = "Reconnect X in Settings, then retry.";\n`;
     const found = stepTexts(file, planted).filter((text) => !(text in PUBLISH_PATH[file]));
     expect(found).toEqual(["Reconnect X in Settings, then retry."]);
+  });
+
+  it("finds a step word handed in before the platform, then the retry", () => {
+    const source = [
+      "const a = `${capitalized(step)} ${label}, then retry.`;",
+      "const b = `The workspace owner can ${verb} ${label}; then retry.`;",
+      "const c = `${capitalized(step)} ${label}; then use Retry in Activity.`;",
+      "const d = `${label} is ${state}, so it was not sent.`;",
+    ].join("\n");
+    expect(stepTexts("planted.ts", source)).toEqual([
+      "${} ${}, then retry.",
+      "The workspace owner can ${} ${}; then retry.",
+      "${} ${}; then use Retry in Activity.",
+    ]);
   });
 
   it("finds a step in a template and in JSX text, not in a comment, a code or a description", () => {

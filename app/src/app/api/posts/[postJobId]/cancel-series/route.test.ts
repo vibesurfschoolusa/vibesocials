@@ -174,6 +174,19 @@ describe("POST /api/posts/[postJobId]/cancel-series", () => {
     });
   });
 
+  // Fix review of R59: the cancel has committed, so a failed count must not turn it into a 500.
+  it("the changed count can't be read after a cancel that worked: 200 with the old counts", async () => {
+    findManyMock.mockResolvedValueOnce([row("job-2"), row("job-3")]).mockRejectedValueOnce(new Error("db blip"));
+    updateManyMock.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await POST(req, ctx("job-2"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 1, changed: 0 });
+    errors.mockRestore();
+  });
+
   it("every post missed while this one is still cancellable: 409, changed in the meantime", async () => {
     findFirstMock.mockResolvedValueOnce(row("job-2")).mockResolvedValueOnce({ status: "draft" });
     findManyMock.mockResolvedValue([row("job-2"), row("job-3")]);
