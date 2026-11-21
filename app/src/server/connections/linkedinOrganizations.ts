@@ -110,14 +110,31 @@ function errorKind(error: unknown): { name?: string; code?: unknown } {
 export const LINKEDIN_LOOKUP_TIMEOUT_MS = 15_000;
 
 /**
- * `GET /rest/organizations/{id}`: the page's details, or null when LinkedIn
- * refuses, times out, the call fails or `signal` (a shared read budget) ends it.
+ * What a page lookup found. R54 platform-clients L1: the setup hint's lookup
+ * runs after organizationAcls failed, when LinkedIn is most likely to refuse
+ * (403 during the Standard tier review), rate-limit or time out; telling the
+ * owner to check an address that was right is wrong. So "not found" is only
+ * LinkedIn's own answer that there is no such page (a 404, or a 2xx with no
+ * organization in it); any other status, an unreadable body, a timeout or a
+ * throw is "failed".
  */
-export async function lookupOrganization(
+export type OrganizationLookup =
+  | { outcome: "found"; organization: LinkedInOrganizationDetails }
+  | { outcome: "not_found" }
+  | { outcome: "failed" };
+
+const lookedUp = (organization: LinkedInOrganizationDetails | null): OrganizationLookup =>
+  organization ? { outcome: "found", organization } : { outcome: "not_found" };
+
+/**
+ * `GET /rest/organizations/{id}`: the page's details, or why there are none.
+ * `signal` (a shared read budget) ending it is a failure.
+ */
+export async function lookupOrganizationOutcome(
   accessToken: string,
   id: string,
   signal?: AbortSignal,
-): Promise<LinkedInOrganizationDetails | null> {
+): Promise<OrganizationLookup> {
   try {
     // Bounded headers and body (fetchWithinLimit).
     const response = await fetchWithinLimit(
@@ -127,20 +144,33 @@ export async function lookupOrganization(
     );
     if (!response.ok) {
       console.log("[LinkedIn OAuth] Organization lookup failed", { orgId: id, status: response.status });
-      return null;
+      return response.status === 404 ? { outcome: "not_found" } : { outcome: "failed" };
     }
-    return readOrganization(await response.json(), id);
+    return lookedUp(readOrganization(await response.json(), id));
   } catch (error) {
     console.log("[LinkedIn OAuth] Organization lookup error", { orgId: id, ...errorKind(error) });
-    return null;
+    return { outcome: "failed" };
   }
 }
 
-/** `GET /rest/organizations?q=vanityName&vanityName=...`: the first page it finds, or null. */
-export async function lookupOrganizationByVanityName(
+/**
+ * `GET /rest/organizations/{id}`: the page's details, or null when LinkedIn
+ * refuses, times out, the call fails or `signal` (a shared read budget) ends it.
+ */
+export async function lookupOrganization(
+  accessToken: string,
+  id: string,
+  signal?: AbortSignal,
+): Promise<LinkedInOrganizationDetails | null> {
+  const lookup = await lookupOrganizationOutcome(accessToken, id, signal);
+  return lookup.outcome === "found" ? lookup.organization : null;
+}
+
+/** `GET /rest/organizations?q=vanityName&vanityName=...`: the first page it finds, or why there is none. */
+export async function lookupOrganizationByVanityNameOutcome(
   accessToken: string,
   vanityName: string,
-): Promise<LinkedInOrganizationDetails | null> {
+): Promise<OrganizationLookup> {
   try {
     // R36 platform-clients L1: runs while someone waits on Connect; bounded headers and body.
     const response = await fetchWithinLimit(
@@ -150,14 +180,23 @@ export async function lookupOrganizationByVanityName(
     );
     if (!response.ok) {
       console.log("[LinkedIn OAuth] Vanity name lookup failed", { status: response.status });
-      return null;
+      return response.status === 404 ? { outcome: "not_found" } : { outcome: "failed" };
     }
     const elements = asRecord(await response.json())?.elements;
-    return Array.isArray(elements) ? readOrganization(elements[0]) : null;
+    return lookedUp(Array.isArray(elements) ? readOrganization(elements[0]) : null);
   } catch (error) {
     console.log("[LinkedIn OAuth] Vanity name lookup error", errorKind(error));
-    return null;
+    return { outcome: "failed" };
   }
+}
+
+/** `GET /rest/organizations?q=vanityName&vanityName=...`: the first page it finds, or null. */
+export async function lookupOrganizationByVanityName(
+  accessToken: string,
+  vanityName: string,
+): Promise<LinkedInOrganizationDetails | null> {
+  const lookup = await lookupOrganizationByVanityNameOutcome(accessToken, vanityName);
+  return lookup.outcome === "found" ? lookup.organization : null;
 }
 
 /**

@@ -11,6 +11,8 @@ import {
   LINKEDIN_ACL_PAGE_SIZE,
   lookupOrganization,
   lookupOrganizationByVanityName,
+  lookupOrganizationByVanityNameOutcome,
+  lookupOrganizationOutcome,
   organizationIdsFromAcls,
 } from "./linkedinOrganizations";
 
@@ -280,6 +282,107 @@ describe("lookupOrganizationByVanityName", () => {
 
     stubFetch(() => json({}, 404));
     expect(await lookupOrganizationByVanityName("tok", "nobody")).toBeNull();
+  });
+});
+
+// R54 platform-clients L1, new-customer L3, pages-a L1: the setup hint's
+// lookup runs only after organizationAcls failed, when LinkedIn is most likely
+// to refuse, rate-limit or time out. A null for all of those told the owner to
+// check an address that was right; the outcome tells them apart.
+describe("lookupOrganizationByVanityNameOutcome", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("found: the page", async () => {
+    stubFetch(() => json({ elements: [{ id: 888, localizedName: "Acme Surf", vanityName: "acme-surf" }] }));
+    expect(await lookupOrganizationByVanityNameOutcome("tok", "acme-surf")).toEqual({
+      outcome: "found",
+      organization: { id: "888", name: "Acme Surf", vanityName: "acme-surf" },
+    });
+  });
+
+  it("not found: a 200 with no elements, or a 404", async () => {
+    stubFetch(() => json({ paging: { start: 0, count: 10, total: 0 }, elements: [] }));
+    expect(await lookupOrganizationByVanityNameOutcome("tok", "nobody")).toEqual({ outcome: "not_found" });
+
+    stubFetch(() => json({}, 404));
+    expect(await lookupOrganizationByVanityNameOutcome("tok", "nobody")).toEqual({ outcome: "not_found" });
+  });
+
+  it.each([403, 429, 500])("failed: a %i", async (status) => {
+    stubFetch(() => json({ message: "no" }, status));
+    expect(await lookupOrganizationByVanityNameOutcome("tok", "acme-surf")).toEqual({ outcome: "failed" });
+  });
+
+  it("failed: an unreadable body, or a call that throws", async () => {
+    stubFetch(() => new Response("<html>oops</html>", { status: 200 }));
+    expect(await lookupOrganizationByVanityNameOutcome("tok", "acme-surf")).toEqual({ outcome: "failed" });
+
+    stubFetch(() => Promise.reject(new TypeError("fetch failed")));
+    expect(await lookupOrganizationByVanityNameOutcome("tok", "acme-surf")).toEqual({ outcome: "failed" });
+  });
+
+  it("failed: no answer within 15 seconds", async () => {
+    vi.useFakeTimers();
+    abortSignalTimeoutOnFakeClock();
+    vi.stubGlobal("fetch", vi.fn(headersNeverCome));
+
+    const answer = lookupOrganizationByVanityNameOutcome("tok", "acme-surf");
+    await vi.advanceTimersByTimeAsync(LINKEDIN_LOOKUP_TIMEOUT_MS);
+
+    await expect(answer).resolves.toEqual({ outcome: "failed" });
+  }, 5_000);
+});
+
+describe("lookupOrganizationOutcome", () => {
+  it("found: the page", async () => {
+    stubFetch(() => json({ id: 777, localizedName: "Hinted Page" }));
+    expect(await lookupOrganizationOutcome("tok", "777")).toEqual({
+      outcome: "found",
+      organization: { id: "777", name: "Hinted Page" },
+    });
+  });
+
+  it("not found: a 404", async () => {
+    stubFetch(() => json({ message: "Not found" }, 404));
+    expect(await lookupOrganizationOutcome("tok", "777")).toEqual({ outcome: "not_found" });
+  });
+
+  it.each([403, 500])("failed: a %i", async (status) => {
+    stubFetch(() => json({ message: "no" }, status));
+    expect(await lookupOrganizationOutcome("tok", "777")).toEqual({ outcome: "failed" });
+  });
+
+  it("failed: a call that throws", async () => {
+    stubFetch(() => Promise.reject(new TypeError("fetch failed")));
+    expect(await lookupOrganizationOutcome("tok", "777")).toEqual({ outcome: "failed" });
+  });
+});
+
+// The daily sweep, the admin pages listing and the callback's previous-page
+// check still read null for anything but a page, exactly as before.
+describe("the null-returning lookups answer as before", () => {
+  it("lookupOrganization: the page, then null for a 404 and a 500", async () => {
+    stubFetch(() => json({ id: 777, localizedName: "Hinted Page" }));
+    expect(await lookupOrganization("tok", "777")).toEqual({ id: "777", name: "Hinted Page" });
+    for (const status of [404, 500]) {
+      stubFetch(() => json({ message: "no" }, status));
+      expect(await lookupOrganization("tok", "777"), String(status)).toBeNull();
+    }
+  });
+
+  it("lookupOrganizationByVanityName: the page, then null for a 404 and a 500", async () => {
+    stubFetch(() => json({ elements: [{ id: 888, localizedName: "Acme Surf", vanityName: "acme-surf" }] }));
+    expect(await lookupOrganizationByVanityName("tok", "acme-surf")).toEqual({
+      id: "888",
+      name: "Acme Surf",
+      vanityName: "acme-surf",
+    });
+    for (const status of [404, 500]) {
+      stubFetch(() => json({ message: "no" }, status));
+      expect(await lookupOrganizationByVanityName("tok", "acme-surf"), String(status)).toBeNull();
+    }
   });
 });
 
