@@ -37,7 +37,6 @@ export async function POST(request: Request) {
   const contentType = request.headers.get("content-type") || "";
 
   let locationNameRaw: unknown;
-  let locationTitleRaw: unknown;
   let workspaceIdRaw: unknown;
   if (contentType.includes("application/json")) {
     const body = await readJsonObject(request);
@@ -45,25 +44,16 @@ export async function POST(request: Request) {
       return invalidJsonBodyResponse();
     }
     locationNameRaw = body.locationName;
-    locationTitleRaw = body.locationTitle;
     workspaceIdRaw = body.workspaceId;
   } else {
     const form = await request.formData();
     locationNameRaw = form.get("locationName");
-    locationTitleRaw = form.get("locationTitle");
     workspaceIdRaw = form.get("workspaceId");
   }
   const refusal = renderedWorkspaceRefusal(workspaceIdRaw, workspace.id);
   if (refusal) {
     return refusal;
   }
-  // The location's display name, from Google's list in Settings, so the
-  // connection reads "Connected as <business>" (lib/connectionSummary.ts).
-  // A location saved without one (a pasted store code) clears the old name.
-  const locationTitle =
-    typeof locationTitleRaw === "string" && locationTitleRaw.trim()
-      ? locationTitleRaw.trim().slice(0, MAX_LOCATION_TITLE_LENGTH)
-      : null;
   if (typeof locationNameRaw !== "string" || !locationNameRaw.trim()) {
     return NextResponse.json(
       { error: "locationName is required" },
@@ -88,14 +78,15 @@ export async function POST(request: Request) {
   if (!listed.ok) {
     return listed.response;
   }
-  const byName = listed.locations.some((location) => location.resourceName === locationName);
-  const byCode = byName ? 0 : exactStoreCodeMatches(listed.locations, locationName).length;
+  const byName = listed.locations.find((location) => location.resourceName === locationName);
+  const byCode = byName ? [] : exactStoreCodeMatches(listed.locations, locationName);
   // R26 platform-clients L3: a store code several locations share names none of
   // them, so every post to it would fail (gbpLocation.ts resolveGbpLocationName).
-  if (byCode > 1) {
+  if (byCode.length > 1) {
     return NextResponse.json({ error: STORE_CODE_NOT_UNIQUE_MESSAGE }, { status: 400 });
   }
-  if (!byName && byCode === 0) {
+  const matched = byName ?? byCode[0];
+  if (!matched) {
     // Found nowhere, but an account's list could not all be read: the
     // location may be on the part that is missing, so this is Google's
     // failure, not a refusal. Found in an account that answered, it saves.
@@ -105,6 +96,11 @@ export async function POST(request: Request) {
       ? NextResponse.json({ error: LOCATION_NOT_LISTED_MESSAGE }, { status: 400 })
       : NextResponse.json({ error: GOOGLE_NO_ANSWER_MESSAGE }, { status: 503 });
   }
+
+  // The business name comes from Google's list, never the browser: Save from
+  // the Advanced field sends none, and wiped "Connected as <business>"
+  // (lib/connectionSummary.ts) until the daily backfill (R56 new-customer-2 L1).
+  const locationTitle = matched.title?.trim().slice(0, MAX_LOCATION_TITLE_LENGTH) || null;
 
   const existingMetadata = (connection.metadata as Record<string, unknown> | null) ?? {};
 

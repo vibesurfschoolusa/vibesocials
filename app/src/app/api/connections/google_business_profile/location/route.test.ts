@@ -70,7 +70,23 @@ describe("POST /api/connections/google_business_profile/location", () => {
     });
   });
 
-  it("clears a stored title when a location is saved without one (a pasted store code)", async () => {
+  // R56 new-customer-2 L1: a pick copies the resource name into the Advanced
+  // field, and Save from there sends no title, which wiped the business name.
+  it("keeps the title from Google's list when a picked location is saved from the Advanced field", async () => {
+    findFirstMock.mockResolvedValue({
+      id: "conn-1",
+      metadata: { locationName: "accounts/1/locations/2", locationTitle: "Vibe Surf School" },
+    });
+
+    await post({ locationName: "accounts/1/locations/2", locationTitle: null });
+
+    expect(updateMock).toHaveBeenCalledWith({
+      where: { id: "conn-1" },
+      data: { metadata: { locationName: "accounts/1/locations/2", locationTitle: "Vibe Surf School" } },
+    });
+  });
+
+  it("takes the title of the one listed location a pasted store code matches", async () => {
     findFirstMock.mockResolvedValue({
       id: "conn-1",
       metadata: { locationName: "accounts/1/locations/2", locationTitle: "Old Place" },
@@ -80,15 +96,41 @@ describe("POST /api/connections/google_business_profile/location", () => {
 
     expect(updateMock).toHaveBeenCalledWith({
       where: { id: "conn-1" },
-      data: { metadata: { locationName: "STORE-42", locationTitle: null } },
+      data: { metadata: { locationName: "STORE-42", locationTitle: "Second Shop" } },
     });
   });
 
-  it("ignores a title that is not text, and caps a long one", async () => {
+  it("takes the title of a pasted resource name that is in the list", async () => {
+    await post({ locationName: " accounts/1/locations/3 " });
+
+    expect(updateMock.mock.calls[0][0].data.metadata).toMatchObject({
+      locationName: "accounts/1/locations/3",
+      locationTitle: "Second Shop",
+    });
+  });
+
+  it("uses the list's title over a different one the browser sends", async () => {
+    await post({ locationName: "accounts/1/locations/2", locationTitle: "Someone Else's Shop" });
+    expect(updateMock.mock.calls[0][0].data.metadata.locationTitle).toBe("Vibe Surf School");
+
     await post({ locationName: "accounts/1/locations/2", locationTitle: 7 });
+    expect(updateMock.mock.calls[1][0].data.metadata.locationTitle).toBe("Vibe Surf School");
+  });
+
+  it("stores no title when Google lists the location without one, and caps a long one", async () => {
+    listMock.mockResolvedValue({
+      ok: true,
+      complete: true,
+      locations: [
+        { ...LISTED[0], title: null },
+        { ...LISTED[1], title: "x".repeat(500) },
+      ],
+    });
+
+    await post({ locationName: "accounts/1/locations/2", locationTitle: "Typed Name" });
     expect(updateMock.mock.calls[0][0].data.metadata.locationTitle).toBeNull();
 
-    await post({ locationName: "accounts/1/locations/2", locationTitle: "x".repeat(500) });
+    await post({ locationName: "STORE-42" });
     expect(updateMock.mock.calls[1][0].data.metadata.locationTitle).toHaveLength(200);
   });
 
