@@ -186,11 +186,12 @@ export async function requestDisconnect(
 /**
  * R6-pages L3: Switch account disconnects first, so a scheduled post that chose
  * the platform fails on it (CONNECTION_GONE) until an account is connected
- * again; once one is, it posts to that account.
+ * again; once one is, it posts to that account. R62 pages-b L1: a post waiting
+ * for approval is in the same place once it is approved, as Disconnect says.
  */
 export function switchScheduledSentence(platform: string): string {
   const label = platformLabel(platform as Platform);
-  return `Scheduled posts that chose ${label} go to the new account once you finish signing in. If you stop before then, they fail on ${label} until you connect an account again.`;
+  return `Scheduled posts, and posts waiting for approval, that chose ${label} go to the new account once you finish signing in. If you stop before then, they fail on ${label} until you connect an account again.`;
 }
 
 export function switchDescription(platform: string): string {
