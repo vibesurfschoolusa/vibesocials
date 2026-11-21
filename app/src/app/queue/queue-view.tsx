@@ -76,12 +76,12 @@ import {
   applyJobPatch,
   approveHint,
   browserOnline,
-  checkScheduleTime,
   decisionButtonState,
   decisionOutcome,
   editDialogModel,
   editOutcome,
   editSaveLabel,
+  editTimeToSend,
   getQueueCardActions,
   publishConfirmCopy,
   publishNeedsApproval,
@@ -639,16 +639,19 @@ function QueueEditDialog({
       return;
     }
 
-    // A scheduled post always carries a time; a draft only when one was chosen.
-    let scheduledIso: string | null = null;
-    if (isScheduled || scheduledForLocal) {
-      const check = checkScheduleTime(scheduledForLocal, Date.now(), SCHEDULE_BUFFER_MS);
-      if (!check.ok) {
-        toast.error(check.error);
-        return;
-      }
-      scheduledIso = check.iso;
+    // A scheduled post sends its time only when it changed; a draft only when one was chosen.
+    const timeCheck = editTimeToSend({
+      scheduled: isScheduled,
+      field: scheduledForLocal,
+      savedScheduledFor: job.scheduledFor,
+      nowMs: Date.now(),
+      bufferMs: SCHEDULE_BUFFER_MS,
+    });
+    if (!timeCheck.ok) {
+      toast.error(timeCheck.error);
+      return;
     }
+    const scheduledIso = timeCheck.iso;
 
     // undefined = leave them out; `null` removes the last one (lib/platformOverrides.ts).
     const overridesToSend = queueOverridesToSend({

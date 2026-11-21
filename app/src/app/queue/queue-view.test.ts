@@ -495,3 +495,15 @@ describe("youtubePrivacyNote", () => {
     expect(youtubePrivacyNote(undefined)).toBe("");
   });
 });
+
+// R59 publishing-flow-2 L1: the Edit dialog sends and checks a time only when it changed.
+describe("The Edit dialog's time", () => {
+  const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+
+  it("goes through editTimeToSend, with the stored time to compare against", () => {
+    const save = queueSource.slice(queueSource.indexOf("const handleSave = async"), queueSource.indexOf("// undefined = leave them out"));
+    expect(save).toContain("editTimeToSend({");
+    expect(save).toContain("savedScheduledFor: job.scheduledFor");
+    expect(save).not.toContain("checkScheduleTime(");
+  });
+});

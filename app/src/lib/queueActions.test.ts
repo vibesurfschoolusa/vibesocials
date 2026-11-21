@@ -9,6 +9,7 @@ import {
   captionChanged,
   decisionOutcome,
   editDialogModel,
+  editTimeToSend,
   editOutcome,
   editSaveLabel,
   editSendsBackForApproval,
@@ -515,6 +516,92 @@ describe("checkScheduleTime", () => {
     const tooSoon = { ok: false, error: "The scheduled time has passed or is less than a minute away. Choose a later time and try again." };
     expect(checkScheduleTime(local(-60 * 60 * 1000), NOW, BUFFER)).toEqual(tooSoon);
     expect(checkScheduleTime(local(0), NOW, BUFFER)).toEqual(tooSoon);
+  });
+});
+
+// R59 publishing-flow-2 L1: a scheduled post that is due but not yet picked up can
+// still get a caption fix; only a changed time is sent and checked.
+describe("editTimeToSend", () => {
+  const NOW = Date.now();
+  const BUFFER = 60_000;
+  const at = (offsetMs: number) => new Date(NOW + offsetMs);
+  const tooSoon = {
+    ok: false,
+    error: "The scheduled time has passed or is less than a minute away. Choose a later time and try again.",
+  };
+
+  it("a caption-only save on a past-due scheduled post sends no time", () => {
+    const saved = at(-3 * 60_000);
+    expect(
+      editTimeToSend({
+        scheduled: true,
+        field: toDateTimeLocalValue(saved),
+        savedScheduledFor: saved.toISOString(),
+        nowMs: NOW,
+        bufferMs: BUFFER,
+      }),
+    ).toEqual({ ok: true, iso: null });
+  });
+  it("a scheduled post's time moved into the past is refused, as now", () => {
+    const saved = at(2 * 60 * 60_000);
+    expect(
+      editTimeToSend({
+        scheduled: true,
+        field: toDateTimeLocalValue(at(-60 * 60_000)),
+        savedScheduledFor: saved.toISOString(),
+        nowMs: NOW,
+        bufferMs: BUFFER,
+      }),
+    ).toEqual(tooSoon);
+  });
+  it("a scheduled post's time moved later is sent", () => {
+    const saved = at(2 * 60 * 60_000);
+    const result = editTimeToSend({
+      scheduled: true,
+      field: toDateTimeLocalValue(at(5 * 60 * 60_000)),
+      savedScheduledFor: saved.toISOString(),
+      nowMs: NOW,
+      bufferMs: BUFFER,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.iso).not.toBeNull();
+  });
+  it("a scheduled post's cleared time is refused, as now", () => {
+    expect(
+      editTimeToSend({ scheduled: true, field: "", savedScheduledFor: at(60 * 60_000).toISOString(), nowMs: NOW, bufferMs: BUFFER }),
+    ).toEqual({ ok: false, error: "Choose a valid date and time." });
+  });
+  it("a draft with a new time is checked and sent, as now", () => {
+    const result = editTimeToSend({
+      scheduled: false,
+      field: toDateTimeLocalValue(at(3 * 60 * 60_000)),
+      savedScheduledFor: null,
+      nowMs: NOW,
+      bufferMs: BUFFER,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.iso).not.toBeNull();
+    expect(
+      editTimeToSend({ scheduled: false, field: toDateTimeLocalValue(at(-60_000)), savedScheduledFor: null, nowMs: NOW, bufferMs: BUFFER }),
+    ).toEqual(tooSoon);
+  });
+  it("a draft given the time it had before is still sent: choosing a time schedules it", () => {
+    const saved = at(3 * 60 * 60_000);
+    const result = editTimeToSend({
+      scheduled: false,
+      field: toDateTimeLocalValue(saved),
+      savedScheduledFor: saved.toISOString(),
+      nowMs: NOW,
+      bufferMs: BUFFER,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.iso).not.toBeNull();
+  });
+  it("a draft with no time sends none, as now", () => {
+    expect(editTimeToSend({ scheduled: false, field: "", savedScheduledFor: null, nowMs: NOW, bufferMs: BUFFER })).toEqual({
+      ok: true,
+      iso: null,
+    });
   });
 });
 

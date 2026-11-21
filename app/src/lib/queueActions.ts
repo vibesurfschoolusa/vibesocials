@@ -7,7 +7,7 @@ import type { Platform } from "@prisma/client";
 import { platformLabel } from "./platforms";
 import type { PostJobDTO } from "./postsDto";
 import { POST_GONE_TEXT } from "./postMovedOn";
-import { localDateTimeToUtcIso, SCHEDULED_TIME_TOO_SOON_MESSAGE } from "./scheduling";
+import { localDateTimeToUtcIso, SCHEDULED_TIME_TOO_SOON_MESSAGE, toDateTimeLocalValue } from "./scheduling";
 import { INVALID_WORKSPACE_ID_CODE, MISSING_WORKSPACE_ID_CODE, WORKSPACE_CHANGED_CODE } from "./workspaceChanged";
 
 /**
@@ -470,4 +470,29 @@ export function checkScheduleTime(
     return { ok: false, error: SCHEDULED_TIME_TOO_SOON_MESSAGE };
   }
   return { ok: true, iso };
+}
+
+/**
+ * The time the Edit dialog sends, or `iso: null` to leave it out. A scheduled post
+ * whose field still shows its stored time sends none, so a due post the scanner
+ * hasn't picked up yet can still get a caption fix (R59 publishing-flow-2 L1);
+ * only a changed time is checked as now. A draft sends any time chosen, since
+ * choosing one is what schedules it.
+ */
+export function editTimeToSend(input: {
+  scheduled: boolean;
+  field: string;
+  savedScheduledFor: string | null;
+  nowMs: number;
+  bufferMs: number;
+}): { ok: true; iso: string | null } | { ok: false; error: string } {
+  if (input.scheduled) {
+    const unchanged =
+      input.savedScheduledFor !== null && input.field === toDateTimeLocalValue(new Date(input.savedScheduledFor));
+    if (unchanged) return { ok: true, iso: null };
+  } else if (!input.field) {
+    return { ok: true, iso: null };
+  }
+  const check = checkScheduleTime(input.field, input.nowMs, input.bufferMs);
+  return check.ok ? { ok: true, iso: check.iso } : check;
 }
