@@ -161,6 +161,22 @@ describe("publishConfirmCopy", () => {
       confirmText: "Publish now",
     });
   });
+  // R58 publishing-flow L3: a draft can target some platforms only.
+  it("publish kind with target platforms names them", () => {
+    expect(publishConfirmCopy("publish", ["instagram"]).description).toBe(
+      "It will be sent to Instagram right away instead of waiting.",
+    );
+    expect(publishConfirmCopy("publish", ["instagram", "facebook_page", "linkedin"]).description).toBe(
+      "It will be sent to Instagram, Facebook Page and LinkedIn right away instead of waiting.",
+    );
+  });
+  it("publish kind with no target platforms keeps connected", () => {
+    for (const targets of [null, []]) {
+      expect(publishConfirmCopy("publish", targets).description).toBe(
+        "It will be sent to your connected platforms right away instead of waiting.",
+      );
+    }
+  });
   it("submit kind says the post is held for review", () => {
     expect(publishConfirmCopy("submit")).toEqual({
       title: "Submit for approval?",

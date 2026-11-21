@@ -3,6 +3,8 @@ import { approvalOutcome } from "./approval";
 import { dispatchFailedText } from "./composerSubmitOutcome";
 import { isRouteAnswer } from "./postSubmitFailure";
 import { fetchOrNoAnswer, isNoAnswer } from "./requestNoAnswer";
+import type { Platform } from "@prisma/client";
+import { platformLabel } from "./platforms";
 import type { PostJobDTO } from "./postsDto";
 import { POST_GONE_TEXT } from "./postMovedOn";
 import { localDateTimeToUtcIso, SCHEDULED_TIME_TOO_SOON_MESSAGE } from "./scheduling";
@@ -109,8 +111,16 @@ export function queueStatusBadge(job: JobFacts): { label: string; tone: QueueBad
   return { label: "Draft", tone: "neutral" };
 }
 
-/** Copy for the card's confirm dialog, by what the primary action does. */
-export function publishConfirmCopy(kind: QueuePrimaryAction["kind"]): {
+/**
+ * Copy for the card's confirm dialog, by what the primary action does.
+ * R58 publishing-flow L3: a draft can target some platforms only, so the
+ * dialog names the ones the post lists; "connected" is only for a post with
+ * no targets, which goes to every connected platform.
+ */
+export function publishConfirmCopy(
+  kind: QueuePrimaryAction["kind"],
+  targets: readonly Platform[] | null = null,
+): {
   title: string;
   description: string;
   confirmText: string;
@@ -124,9 +134,16 @@ export function publishConfirmCopy(kind: QueuePrimaryAction["kind"]): {
   }
   return {
     title: "Publish this post now?",
-    description: "It will be sent to your connected platforms right away instead of waiting.",
+    description: `It will be sent to ${targetNames(targets)} right away instead of waiting.`,
     confirmText: "Publish now",
   };
+}
+
+/** "Instagram", "Instagram and X", "Instagram, X and LinkedIn"; no targets: every connected platform. */
+function targetNames(targets: readonly Platform[] | null): string {
+  if (!targets?.length) return "your connected platforms";
+  const labels = targets.map(platformLabel);
+  return labels.length === 1 ? labels[0] : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
 }
 
 /**
