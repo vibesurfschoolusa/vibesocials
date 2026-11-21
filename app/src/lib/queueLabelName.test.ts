@@ -74,4 +74,10 @@ describe("cardName, a card's name in its buttons", () => {
     const iso = "2026-11-20T15:00:00.000Z";
     expect(cardName("Sunday session", iso, { was: true })).toBe(`Sunday session, was ${at(iso)}`);
   });
+
+  // R58 second look: without a readable time, a Story half still says Story.
+  it("a Story half with no readable time is the caption and Story", () => {
+    expect(cardName("Saturday surf lesson", null, { storyHalf: true })).toBe("Saturday surf lesson, Story");
+    expect(cardName("Saturday surf lesson", "not a date", { storyHalf: true })).toBe("Saturday surf lesson, Story");
+  });
 });

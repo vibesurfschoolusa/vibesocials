@@ -31,9 +31,9 @@ export function cardName(
   iso: string | null | undefined,
   options: { story?: boolean; storyHalf?: boolean; was?: boolean } = {},
 ): string {
-  const head = options.story ? "Story" : labelName(caption);
+  const base = options.story ? "Story" : labelName(caption);
+  const head = options.storyHalf ? `${base}, Story` : base;
   const date = iso ? new Date(iso) : null;
   if (!date || Number.isNaN(date.getTime())) return head;
-  const when = `${options.was ? "was " : ""}${date.toLocaleString(undefined, CARD_TIME)}`;
-  return options.storyHalf ? `${head}, Story, ${when}` : `${head}, ${when}`;
+  return `${head}, ${options.was ? "was " : ""}${date.toLocaleString(undefined, CARD_TIME)}`;
 }
