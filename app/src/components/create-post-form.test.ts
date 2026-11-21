@@ -1326,7 +1326,7 @@ describe("the Post button's failure", () => {
     const catchBlock = submit.slice(submit.lastIndexOf("} catch (err: unknown) {"));
     expect(catchBlock.replace(/\s+/g, " ")).toBe(
       // R62 fix review L1: a file changed or removed while it sent has its own sentence first.
-      "} catch (err: unknown) { if (err instanceof SingleUploadAbortedError) { setUploadLoading(false); toast.error( singleUploadStoppedText(await err.stop, submitButtonLabel({ mode: publishMode, noFile: false, loading: false })), ); return; } // Nothing is cleared: the person's post stays as it was (lib/postSubmitFailure.ts). toast.error(submitErrorText(err, { mode: publishMode, holdsForApproval })); setUploadLoading(false); }",
+      "} catch (err: unknown) { if (err instanceof SingleUploadAbortedError) { const stop = await err.stop; // The page was left: nothing to show, and nothing to set. if (stop === \"left\") return; setUploadLoading(false); toast.error( singleUploadStoppedText(stop, submitButtonLabel({ mode: publishMode, noFile: false, loading: false })), ); return; } // Nothing is cleared: the person's post stays as it was (lib/postSubmitFailure.ts). toast.error(submitErrorText(err, { mode: publishMode, holdsForApproval })); setUploadLoading(false); }",
     );
   });
 });

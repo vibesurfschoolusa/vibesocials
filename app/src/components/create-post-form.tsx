@@ -1900,7 +1900,7 @@ function CreatePostFormInner({
 
   // R63 new-customer L1: a dropped upload's stop is worded by what the page
   // holds once the change settles, so it is told here, not when it is dropped.
-  const droppedStopRef = useRef<((stop: "changed" | "removed") => void) | null>(null);
+  const droppedStopRef = useRef<((stop: SingleUploadStop) => void) | null>(null);
   function settleDroppedUpload(stop: "changed" | "removed") {
     droppedStopRef.current?.(stop);
     droppedStopRef.current = null;
@@ -2164,11 +2164,15 @@ function CreatePostFormInner({
     const aborts = photoUploadAbortsRef.current;
     const single = activeUploadRef;
     const sending = submitUploadRef;
+    const dropped = droppedStopRef;
     return () => {
       for (const abort of aborts.values()) abort.abort();
       aborts.clear();
       // R62 fix review M1: a pressed send waiting on this upload still goes out.
       if (single.current && single.current.file !== sending.current) single.current.abort.abort("left");
+      // A send whose file was dropped, its replacement not settled yet, ends quietly.
+      dropped.current?.("left");
+      dropped.current = null;
     };
   }, []);
   const isCoverPhoto = (key: string) => photoSetRef.current[0]?.key === key;
@@ -2712,9 +2716,12 @@ function CreatePostFormInner({
       setUploadLoading(false);
     } catch (err: unknown) {
       if (err instanceof SingleUploadAbortedError) {
+        const stop = await err.stop;
+        // The page was left: nothing to show, and nothing to set.
+        if (stop === "left") return;
         setUploadLoading(false);
         toast.error(
-          singleUploadStoppedText(await err.stop, submitButtonLabel({ mode: publishMode, noFile: false, loading: false })),
+          singleUploadStoppedText(stop, submitButtonLabel({ mode: publishMode, noFile: false, loading: false })),
         );
         return;
       }
