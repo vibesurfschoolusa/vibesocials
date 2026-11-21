@@ -140,8 +140,9 @@ export function validatePostMediaList(entries: unknown): PostMediaListResult {
  * are attached, and what can still be chosen. With the post full, the step is
  * to remove one: "choose up to 0 more" would be no step at all.
  */
-function photoLimitMessage(attachedCount: number): string {
-  const refused = `None of these were added: a post holds up to ${MAX_POST_MEDIA} photos`;
+function photoLimitMessage(attachedCount: number, pickedCount: number): string {
+  const what = pickedCount === 1 ? "That photo wasn't added" : "None of these were added";
+  const refused = `${what}: a post holds up to ${MAX_POST_MEDIA} photos`;
   if (attachedCount === 0) return `${refused}. Choose ${MAX_POST_MEDIA} or fewer.`;
   const room = MAX_POST_MEDIA - attachedCount;
   const step = room > 0 ? `Choose up to ${room} more.` : "Remove a photo to add another.";
@@ -194,7 +195,7 @@ export function photoPickProblem(attachedCount: number, picked: readonly { type:
   if (video) return aloneMessage("video", video.name, attachedCount, picked);
   const gif = picked.find((file) => file.type === "image/gif");
   if (gif) return aloneMessage("GIF", gif.name, attachedCount, picked);
-  if (attachedCount + picked.length > MAX_POST_MEDIA) return photoLimitMessage(attachedCount);
+  if (attachedCount + picked.length > MAX_POST_MEDIA) return photoLimitMessage(attachedCount, picked.length);
   // R46 review: a type that can't be told gets the shared sentence, judged by the file's own
   // name (required, so no caller can leave it out and turn "clip.mkv" into "no extension").
   // R47 client-journey L3: several files are picked, so it names the file, with the photo step only.

@@ -206,8 +206,14 @@ describe("photoPickProblem (the Create page's picker)", () => {
   });
 
   it("refuses a pick when 10 are attached: no room, so remove one first", () => {
-    expect(photoPickProblem(10, many(1))).toBe(
+    expect(photoPickProblem(10, many(2))).toBe(
       "None of these were added: a post holds up to 10 photos, and 10 are attached. Remove a photo to add another.",
+    );
+  });
+
+  it("refuses one picked photo as that photo", () => {
+    expect(photoPickProblem(10, many(1))).toBe(
+      "That photo wasn't added: a post holds up to 10 photos, and 10 are attached. Remove a photo to add another.",
     );
   });
 
