@@ -1785,7 +1785,8 @@ function CreatePostFormInner({
           setUploadProgress(null);
         }
         // Stopped on purpose: nothing to say about it.
-        if (abort.signal.aborted) throw new SingleUploadAbortedError();
+        // Only this file aborts it, always with a SingleUploadStop as the reason.
+        if (abort.signal.aborted) throw new SingleUploadAbortedError(abort.signal.reason as SingleUploadStop);
         // A full workspace storage reaches the user as its own sentence, not
         // as the blob client's generic token failure (lib/uploadFailure.ts).
         throw await explainUploadFailure(err, workspaceId);
@@ -1925,7 +1926,7 @@ function CreatePostFormInner({
     // Changing (or clearing) the file invalidates any
     // in-flight/completed upload for the previous file so it
     // can never be applied to this new selection, and stops its bytes.
-    activeUploadRef.current?.abort.abort();
+    activeUploadRef.current?.abort.abort(pickedFile ? "changed" : "removed");
     activeUploadRef.current = null;
 
     if (!pickedFile) {
@@ -2121,6 +2122,9 @@ function CreatePostFormInner({
   }, [photoSet, uploadFile, reuseItem, singleAltText]);
 
   const isPhotoAttached = (key: string) => photoSetRef.current.some((photo) => photo.key === key);
+  // R62 fix review M1: the file a pressed send is waiting on; leaving the page
+  // lets that upload finish so the post still goes out.
+  const submitUploadRef = useRef<File | null>(null);
   // R62 publishing-flow-2 L1: the photo uploading now, so Remove, Remove all
   // and leaving the page stop its bytes.
   const photoUploadAbortsRef = useRef(new Map<string, AbortController>());
@@ -2131,10 +2135,12 @@ function CreatePostFormInner({
   useEffect(() => {
     const aborts = photoUploadAbortsRef.current;
     const single = activeUploadRef;
+    const sending = submitUploadRef;
     return () => {
       for (const abort of aborts.values()) abort.abort();
       aborts.clear();
-      single.current?.abort.abort();
+      // R62 fix review M1: a pressed send waiting on this upload still goes out.
+      if (single.current && single.current.file !== sending.current) single.current.abort.abort("left");
     };
   }, []);
   const isCoverPhoto = (key: string) => photoSetRef.current[0]?.key === key;
@@ -2510,7 +2516,13 @@ function CreatePostFormInner({
 
         // Reuses the attach-time upload when it already covers this exact
         // file; only uploads if it hasn't been (or needs to be re-) uploaded.
-        const blob = await ensureUploaded(uploadFile);
+        submitUploadRef.current = uploadFile;
+        let blob: UploadedBlobInfo;
+        try {
+          blob = await ensureUploaded(uploadFile);
+        } finally {
+          if (submitUploadRef.current === uploadFile) submitUploadRef.current = null;
+        }
 
         postData = buildUploadPostBody({
           blob,
@@ -2668,6 +2680,13 @@ function CreatePostFormInner({
       setFacebookPlacement(startPlacements.facebook);
       setUploadLoading(false);
     } catch (err: unknown) {
+      if (err instanceof SingleUploadAbortedError) {
+        setUploadLoading(false);
+        toast.error(
+          singleUploadStoppedText(err.stop, submitButtonLabel({ mode: publishMode, noFile: false, loading: false })),
+        );
+        return;
+      }
       // Nothing is cleared: the person's post stays as it was (lib/postSubmitFailure.ts).
       toast.error(submitErrorText(err, { mode: publishMode, holdsForApproval }));
       setUploadLoading(false);
@@ -3675,12 +3694,25 @@ function RepeatControls(props: {
   );
 }
 
+/** Why the single file's upload was stopped on purpose. */
+type SingleUploadStop = "changed" | "removed" | "left";
+
 /** The single file's upload, stopped on purpose (a new pick, no file, leaving the page). */
 class SingleUploadAbortedError extends Error {
-  constructor() {
+  constructor(readonly stop: SingleUploadStop) {
     super("The upload was stopped.");
     this.name = "SingleUploadAbortedError";
   }
+}
+
+/**
+ * R62 fix review L1: a pressed send whose file was changed or removed while it
+ * uploaded. `pressLabel` is the submit button's own text.
+ */
+export function singleUploadStoppedText(stop: SingleUploadStop, pressLabel: string): string {
+  return stop === "changed"
+    ? `You changed the file while the post was sending, so nothing was posted. Press ${pressLabel} again to post the new file.`
+    : "You removed the file while the post was sending, so nothing was posted.";
 }
 
 /** Lightweight placeholder for the Suspense boundary `useSearchParams`
