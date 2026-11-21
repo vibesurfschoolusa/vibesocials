@@ -9,15 +9,23 @@ vi.mock("./linkedin-account-dialog", () => ({
     return null;
   },
 }));
-vi.mock("@/components/ui/dialog", () => ({
-  Dialog: () => null,
-  DialogBody: () => null,
-  DialogDescription: () => null,
-  DialogFooter: () => null,
-  DialogHeader: () => null,
-  DialogTitle: () => null,
-  ConfirmDialog: () => null,
-}));
+const confirmDialogProps: Record<string, unknown>[] = [];
+vi.mock("@/components/ui/dialog", async () => {
+  const { createElement: h, Fragment } = await import("react");
+  return {
+    // TikTok's Switch dialog: its body is rendered, so its sentences can be read.
+    Dialog: ({ children }: { children?: unknown }) => h(Fragment, null, children as never),
+    DialogBody: ({ children }: { children?: unknown }) => h(Fragment, null, children as never),
+    DialogDescription: () => null,
+    DialogFooter: () => null,
+    DialogHeader: () => null,
+    DialogTitle: () => null,
+    ConfirmDialog: (props: Record<string, unknown>) => {
+      confirmDialogProps.push(props);
+      return null;
+    },
+  };
+});
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 
@@ -125,14 +133,31 @@ describe("Settings connection row", () => {
     expect(reconnectDialogProps()).toBeUndefined();
   });
 
-  it("Switch account for LinkedIn tells what happens to scheduled posts", () => {
+  // R62 pages-b L1: all three Switch dialogs name posts waiting for approval too.
+  it("Switch account for LinkedIn tells what happens to scheduled and held posts", () => {
     linkedInDialogProps.length = 0;
     row();
     expect(linkedInDialogProps[0]).toMatchObject({
       mode: "switch",
       scheduledNote:
-        "Scheduled posts that chose LinkedIn go to the new account once you finish signing in. If you stop before then, they fail on LinkedIn until you connect an account again.",
+        "Scheduled posts, and posts waiting for approval, that chose LinkedIn go to the new account once you finish signing in. If you stop before then, they fail on LinkedIn until you connect an account again.",
     });
+  });
+
+  it("Switch account for TikTok tells what happens to scheduled and held posts", () => {
+    const html = row({ platform: "tiktok" });
+    expect(html).toContain(
+      "Scheduled posts, and posts waiting for approval, that chose TikTok go to the new account once you finish signing in. If you stop before then, they fail on TikTok until you connect an account again.",
+    );
+  });
+
+  it("the standard Switch account confirm tells what happens to scheduled and held posts", () => {
+    confirmDialogProps.length = 0;
+    row({ platform: "youtube" });
+    const switchConfirm = confirmDialogProps.find((props) => props.title === "Switch account?");
+    expect(switchConfirm?.description).toContain(
+      "Scheduled posts, and posts waiting for approval, that chose YouTube go to the new account once you finish signing in. If you stop before then, they fail on YouTube until you connect an account again.",
+    );
   });
 
   it("a member sees the status and no button", () => {
