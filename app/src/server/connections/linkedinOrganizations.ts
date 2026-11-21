@@ -209,8 +209,10 @@ export async function lookupOrganizationByVanityName(
  * The pages the member is an approved ADMINISTRATOR of, each with its name and
  * vanity name when `GET /rest/organizations/{id}` gives them (a page whose
  * lookup fails is kept with its id only: the access-control answer already
- * says the member administers it). Null when the very first organizationAcls
- * call fails; a later page that fails ends the list there. R37: the name
+ * says the member administers it). Null when any organizationAcls page fails
+ * or throws (R64 platform-clients L2): never a partial list, as Meta's page
+ * read (metaPages.ts), since a chooser showing only some pages tells the
+ * person they aren't an admin of the rest. R37: the name
  * reads share the connect's read budget (connectReadsBudget); a page not read
  * in time keeps its id only.
  */
@@ -228,8 +230,7 @@ export async function findAdministeredOrganizations(accessToken: string): Promis
       );
       if (!response.ok) {
         console.log("[LinkedIn OAuth] organizationAcls failed", { status: response.status, page });
-        if (page === 0) return null;
-        break;
+        return null;
       }
       const body: unknown = await response.json();
       for (const id of organizationIdsFromAcls(body)) if (!ids.includes(id)) ids.push(id);
@@ -240,7 +241,7 @@ export async function findAdministeredOrganizations(accessToken: string): Promis
     }
   } catch (error) {
     console.log("[LinkedIn OAuth] organizationAcls error", errorKind(error));
-    if (ids.length === 0) return null;
+    return null;
   }
 
   const organizations: LinkedInOrganization[] = [];
