@@ -358,6 +358,25 @@ describe("new and unconfirmed accounts have a pool of their own", () => {
     );
   });
 
+  it("a refused reservation (reserveFreeRuns, check now) ends with the approver's steps when asked", async () => {
+    workspace("ws-fresh", {}, [fresh("fresh-1")]);
+    workspace("ws-fresh-3", {}, [fresh("fresh-3")]);
+    for (let p = 1; p <= 5; p += 1) await due("ws-fresh", `f-${p}`);
+
+    const refused = await reserveFreeRuns({
+      workspaceId: "ws-fresh-3",
+      postJobIds: ["held-1"],
+      at: NOW,
+      check: "now",
+      steps: "approval",
+    });
+
+    expect(refused.ok).toBe(false);
+    expect(refused.ok ? "" : refused.refusal.error).toBe(
+      `Vibe Socials has reached today's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address. Approve it again in 9 hours, or reject it and ask the member to schedule it for another day. ${LEAVE_SMALL_POOL}`,
+    );
+  });
+
   it("Post now and scheduling for today meet the small pool too, with their own sentences", async () => {
     workspace("ws-fresh", {}, [fresh("fresh-1")]);
     workspace("ws-fresh-3", {}, [fresh("fresh-3")]);

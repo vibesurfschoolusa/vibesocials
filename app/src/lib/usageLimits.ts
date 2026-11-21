@@ -238,14 +238,21 @@ export function dailyLimitResetText(time: ResetTime = {}): string {
  */
 export type LimitSteps = "default" | "approval";
 
-/** The closing sentence: for a day that is full (`day`) or for a post going out now (`reset`, the reset time). */
-function limitEnding(kind: "day", steps: LimitSteps): string;
+/**
+ * The closing sentence: for a day that is full (`day`; `workspaceDay` when the
+ * count is this workspace's own posts, so the approver can free a slot in the
+ * Queue) or for a post going out now (`reset`, the reset time).
+ */
+function limitEnding(kind: "day" | "workspaceDay", steps: LimitSteps): string;
 function limitEnding(kind: "reset", steps: LimitSteps, resetText: string): string;
-function limitEnding(kind: "day" | "reset", steps: LimitSteps, resetText = ""): string {
+function limitEnding(kind: "day" | "workspaceDay" | "reset", steps: LimitSteps, resetText = ""): string {
   switch (steps) {
     case "default":
-      return kind === "day" ? "Pick another day." : `Schedule this post for another day, or try again ${resetText}.`;
+      return kind === "reset" ? `Schedule this post for another day, or try again ${resetText}.` : "Pick another day.";
     case "approval":
+      if (kind === "workspaceDay") {
+        return "Cancel or move another post on that day, then approve again, or reject this one and ask the member to submit it for another day.";
+      }
       return kind === "day"
         ? "Approve it again once that day has room, or reject it and ask the member to submit it for another day."
         : `Approve it again ${resetText}, or reject it and ask the member to schedule it for another day.`;
@@ -260,7 +267,7 @@ export function dailyPostLimitMessage(
 ): string {
   return mode === "now"
     ? `This workspace has reached its limit of ${limit} ${countWord(limit, "post", "posts")} for today. ${limitEnding("reset", steps, dailyLimitResetText(time))}`
-    : `That day already has ${limit} ${countWord(limit, "post", "posts")}, which is this workspace's daily limit. ${limitEnding("day", steps)}`;
+    : `That day already has ${limit} ${countWord(limit, "post", "posts")}, which is this workspace's daily limit. ${limitEnding("workspaceDay", steps)}`;
 }
 
 export function xMonthlyLimitMessage(limit: number, now: Date): string {

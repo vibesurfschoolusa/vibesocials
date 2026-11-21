@@ -139,7 +139,7 @@ describe("checkDailyPostLimit", () => {
     expect(approver).toEqual({
       code: plain?.code,
       error:
-        "That day already has 20 posts, which is this workspace's daily limit. Approve it again once that day has room, or reject it and ask the member to submit it for another day.",
+        "That day already has 20 posts, which is this workspace's daily limit. Cancel or move another post on that day, then approve again, or reject this one and ask the member to submit it for another day.",
     });
   });
 

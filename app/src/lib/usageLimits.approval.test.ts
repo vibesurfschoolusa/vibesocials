@@ -54,7 +54,8 @@ const NOTE =
   "It stops applying from the day after the account was made (00:00 UTC), once the owner's email address is confirmed.";
 const approval = {
   wsNow: `This workspace has reached its limit of 20 posts for today. ${nowSteps(RESET)}`,
-  wsSched: `That day already has 20 posts, which is this workspace's daily limit. ${SCHEDULED_STEPS}`,
+  // Its count is this workspace's own posts, so the approver can free a slot in the Queue.
+  wsSched: `That day already has 20 posts, which is this workspace's daily limit. Cancel or move another post on that day, then approve again, or reject this one and ask the member to submit it for another day.`,
   ownNow: `This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. ${nowSteps(RESET)}`,
   ownSched: `That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). ${SCHEDULED_STEPS}`,
   ownNamedNow: `Sam, an owner of this workspace, has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. ${nowSteps(RESET)}`,
@@ -82,6 +83,11 @@ describe("each builder's approval form: the same facts, the approver's steps", (
     expect(newAccountPoolMessage("now", time, "approval")).toBe(approval.poolNow);
     expect(newAccountPoolMessage("schedule", time, "approval")).toBe(approval.poolSched);
   });
+  it("only the workspace's own limit names cancelling or moving a post", () => {
+    for (const [key, text] of Object.entries(approval)) {
+      expect(/Cancel or move/.test(text)).toBe(key === "wsSched");
+    }
+  });
   it("a reset in the reader's zone is kept whole", () => {
     const zoned = { now: time.now, timeZone: "America/New_York" };
     const reset = dailyPostLimitMessage(20, "now", zoned).match(/try again (from .*)\.$/)![1]!;
@@ -89,13 +95,13 @@ describe("each builder's approval form: the same facts, the approver's steps", (
   });
   it("no pick-another-day wording is left, and nothing the approver can't do is offered", () => {
     for (const text of Object.values(approval)) {
-      expect(text).not.toMatch(/Pick another day|Schedule this post|try again|Cancel or move/);
+      expect(text).not.toMatch(/Pick another day|Schedule this post|try again/);
     }
   });
   it("word counts, notes included: only the per-person and new-account sentences pass about 45", () => {
     const counts = Object.fromEntries(Object.entries(approval).map(([k, v]) => [k, v.split(/\s+/).length]));
     expect(counts).toEqual({
-      wsNow: 30, wsSched: 33, ownNow: 42, ownSched: 47, ownNamedNow: 45, ownNamedSched: 50,
+      wsNow: 30, wsSched: 37, ownNow: 42, ownSched: 47, ownNamedNow: 45, ownNamedSched: 50,
       svcNow: 32, svcSched: 38, poolNow: 60, poolSched: 68,
     });
   });
