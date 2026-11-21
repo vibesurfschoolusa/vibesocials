@@ -47,7 +47,7 @@ export interface MetricsPageResult {
   updated: number;
   /** Video absent from the response (deleted/private) or present with all-null counts: nothing written. */
   notFound: number;
-  /** Failed call, workspace without a usable connection, or failed upsert. */
+  /** Failed call, workspace without a usable connection, a result of another or removed connection, or failed upsert. */
   errors: number;
   /** `videos.list` calls made = quota units spent (a refused call counts). */
   unitsUsed: number;
@@ -56,6 +56,8 @@ export interface MetricsPageResult {
 }
 
 interface ResolvedConnection {
+  /** The connection's id, matched against each result's socialConnectionId. */
+  id: string;
   accessToken: string;
   /** Whoever connected this YouTube account; stamped onto the PostMetric row. */
   connectorUserId: string;
@@ -101,7 +103,7 @@ async function resolveConnection(
         return refreshConnectionToken(stored, (current) => refreshGoogleToken(current));
       });
       if (active.accessToken) {
-        resolved = { accessToken: active.accessToken, connectorUserId: active.userId };
+        resolved = { id: connection.id, accessToken: active.accessToken, connectorUserId: active.userId };
       }
     }
   } catch (error) {
@@ -187,16 +189,24 @@ export async function syncYouTubeMetricsPage(opts: {
   const budgetSpent = () =>
     result.unitsUsed >= opts.unitsLeft || Date.now() - startedAt >= METRICS_PAGE_BUDGET_MS;
 
-  workspaces: for (const [workspaceId, items] of byWorkspace) {
+  workspaces: for (const [workspaceId, group] of byWorkspace) {
     if (budgetSpent()) {
       break;
     }
     const connection = await resolveConnection(workspaceId, connections);
+    // R59 platform-clients L2: only results published through the workspace's
+    // current connection are read, as socialMetricsSync does. After Switch
+    // account an old channel's video read with the new token would bring back
+    // the numbers the disconnect deleted.
+    const items = connection ? group.filter((item) => item.socialConnectionId === connection.id) : [];
+    const skipped = connection ? group.filter((item) => item.socialConnectionId !== connection.id) : group;
+    if (skipped.length > 0) {
+      // No call to make, but the attempt is recorded so these results do not
+      // sort first on every run and starve the rest.
+      result.errors += skipped.length;
+      attemptedIds.push(...skipped.map((item) => item.resultId));
+    }
     if (!connection) {
-      // No usable connection: no call to make, but the attempt is recorded so
-      // these results do not sort first on every run and starve the rest.
-      result.errors += items.length;
-      attemptedIds.push(...items.map((item) => item.resultId));
       continue;
     }
 

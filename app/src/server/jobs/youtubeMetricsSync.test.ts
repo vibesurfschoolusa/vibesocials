@@ -64,6 +64,7 @@ type Eligible = {
   workspaceId: string;
   platform: "youtube";
   externalPostId: string;
+  socialConnectionId: string | null;
 };
 
 /** `count` eligible results of one workspace, ids `<ws>-v0` ... */
@@ -74,6 +75,7 @@ function results(workspaceId: string, count: number): Eligible[] {
     workspaceId,
     platform: "youtube" as const,
     externalPostId: `${workspaceId}-v${i}`,
+    socialConnectionId: `conn-${workspaceId}`,
   }));
 }
 
@@ -439,7 +441,8 @@ describe("syncYouTubeMetricsPage — failures are isolated", () => {
 
 describe("syncYouTubeMetricsPage — connection resolve refreshes under the lock", () => {
   const expired = {
-    id: "conn-yt",
+    // The connection that published results("A", ...).
+    id: "conn-A",
     userId: "connector-1",
     platform: "youtube",
     accessToken: "expired-token",
@@ -524,5 +527,44 @@ describe("syncYouTubeMetricsPage — connection resolve refreshes under the lock
 
     expect(fetchBatchMock).not.toHaveBeenCalled();
     expect(page).toMatchObject({ attempted: 1, errors: 1, unitsUsed: 0 });
+  });
+});
+
+// R59 platform-clients L2: after Switch account, only results published through
+// the workspace's current YouTube connection are read, as socialMetricsSync does.
+describe("syncYouTubeMetricsPage — only the current connection's results", () => {
+  it("does not read the old channel's result after a switch, and stamps it", async () => {
+    const [old] = results("A", 1);
+    selectMock.mockResolvedValue([{ ...old, socialConnectionId: "conn-old-channel" }]);
+
+    const page = await syncYouTubeMetricsPage({ unitsLeft: 300, now: NOW });
+
+    expect(fetchBatchMock).not.toHaveBeenCalled();
+    expect(upsertMock).not.toHaveBeenCalled();
+    expect(page).toEqual({ attempted: 1, updated: 0, notFound: 0, errors: 1, unitsUsed: 0, stop: false });
+    expect(stampedIds()).toEqual([old.resultId]);
+  });
+
+  it("reads the current channel's result next to an old one", async () => {
+    const [current, old] = results("A", 2);
+    selectMock.mockResolvedValue([current, { ...old, socialConnectionId: "conn-old-channel" }]);
+
+    const page = await syncYouTubeMetricsPage({ unitsLeft: 300, now: NOW });
+
+    expect(fetchBatchMock.mock.calls.map((call) => call[0])).toEqual([[current.externalPostId]]);
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+    expect(page).toEqual({ attempted: 2, updated: 1, notFound: 0, errors: 1, unitsUsed: 1, stop: false });
+    expect([...stampedIds()].sort()).toEqual([current.resultId, old.resultId].sort());
+  });
+
+  it("skips a result with no connection", async () => {
+    const [orphan] = results("A", 1);
+    selectMock.mockResolvedValue([{ ...orphan, socialConnectionId: null }]);
+
+    const page = await syncYouTubeMetricsPage({ unitsLeft: 300, now: NOW });
+
+    expect(fetchBatchMock).not.toHaveBeenCalled();
+    expect(upsertMock).not.toHaveBeenCalled();
+    expect(page).toMatchObject({ attempted: 1, updated: 0, errors: 1 });
   });
 });

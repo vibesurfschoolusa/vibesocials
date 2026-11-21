@@ -69,6 +69,9 @@ export interface EligibleMetricResult {
   platform: Platform;
   /** The YouTube video id (PostJobResult.externalPostId). */
   externalPostId: string;
+  /** The connection that published it. R59 platform-clients L2: the sync reads
+   *  only the workspace's current YouTube connection's results. */
+  socialConnectionId: string;
 }
 
 /**
@@ -99,6 +102,10 @@ export async function selectYouTubeMetricEligibleResults(
       platform: "youtube",
       status: "success",
       externalPostId: { not: null },
+      // R59 platform-clients L2: a removed connection's results (set to null
+      // on delete) are never read again, so a disconnected channel's numbers
+      // stay deleted after Switch account.
+      socialConnectionId: { not: null },
       OR: [
         { metricsCheckedAt: null },
         { metricsCheckedAt: { lt: new Date(now.getTime() - METRICS_MIN_REFRESH_MS) } },
@@ -107,6 +114,7 @@ export async function selectYouTubeMetricEligibleResults(
     select: {
       id: true,
       externalPostId: true,
+      socialConnectionId: true,
       // userId/workspaceId live on the parent job (PostJobResult has neither
       // column itself).
       postJob: { select: { userId: true, workspaceId: true } },
@@ -120,7 +128,7 @@ export async function selectYouTubeMetricEligibleResults(
     // `externalPostId` is `{ not: null }` in the WHERE, but Prisma still types it
     // `string | null`; narrow defensively and skip anything unexpected rather
     // than assert non-null.
-    if (!row.externalPostId) {
+    if (!row.externalPostId || !row.socialConnectionId) {
       continue;
     }
     eligible.push({
@@ -129,6 +137,7 @@ export async function selectYouTubeMetricEligibleResults(
       workspaceId: row.postJob.workspaceId,
       platform: "youtube",
       externalPostId: row.externalPostId,
+      socialConnectionId: row.socialConnectionId,
     });
   }
   return eligible;

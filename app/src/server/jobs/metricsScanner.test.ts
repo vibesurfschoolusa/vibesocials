@@ -65,6 +65,7 @@ describe("selectYouTubeMetricEligibleResults", () => {
       platform: "youtube",
       status: "success",
       externalPostId: { not: null },
+      socialConnectionId: { not: null },
       OR: [
         { metricsCheckedAt: null },
         { metricsCheckedAt: { lt: new Date("2026-11-02T12:10:00.000Z") } },
@@ -82,6 +83,7 @@ describe("selectYouTubeMetricEligibleResults", () => {
     expect(arg.select).toMatchObject({
       id: true,
       externalPostId: true,
+      socialConnectionId: true,
       postJob: { select: { userId: true, workspaceId: true } },
     });
   });
@@ -105,28 +107,38 @@ describe("selectYouTubeMetricEligibleResults", () => {
 
   it("flattens rows into the denormalized eligible shape (resultId/userId/workspaceId/platform/externalPostId)", async () => {
     findManyMock.mockResolvedValue([
-      { id: "r1", externalPostId: "vidA", postJob: { userId: "user-1", workspaceId: "ws-1" } },
-      { id: "r2", externalPostId: "vidB", postJob: { userId: "user-2", workspaceId: "ws-2" } },
+      { id: "r1", externalPostId: "vidA", socialConnectionId: "conn-1", postJob: { userId: "user-1", workspaceId: "ws-1" } },
+      { id: "r2", externalPostId: "vidB", socialConnectionId: "conn-2", postJob: { userId: "user-2", workspaceId: "ws-2" } },
     ]);
 
     const result = await selectYouTubeMetricEligibleResults(undefined, NOW);
 
     expect(result).toEqual([
-      { resultId: "r1", userId: "user-1", workspaceId: "ws-1", platform: "youtube", externalPostId: "vidA" },
-      { resultId: "r2", userId: "user-2", workspaceId: "ws-2", platform: "youtube", externalPostId: "vidB" },
+      { resultId: "r1", userId: "user-1", workspaceId: "ws-1", platform: "youtube", externalPostId: "vidA", socialConnectionId: "conn-1" },
+      { resultId: "r2", userId: "user-2", workspaceId: "ws-2", platform: "youtube", externalPostId: "vidB", socialConnectionId: "conn-2" },
     ]);
   });
 
   it("defensively skips any row whose externalPostId is null despite the WHERE", async () => {
     findManyMock.mockResolvedValue([
-      { id: "r1", externalPostId: null, postJob: { userId: "user-1", workspaceId: "ws-1" } },
-      { id: "r2", externalPostId: "vidB", postJob: { userId: "user-1", workspaceId: "ws-1" } },
+      { id: "r1", externalPostId: null, socialConnectionId: "conn-1", postJob: { userId: "user-1", workspaceId: "ws-1" } },
+      { id: "r2", externalPostId: "vidB", socialConnectionId: "conn-1", postJob: { userId: "user-1", workspaceId: "ws-1" } },
     ]);
 
     const result = await selectYouTubeMetricEligibleResults(undefined, NOW);
 
     expect(result).toEqual([
-      { resultId: "r2", userId: "user-1", workspaceId: "ws-1", platform: "youtube", externalPostId: "vidB" },
+      { resultId: "r2", userId: "user-1", workspaceId: "ws-1", platform: "youtube", externalPostId: "vidB", socialConnectionId: "conn-1" },
     ]);
+  });
+
+  // R59 platform-clients L2: a result whose connection was removed (Switch
+  // account sets it to null) is never read again.
+  it("skips a result with no connection, even if the WHERE let one through", async () => {
+    findManyMock.mockResolvedValue([
+      { id: "r1", externalPostId: "vidA", socialConnectionId: null, postJob: { userId: "user-1", workspaceId: "ws-1" } },
+    ]);
+
+    expect(await selectYouTubeMetricEligibleResults(undefined, NOW)).toEqual([]);
   });
 });

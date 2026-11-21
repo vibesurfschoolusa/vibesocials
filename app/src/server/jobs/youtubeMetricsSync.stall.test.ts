@@ -50,6 +50,7 @@ const eligible = (workspaceId: string) => ({
   workspaceId,
   platform: "youtube" as const,
   externalPostId: `${workspaceId}-v0`,
+  socialConnectionId: `conn-${workspaceId}`,
 });
 
 beforeEach(() => {
