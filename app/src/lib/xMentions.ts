@@ -66,7 +66,23 @@ function paragraphWithoutMentions(lines: readonly string[]): string[] {
   const isFooter =
     tokens.some((line) => line.some((token) => MENTION_TOKEN.test(token))) && tokens.every(isTagLine);
   if (!isFooter) return lines.map(inRunningText);
-  return lines.map((line, index) => withoutMentions(tokens[index]) + (line.endsWith("\r") ? "\r" : ""));
+  return lines.map((line, index) =>
+    tokens[index].some((token) => MENTION_TOKEN.test(token))
+      ? withoutMentions(tokens[index]) + (line.endsWith("\r") ? "\r" : "")
+      : line,
+  );
+}
+
+/** A line a mention was removed from: runs of spaces become one, and its ends are trimmed. */
+function tidied(line: string): string {
+  const end = line.endsWith("\r") ? "\r" : "";
+  return line.slice(0, line.length - end.length).replace(/[ \t]{2,}/g, " ").replace(/^[ \t]+|[ \t]+$/g, "") + end;
+}
+
+/** A run of blank lines, or a paragraph (consecutive lines with text). */
+interface Block {
+  blank: boolean;
+  lines: string[];
 }
 
 /**
@@ -89,31 +105,44 @@ function paragraphWithoutMentions(lines: readonly string[]): string[] {
  * vibesurfschool"), which X doesn't read as a mention. Whole handles go only
  * in the footer: a paragraph of its own (between blank lines, or at the start
  * or end) whose every line is mentions, hashtags and separators alone. Its
- * hashtags stay. The spaces and empty lines a removal leaves behind are
- * tidied; everything else stays as written.
+ * hashtags stay.
+ *
+ * R60 pages-a-4 L1: only the lines a mention was removed from are tidied
+ * (spaces, and the line itself once it is empty); a footer paragraph that is
+ * left empty goes with the blank lines before it (or after it, at the start).
+ * Every other line, an indented price list or an email address included,
+ * comes back exactly as written.
  */
 export function removeXMentions(text: string): string {
   if (!text.includes("@")) return text;
-  const out: string[] = [];
-  let paragraph: string[] = [];
-  const flush = () => {
-    out.push(...paragraphWithoutMentions(paragraph));
-    paragraph = [];
-  };
+  const blocks: Block[] = [];
   for (const line of text.split("\n")) {
-    if (line.trim() === "") {
-      flush();
-      out.push(line);
-    } else {
-      paragraph.push(line);
-    }
+    const blank = line.trim() === "";
+    const last = blocks.at(-1);
+    if (last?.blank === blank) last.lines.push(line);
+    else blocks.push({ blank, lines: [line] });
   }
-  flush();
-  return out
-    .join("\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/[ \t]+$/gm, "")
-    .replace(/^[ \t]+/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+
+  let changed = false;
+  const out: Block[] = [];
+  let dropNextBlank = false;
+  for (const block of blocks) {
+    if (block.blank) {
+      if (!dropNextBlank) out.push(block);
+      dropNextBlank = false;
+      continue;
+    }
+    const after = paragraphWithoutMentions(block.lines);
+    const lines: string[] = [];
+    block.lines.forEach((line, index) => {
+      if (after[index] === line) return lines.push(line);
+      changed = true;
+      const kept = tidied(after[index]);
+      if (kept.trim() !== "") lines.push(kept);
+    });
+    if (lines.length > 0) out.push({ blank: false, lines });
+    else if (out.at(-1)?.blank) out.pop();
+    else dropNextBlank = true;
+  }
+  return changed ? out.flatMap((block) => block.lines).join("\n") : text;
 }
