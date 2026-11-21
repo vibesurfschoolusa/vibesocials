@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useEffect, useEffectEvent, useMemo, useRef, Suspense, type ReactNode } from "react";
+import { useCallback, useState, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, Suspense, type ReactNode } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
@@ -2755,6 +2755,25 @@ function CreatePostFormInner({
   // Publish now's dialog covers the form while it sends.
   const sendLocksFields = uploadLoading && !confirmPublishOpen;
 
+  // R65 new-customer L1: Enter in a field the lock then disables (Publish at,
+  // alt text, a Google field) left focus on the page body for the whole send.
+  // Focus moves to the submit button, which keeps it while loading
+  // (aria-disabled, ui/button.tsx); focus anywhere else is left alone. Read in
+  // a layout effect, before the browser lets go of the disabled control. Only
+  // the lock disables a control while it holds focus, so no other check is needed.
+  const formSubmitRef = useRef<HTMLButtonElement>(null);
+  const barSubmitRef = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    if (!sendLocksFields) return;
+    const focused = document.activeElement;
+    if (!focused || focused === document.body || !focused.matches(":disabled")) return;
+    // Only one of the two shows (md and up, or the phone's bar); a hidden one takes no focus.
+    for (const button of [formSubmitRef.current, barSubmitRef.current]) {
+      button?.focus();
+      if (button && document.activeElement === button) return;
+    }
+  }, [sendLocksFields]);
+
   // R33 pages L2: the press's own checks on the form as it is now (pressRefusalLine).
   const sendCheck: ComposerSendCheck = {
     fileBlock:
@@ -3613,7 +3632,7 @@ function CreatePostFormInner({
                 Below md the publish bar takes its place (hidden, not just
                 covered), so a screen reader meets one submit control. */}
             <span title={tiktokBlock ?? undefined} className="hidden md:inline">
-            <Button type="submit" loading={control.loading} disabled={control.disabled}>
+            <Button ref={formSubmitRef} type="submit" loading={control.loading} disabled={control.disabled}>
               {control.label}
             </Button>
             </span>
@@ -3680,6 +3699,7 @@ function CreatePostFormInner({
       />
       <PublishBar
         formId="create-post-form"
+        submitRef={barSubmitRef}
         control={control}
         dialogOpen={confirmPublishOpen}
         tiktokDeclaration={barTikTokDeclaration({

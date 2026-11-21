@@ -57,7 +57,6 @@ import { CreatePostForm, SendLock } from "./create-post-form";
 
 let root: Root;
 let container: FakeNode;
-let body: FakeNode;
 let doc: Record<string, unknown>;
 
 const REUSED_VIDEO = {
@@ -153,7 +152,6 @@ beforeEach(async () => {
   const made = makeDocument();
   container = made.container;
   doc = made.doc;
-  body = made.doc.body as FakeNode;
   vi.stubGlobal("window", made.doc.defaultView);
   vi.stubGlobal("document", made.doc);
   vi.stubGlobal("fetch", fetchMock);
@@ -302,7 +300,7 @@ describe('Create: "Use a different file instead" during a waiting send (R65 publ
 describe("SendLock takes its one child's place (R65 publishing-flow L2)", () => {
   async function renderLock(child: unknown) {
     await act(async () => {
-      root.render(createElement(SendLock, { locked: false }, child as never));
+      root.render(createElement(SendLock, { locked: false } as Parameters<typeof SendLock>[0], child as never));
     });
   }
 
@@ -372,4 +370,78 @@ describe("SendLock takes its one child's place (R65 publishing-flow L2)", () => 
   }, 10_000);
 });
 
-void body;
+describe("Create: the lock keeps keyboard focus (R65 new-customer L1, pages-b L1)", () => {
+  const active = () => doc.activeElement as FakeNode;
+  /** The form's own submit button (the phone's bar has the other). */
+  const formSubmit = () => {
+    const hit = find(byId("create-post-form"), (n) => n.nodeName === "BUTTON" && n.attributes?.type === "submit");
+    if (!hit) throw new Error("no submit button in the form");
+    return hit;
+  };
+  const isSubmitButton = (node: FakeNode) => node.nodeName === "BUTTON" && node.attributes?.type === "submit";
+  const focus = (node: FakeNode) => act(async () => (node.focus as () => void)());
+  const releaseUpload = async (name: string) => {
+    const sent = uploads.find((u) => u.key.includes(`-${name}.`));
+    if (!sent) throw new Error(`no upload of ${name}`);
+    await act(async () => release.get(sent.key)!());
+    await settle();
+  };
+
+  async function scheduleWithStalledPhoto(name: string) {
+    await mount();
+    await typeCaption("Surf lesson today");
+    await pressSchedule();
+    stall.add(name);
+    await pick(photo(name));
+  }
+
+  it("Enter in Publish at during Schedule: focus is on the submit button", async () => {
+    await scheduleWithStalledPhoto("enter1");
+    await focus(byId("post-schedule"));
+    expect(active()).toBe(byId("post-schedule"));
+    await submit();
+    expect(posted).toHaveLength(0);
+    expect(disabledNow(byId("post-schedule"))).toBe(true);
+
+    expect(isSubmitButton(active())).toBe(true);
+    expect(disabledNow(active())).toBe(false);
+    await releaseUpload("enter1");
+  }, 10_000);
+
+  it("Enter in the alt text during Schedule: focus is on the submit button", async () => {
+    await scheduleWithStalledPhoto("alt2");
+    await focus(byId("post-alt-text"));
+    expect(active()).toBe(byId("post-alt-text"));
+    await submit();
+    expect(disabledNow(byId("post-alt-text"))).toBe(true);
+
+    expect(isSubmitButton(active())).toBe(true);
+    await releaseUpload("alt2");
+  }, 10_000);
+
+  it("pressing the Schedule button itself: focus is unchanged", async () => {
+    await scheduleWithStalledPhoto("press3");
+    const button = formSubmit();
+    await focus(button);
+    await submit();
+    expect(posted).toHaveLength(0);
+
+    expect(active()).toBe(button);
+    await releaseUpload("press3");
+  }, 10_000);
+
+  it("after a failed send, focus is still on the submit button", async () => {
+    postAnswer = REFUSED;
+    await scheduleWithStalledPhoto("fail4");
+    await focus(byId("post-schedule"));
+    await submit();
+    const focused = active();
+    expect(isSubmitButton(focused)).toBe(true);
+    await releaseUpload("fail4");
+    expect(posted).toHaveLength(1);
+    expect(disabledNow(byId("post-schedule"))).toBe(false);
+
+    expect(active()).toBe(focused);
+  }, 10_000);
+});
+

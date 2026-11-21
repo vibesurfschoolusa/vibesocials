@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type Ref } from "react";
 
 import { TikTokConsentDeclaration } from "@/components/tiktok-post-settings";
 import { Button } from "@/components/ui/button";
@@ -47,11 +47,14 @@ export function publishBarOffset(height: number): string | null {
  */
 export function PublishBar({
   formId,
+  submitRef,
   control,
   dialogOpen,
   tiktokDeclaration,
 }: {
   formId: string;
+  /** R65 new-customer L1: Create moves focus here when the send lock disables the focused field. */
+  submitRef?: Ref<HTMLButtonElement>;
   control: SubmitControlView;
   /** A confirm dialog is open: the bar steps out of its way. */
   dialogOpen: boolean;
@@ -95,6 +98,7 @@ export function PublishBar({
         </div>
       ) : null}
       <Button
+        ref={submitRef}
         type="submit"
         form={formId}
         loading={control.loading}
