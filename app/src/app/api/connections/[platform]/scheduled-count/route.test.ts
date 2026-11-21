@@ -53,10 +53,68 @@ describe("GET /api/connections/[platform]/scheduled-count", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ count: 2 });
     expect(findManyMock).toHaveBeenCalledTimes(1);
-    expect(findManyMock.mock.calls[0][0].where).toEqual({
+    expect(findManyMock.mock.calls[0][0].where).toMatchObject({
       workspaceId: "ws-1",
-      status: "scheduled",
       publishMetadata: { path: ["targetPlatforms"], array_contains: ["instagram"] },
+    });
+  });
+
+  // R61 pages-a-2 L1: a post held for approval keeps its time and platforms,
+  // and fails on the platform once approved, so it is counted too, by
+  // dashboard/summary's AWAITING_APPROVAL rule with a time set.
+  describe("posts waiting for approval", () => {
+    type Row = {
+      id: string;
+      storyOfPostJobId: string | null;
+      status: string;
+      submittedForApprovalAt: Date | null;
+      approvedAt: Date | null;
+      scheduledFor: Date | null;
+    };
+    const at = new Date("2026-12-04T10:00:00Z");
+    const row = (id: string, fields: Partial<Row>): Row => ({
+      id,
+      storyOfPostJobId: null,
+      status: "draft",
+      submittedForApprovalAt: null,
+      approvedAt: null,
+      scheduledFor: null,
+      ...fields,
+    });
+
+    /** The where clause's fields this route uses, applied to rows (publishMetadata: every row names the platform). */
+    function matches(where: Record<string, unknown>, r: Row): boolean {
+      return Object.entries(where).every(([key, want]) => {
+        if (key === "workspaceId" || key === "publishMetadata") return true;
+        if (key === "OR") return (want as Record<string, unknown>[]).some((one) => matches(one, r));
+        if (key === "AND") return (want as Record<string, unknown>[]).every((one) => matches(one, r));
+        const have = r[key as keyof Row];
+        if (want === null) return have === null;
+        if (typeof want === "object" && want !== null && "in" in want) return (want.in as unknown[]).includes(have);
+        if (typeof want === "object" && want !== null && "not" in want && want.not === null) return have !== null;
+        return have === want;
+      });
+    }
+
+    async function countOf(rows: Row[]): Promise<number> {
+      findManyMock.mockImplementation(async (args: { where: Record<string, unknown> }) => rows.filter((r) => matches(args.where, r)));
+      return (await (await call("instagram", "ws-1")).json()).count;
+    }
+
+    it("a held draft with a time is counted", async () => {
+      expect(await countOf([row("held", { submittedForApprovalAt: at, scheduledFor: at })])).toBe(1);
+    });
+
+    it("a scheduled post is counted", async () => {
+      expect(await countOf([row("s", { status: "scheduled", scheduledFor: at, approvedAt: at })])).toBe(1);
+    });
+
+    it("an approved draft without a time is not counted", async () => {
+      expect(await countOf([row("d", { submittedForApprovalAt: at, approvedAt: at })])).toBe(0);
+    });
+
+    it("a draft never submitted is not counted, and a held post without a time is not", async () => {
+      expect(await countOf([row("plain", { scheduledFor: at }), row("held-no-time", { submittedForApprovalAt: at })])).toBe(0);
     });
   });
 

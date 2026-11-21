@@ -45,22 +45,30 @@ describe("Disconnect dialog", () => {
     }
   });
 
-  it("says how many scheduled posts will fail on it until it is reconnected", () => {
-    expect(disconnectDescription("instagram", 1)).toContain(
-      "1 scheduled post chose Instagram. It will fail on Instagram until you reconnect it.",
+  // R61 pages-a-2 L1: the count takes in posts waiting for approval, so the
+  // sentence names them too.
+  it("0: no scheduled post, or post waiting for approval, chose it, so none will fail", () => {
+    expect(disconnectDescription("instagram", 0)).toContain(
+      "No scheduled post, or post waiting for approval, chose Instagram, so none will fail on it.",
     );
-    expect(disconnectDescription("instagram", 3)).toContain(
-      "3 scheduled posts chose Instagram. They will fail on Instagram until you reconnect it.",
+    expect(disconnectDescription("x", 0)).toContain("No scheduled post, or post waiting for approval, chose X, so none will fail on it.");
+  });
+
+  it("1: the one post will fail on it until it is reconnected", () => {
+    expect(disconnectDescription("instagram", 1)).toContain(
+      "1 scheduled post, or post waiting for approval, chose Instagram. It will fail on Instagram until you reconnect it.",
     );
   });
 
-  it("says none will fail when no scheduled post chose it", () => {
-    expect(disconnectDescription("x", 0)).toContain("No scheduled post chose X, so none will fail on it.");
+  it("2: the posts will fail on it until it is reconnected", () => {
+    expect(disconnectDescription("instagram", 2)).toContain(
+      "2 scheduled posts, or posts waiting for approval, chose Instagram. They will fail on Instagram until you reconnect it.",
+    );
   });
 
   it("still warns when the count could not be read", () => {
     expect(disconnectDescription("youtube", null)).toContain(
-      "Scheduled posts that chose YouTube will fail on it until you reconnect it.",
+      "Scheduled posts, and posts waiting for approval, that chose YouTube will fail on it until you reconnect it.",
     );
   });
 });
