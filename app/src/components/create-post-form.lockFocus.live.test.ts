@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -51,7 +53,7 @@ vi.mock("@vercel/blob/client", () => ({
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { ToastProvider } from "@/components/ui/toast";
-import { CreatePostForm } from "./create-post-form";
+import { CreatePostForm, SendLock } from "./create-post-form";
 
 let root: Root;
 let container: FakeNode;
@@ -297,5 +299,77 @@ describe('Create: "Use a different file instead" during a waiting send (R65 publ
   }, 10_000);
 });
 
+describe("SendLock takes its one child's place (R65 publishing-flow L2)", () => {
+  async function renderLock(child: unknown) {
+    await act(async () => {
+      root.render(createElement(SendLock, { locked: false }, child as never));
+    });
+  }
+
+  it("with a child: a block fieldset with min-w-0, not contents, wrapping exactly that child", async () => {
+    await renderLock(createElement("div", { className: "space-y-2" }, "Cover"));
+    expect(container.childNodes).toHaveLength(1);
+    const fieldset = container.childNodes[0]!;
+    expect(fieldset.nodeName).toBe("FIELDSET");
+    const classes = String(fieldset.attributes.class ?? "").split(/\s+/);
+    expect(classes).toContain("min-w-0");
+    expect(classes).not.toContain("contents");
+    // The parent's space-y gap is a margin on the fieldset (zero specificity in
+    // Tailwind v4), so the fieldset sets no margin of its own.
+    expect(classes.filter((name) => /^-?m[trblxyse]?-/.test(name))).toEqual([]);
+    expect(fieldset.childNodes).toHaveLength(1);
+    expect(fieldset.childNodes[0]!.nodeName).toBe("DIV");
+    expect(fieldset.childNodes[0]!.attributes.class).toBe("space-y-2");
+  });
+
+  it("with null or false: renders nothing", async () => {
+    await renderLock(null);
+    expect(container.childNodes).toHaveLength(0);
+    await renderLock(false);
+    expect(container.childNodes).toHaveLength(0);
+  });
+
+  it("every SendLock in create-post-form.tsx wraps one element", () => {
+    const source = readFileSync(path.join(__dirname, "create-post-form.tsx"), "utf8");
+    const uses = [...source.matchAll(/<SendLock locked=\{sendLocksFields\}>([^]*?)<\/SendLock>/g)].map((m) => m[1]!.trim());
+    expect(uses.length).toBeGreaterThanOrEqual(7);
+    for (const inner of uses) {
+      // One expression, or one self-closing component with no element in its props.
+      expect(/^\{\w+\}$/.test(inner) || /^<[A-Z]\w*[^<]*\/>$/.test(inner), inner).toBe(true);
+    }
+    expect(source.match(/<SendLock/g)?.length).toBe(uses.length);
+  });
+
+  it("on the page: a photo leaves no empty fieldset for the missing cover", async () => {
+    await mount();
+    await pick(photo("still"));
+    expect(findAll(container, (n) => n.nodeName === "FIELDSET" && n.childNodes.length === 0)).toEqual([]);
+  }, 10_000);
+
+  it("on the page: the lock still disables what it wraps during a waiting send, and enables it after", async () => {
+    postAnswer = REFUSED;
+    await mount();
+    await typeCaption("Surf lesson today");
+    await pressSchedule();
+    await pick(photo("img"));
+    const googleBox = () => {
+      const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.["aria-controls"] === "google-post-box-settings");
+      if (!hit) throw new Error("no Google box button");
+      return hit;
+    };
+    expect(disabledNow(googleBox())).toBe(false);
+    expect(disabledNow(byId("post-alt-text"))).toBe(false);
+    postStalls = true;
+    await submit();
+    expect(posted).toHaveLength(1);
+
+    expect(disabledNow(googleBox())).toBe(true);
+    expect(disabledNow(byId("post-alt-text"))).toBe(true);
+    await act(async () => postRelease!());
+    await settle();
+    expect(disabledNow(googleBox())).toBe(false);
+    expect(disabledNow(byId("post-alt-text"))).toBe(false);
+  }, 10_000);
+});
+
 void body;
-void findAll;

@@ -3708,11 +3708,18 @@ const REPEAT_CHOICES: [RepeatInterval | "none", string][] = [
 /**
  * R64 fix review L1: locks the controls of a part with no disabled prop of its
  * own while a send waits (sendLocksFields). A disabled fieldset disables every
- * control inside it; `contents` keeps it out of the layout.
+ * control inside it.
+ *
+ * R65 publishing-flow L2: it wraps one element and takes its place as a plain
+ * block, so the parent's space-y gap falls on it. `contents` made no box and
+ * dropped that margin, and a margin class here would override it (Tailwind v4's
+ * space-y has zero specificity). min-w-0 undoes a fieldset's min-content width.
+ * With no child it renders nothing, so no empty box takes a gap.
  */
-function SendLock({ locked, children }: { locked: boolean; children: ReactNode }) {
+export function SendLock({ locked, children }: { locked: boolean; children: ReactNode }) {
+  if (children === null || children === undefined || children === false) return null;
   return (
-    <fieldset disabled={locked} className="contents">
+    <fieldset disabled={locked} className="min-w-0 border-0 p-0">
       {children}
     </fieldset>
   );
