@@ -43,6 +43,49 @@ describe("blockedMessage", () => {
   });
 });
 
+// R61 new-customer-2 L1: Delete workspace refuses a person's only workspace
+// ("delete your account instead"), so for that workspace the sentence names
+// the step that works and never "delete the workspace".
+describe("blockedMessage, worded from the person's memberships", () => {
+  const ONLY_TAIL = ". Make another member an owner with Make owner, or remove the other members, then try again.";
+  const TAIL = ". Make another member an owner, or delete the workspace, then try again.";
+  const team = { role: "owner", workspace: { id: "ws-team", name: "Team", members: [{ userId: "u-2", role: "member", createdAt: day }] } };
+
+  it("one workspace with a member: names Make owner and removing the members, not deleting the workspace", async () => {
+    m.memberFindMany.mockResolvedValue([team]);
+    m.postJobGroupBy.mockResolvedValue([]);
+
+    const preview = await accountDeletionPreview("user-1");
+
+    expect(preview.refusal).toBe(`You are the only owner of Team${ONLY_TAIL}`);
+    expect(preview.refusal).not.toMatch(/delete the workspace/);
+  });
+
+  it("two workspaces, one blocked: as before", async () => {
+    m.memberFindMany.mockResolvedValue([team, { role: "owner", workspace: { id: "ws-personal", name: "Personal", members: [] } }]);
+
+    const preview = await accountDeletionPreview("user-1");
+
+    expect(preview.refusal).toBe(`You are the only owner of Team${TAIL}`);
+  });
+
+  it("several blocked: as before", async () => {
+    m.memberFindMany.mockResolvedValue([
+      team,
+      { role: "owner", workspace: { id: "ws-club", name: "Club", members: [{ userId: "u-3", role: "member", createdAt: day }] } },
+    ]);
+    m.postJobGroupBy.mockResolvedValue([]);
+
+    const preview = await accountDeletionPreview("user-1");
+
+    expect(preview.refusal).toBe(`You are the only owner of Team and Club${TAIL}`);
+  });
+
+  it("a blocked entry marked as the only workspace gets the only-workspace sentence", () => {
+    expect(blockedMessage([{ workspaceId: "a", name: "A", onlyWorkspace: true }])).toBe(`You are the only owner of A${ONLY_TAIL}`);
+  });
+});
+
 describe("accountDeletionPreview", () => {
   it("lists what is deleted with scheduled counts and what is left", async () => {
     m.memberFindMany.mockResolvedValue([
@@ -74,7 +117,7 @@ describe("accountDeletionPreview", () => {
 
     const preview = await accountDeletionPreview("user-1");
 
-    expect(preview.refusal).toBe(blockedMessage([{ workspaceId: "ws-team", name: "Team" }]));
+    expect(preview.refusal).toBe(blockedMessage([{ workspaceId: "ws-team", name: "Team", onlyWorkspace: true }]));
     expect(preview.leaveWorkspaces).toEqual([]);
   });
 
