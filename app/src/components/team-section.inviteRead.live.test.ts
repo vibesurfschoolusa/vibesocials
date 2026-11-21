@@ -17,6 +17,7 @@ vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: toastSucce
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { makeFocusable, type FocusDoc } from "@/lib/focusDom.testkit";
+import { installKeeperOnFakePage } from "@/lib/focusKeeperDom.testkit";
 
 import { ROLE_CHANGED_MESSAGE } from "@/components/load-error";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
@@ -31,6 +32,7 @@ const KNOWN = { invite: { createdAt: "2026-11-16T10:00:00.000Z", expiresAt: "202
 let root: Root;
 let container: FakeNode;
 let inviteReads: Array<() => Promise<Response>>;
+let stopKeeper: () => void;
 
 function all(node: FakeNode, test: (n: FakeNode) => boolean, hits: FakeNode[] = []): FakeNode[] {
   if (test(node)) hits.push(node);
@@ -70,6 +72,8 @@ beforeEach(() => {
   const made = makeDocument();
   container = made.container;
   makeFocusable(made.doc as unknown as FocusDoc);
+  // As on the live page, with its focus keeper.
+  stopKeeper = installKeeperOnFakePage(made as never).stop;
   vi.stubGlobal("document", made.doc);
   vi.stubGlobal("window", made.doc.defaultView);
   const frames = {
@@ -104,6 +108,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount());
+  stopKeeper();
   vi.unstubAllGlobals();
 });
 
@@ -200,4 +205,40 @@ describe("Team: an invite read that was refused", () => {
       expect(toastSuccess).toHaveBeenCalledWith(REPLACED);
     }, 5_000);
   }
+});
+
+// R59 second look L1: Try again swapped the Alert's parent for the Skeleton, so
+// the focus watch (focusThroughRetry) waited on a removed element and focus
+// fell to the top of the page. One holder now keeps either, and focus goes to
+// what took the Alert's place.
+describe("Team: focus after Try again on the unread invite card", () => {
+  const active = () => (globalThis.document as unknown as { activeElement: FakeNode | null }).activeElement;
+
+  async function tryAgain() {
+    const retry = button("Try again");
+    expect(retry).toBeDefined();
+    (retry!.focus as () => void)();
+    await act(async () => {
+      void props(retry!).onClick({ currentTarget: retry });
+    });
+    await settle();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    await settle();
+  }
+
+  it("Try again that reads the link: focus lands on the link card", async () => {
+    inviteReads.push(FAILED_READS[0][1], async () => Response.json(KNOWN));
+    await mount();
+    await tryAgain();
+    expect(String(active()?.textContent)).toContain("for security it can't be shown again");
+  }, 5_000);
+
+  it("Try again that fails again: focus lands on Try again", async () => {
+    inviteReads.push(FAILED_READS[0][1], FAILED_READS[0][1]);
+    await mount();
+    await tryAgain();
+    expect(active()).toBe(button("Try again"));
+  }, 5_000);
 });
