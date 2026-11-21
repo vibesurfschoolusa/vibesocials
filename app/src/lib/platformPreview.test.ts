@@ -194,6 +194,16 @@ describe("buildPlatformPreview", () => {
       expect(result.truncated).toBe(true);
       expect(result.willTruncate).toBe(true);
     });
+
+    // R63 platform-clients L1: the preview cuts with the client's own function.
+    it("cuts at the last whole word, as computeTikTokCaption does", () => {
+      for (const caption of [`${"a".repeat(2191)} @surfer21`, `${"a".repeat(2191)} #surfschool`]) {
+        const result = buildPlatformPreview({ platform: "tiktok", caption });
+        expect(result.rendered).toBe("a".repeat(2191));
+        expect(result.rendered).toBe(computeTikTokCaption(caption));
+        expect(result.willTruncate).toBe(true);
+      }
+    });
   });
 
   describe("Instagram (charLimit 2200, no ellipsis — 2026-11-01 audit)", () => {
@@ -389,11 +399,21 @@ describe("buildPlatformPreview on LinkedIn", () => {
     expect(result.rendered).toBe(computeLinkedInCommentary(buildCaptionWithFooter(caption, user, "linkedin")));
   });
 
+  // R63 platform-clients L1: the cut ends at the word before the link.
   it("keeps a link whole at the cut, as the client does", () => {
     const caption = "w".repeat(2990) + " https://vibesurfschool.com/lessons/fort-lauderdale/private-surf-lessons";
     const result = buildPlatformPreview({ platform: "linkedin", caption });
-    expect(result.rendered).toBe("w".repeat(2990) + " ...");
+    expect(result.rendered).toBe("w".repeat(2990) + "...");
     expect(result.rendered).toBe(computeLinkedInCommentary(caption));
+  });
+
+  // R63 platform-clients L1: never inside a #tag or @mention, as the client cuts.
+  it("cuts at the last whole word, as computeLinkedInCommentary does", () => {
+    for (const caption of [`${"a".repeat(2990)} @surfer21 tail`, `${"a".repeat(2990)} #surfschool tail`]) {
+      const result = buildPlatformPreview({ platform: "linkedin", caption });
+      expect(result.rendered).toBe(`${"a".repeat(2990)}...`);
+      expect(result.rendered).toBe(computeLinkedInCommentary(caption));
+    }
   });
 
   it("leaves a post under the limit unchanged", () => {
@@ -665,7 +685,8 @@ describe("buildPlatformPreview on the other platforms, unchanged by Pinterest's 
     });
     const result = buildPlatformPreview({ platform: "tiktok", caption: long, user });
     expect(Object.keys(result).sort()).toEqual(["charCount", "limit", "rendered", "truncated", "willTruncate"]);
-    expect(result.rendered.length).toBe(2200);
+    // R63 platform-clients L1: cut at the last whole word, before "waves".
+    expect(result.rendered.length).toBe(2196);
     expect(result).toMatchObject({ charCount: 3749, limit: 2200, truncated: true, willTruncate: true });
   });
 

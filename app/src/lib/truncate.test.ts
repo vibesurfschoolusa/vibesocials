@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { textUnits, trimLinkTrailing, truncateGraphemes, truncateGraphemesAtWord, truncateUnits } from "./truncate";
+import {
+  graphemeCount,
+  textUnits,
+  trimLinkTrailing,
+  truncateGraphemes,
+  truncateGraphemesAtWord,
+  truncateKeepingLinks,
+  truncateKeepingLinksAtWord,
+  truncateUnits,
+  truncateUnitsAtWord,
+} from "./truncate";
 
 // Grapheme count via the same primitive the implementation uses, so assertions
 // about "<= max graphemes" are measured the way the helper measures.
@@ -154,6 +164,58 @@ describe("truncateGraphemesAtWord", () => {
 
   it("reserves room for an ellipsis", () => {
     expect(truncateGraphemesAtWord("Dawn patrol #surfschool", 15, { ellipsis: "…" })).toBe("Dawn patrol…");
+  });
+});
+
+// R63 platform-clients L1: LinkedIn's cut, never inside a #tag or @mention, and
+// still never inside a link.
+describe("truncateUnitsAtWord and truncateKeepingLinksAtWord", () => {
+  const byGrapheme = (unit: { text: string; link: unknown }) => (unit.link ? graphemeCount(unit.text) : 1);
+
+  it("returns text that fits unchanged", () => {
+    expect(truncateKeepingLinksAtWord("Dawn patrol #surf", 17, "...")).toBe("Dawn patrol #surf");
+  });
+
+  it("cuts at the last whole word, so a mention is never split", () => {
+    expect(truncateKeepingLinksAtWord("Thanks @surfer21 today", 16, "...")).toBe("Thanks...");
+  });
+
+  it("cuts at the last whole word, so a hashtag is never split", () => {
+    expect(truncateKeepingLinksAtWord("Dawn patrol #surfschool tail", 20, "...")).toBe("Dawn patrol...");
+  });
+
+  it("a link at the cut stays whole, and goes with its word", () => {
+    expect(truncateKeepingLinksAtWord("Book at https://vibesurfschool.com/lessons now", 30, "...")).toBe("Book at...");
+    expect(truncateKeepingLinksAtWord("Book https://vibesurfschool.com/a now", 36, "...")).toBe(
+      "Book https://vibesurfschool.com/a...",
+    );
+  });
+
+  it("with no space in the 100 graphemes before the limit, keeps the plain cut", () => {
+    const script = "あ".repeat(300);
+    expect(truncateKeepingLinksAtWord(script, 200, "...")).toBe(truncateKeepingLinks(script, 200, "..."));
+    expect(truncateUnitsAtWord(`ab ${"c".repeat(200)}`, 103, byGrapheme)).toBe(`ab ${"c".repeat(100)}`);
+    expect(truncateUnitsAtWord(`ab ${"c".repeat(200)}`, 102, byGrapheme)).toBe("ab");
+  });
+
+  it("is as truncateUnits when the cut already ends a word", () => {
+    expect(truncateUnitsAtWord("Dawn patrol #surf", 11, byGrapheme)).toBe("Dawn patrol");
+    expect(truncateUnits("Dawn patrol #surf", 11, byGrapheme)).toBe("Dawn patrol");
+  });
+
+  it("takes under 1 s at 10k and 40k characters", () => {
+    for (const size of [10_000, 40_000]) {
+      for (const text of [
+        "Thanks @surfer21 #surfschool https://vibesurfschool.com/a ".repeat(size / 58),
+        "a".repeat(size),
+        " ".repeat(size),
+        "vibesurfschool.com/".repeat(size / 19),
+      ]) {
+        const started = performance.now();
+        truncateKeepingLinksAtWord(text, 3000, "...");
+        expect(performance.now() - started).toBeLessThan(1000);
+      }
+    }
   });
 });
 

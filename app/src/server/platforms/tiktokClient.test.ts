@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { publishErrorMessage, sentenceForRecipient } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
-import { truncateGraphemes } from "@/lib/truncate";
+import { truncateGraphemes, truncateGraphemesAtWord } from "@/lib/truncate";
 import type { UploadStateStore } from "@/server/jobs/uploadState";
 
 import { LARGE_UPLOAD_CHUNK_WINDOW_MS, LARGE_VIDEO_THRESHOLD_BYTES } from "./largeUpload";
@@ -273,9 +273,27 @@ describe("computeTikTokCaption", () => {
     expect(result).toBe("a".repeat(2200));
   });
 
-  it("matches the pre-refactor inline call byte-for-byte for a realistic long caption", () => {
+  // R63 platform-clients L1: the cut ends at a whole word (truncateGraphemesAtWord),
+  // so a long caption no longer ends inside one.
+  it("cuts a realistic long caption at the last whole word", () => {
     const caption = "The quick brown fox jumps over the lazy dog. ".repeat(60);
     expect(caption.length).toBeGreaterThan(2200);
+    expect(computeTikTokCaption(caption)).toBe(truncateGraphemesAtWord(caption, 2200));
+    expect(computeTikTokCaption(caption).endsWith(" lazy")).toBe(true);
+  });
+
+  it("never sends part of an @mention at the cut", () => {
+    const caption = `${"a".repeat(2190)} thanks @surfer21 #surfschool`;
+    expect(computeTikTokCaption(caption)).toBe(`${"a".repeat(2190)} thanks`);
+  });
+
+  it("never sends part of a #hashtag at the cut", () => {
+    const caption = `${"a".repeat(2190)} #surfschool`;
+    expect(computeTikTokCaption(caption)).toBe("a".repeat(2190));
+  });
+
+  it("a script with no spaces keeps the plain cut", () => {
+    const caption = "あ".repeat(2500);
     expect(computeTikTokCaption(caption)).toBe(truncateGraphemes(caption, 2200));
   });
 

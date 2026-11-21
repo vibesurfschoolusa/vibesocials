@@ -6,6 +6,7 @@ import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import type { UploadStateStore } from "@/server/jobs/uploadState";
 import { MAX_CONTINUATIONS_PER_RESULT } from "@/server/jobs/platformSteps";
 import {
+  computeLinkedInCommentary,
   ensureFreshLinkedInToken,
   LINKEDIN_ASSET_MAX_WAIT_MS,
   LINKEDIN_ASSET_POLL_INTERVAL_MS,
@@ -4670,5 +4671,33 @@ describe("linkedinClient.publishText - a post without a photo", () => {
     stubPosts(() => new Response("{}", { status: 401 }));
     const error = await failure(linkedinClient.publishText!(textCtx()));
     expect(error?.code).toBe("LINKEDIN_RECONNECT_REQUIRED");
+  });
+});
+
+// R63 platform-clients L1: the 3,000 cut ends at a whole word, so a #tag or
+// @mention is never sent in part, and a link at the cut still goes whole.
+describe("computeLinkedInCommentary", () => {
+  it("never sends part of an @mention at the cut", () => {
+    const caption = `${"a".repeat(2990)} @surfer21 tail`;
+    expect(computeLinkedInCommentary(caption)).toBe(`${"a".repeat(2990)}...`);
+  });
+
+  it("never sends part of a #hashtag at the cut", () => {
+    const caption = `${"a".repeat(2985)} a #surfschool tail`;
+    expect(computeLinkedInCommentary(caption)).toBe(`${"a".repeat(2985)} a...`);
+  });
+
+  it("a link at the cut goes whole", () => {
+    const caption = `${"a".repeat(2980)} https://vibesurfschool.com/lessons tail`;
+    expect(computeLinkedInCommentary(caption)).toBe(`${"a".repeat(2980)}...`);
+  });
+
+  it("a script with no spaces keeps the plain cut", () => {
+    const caption = "あ".repeat(3100);
+    expect(computeLinkedInCommentary(caption)).toBe(`${"あ".repeat(2997)}...`);
+  });
+
+  it("a short caption is sent as written", () => {
+    expect(computeLinkedInCommentary("Dawn patrol #surf @surfer21")).toBe("Dawn patrol #surf @surfer21");
   });
 });
