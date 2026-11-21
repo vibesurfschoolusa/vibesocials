@@ -383,7 +383,7 @@ describe("POST /api/posts/enhance-caption - adapt for a platform", () => {
   });
 
   it("keeps the caption cap and the rate limits for an adapt request", async () => {
-    const tooLong = await post({ caption: "c".repeat(2201), platform: "x", maxLength: 280 });
+    const tooLong = await post({ caption: "c".repeat(10_001), platform: "x", maxLength: 280 });
     expect(tooLong.status).toBe(400);
     expect(checkRateLimitMock).not.toHaveBeenCalled();
 

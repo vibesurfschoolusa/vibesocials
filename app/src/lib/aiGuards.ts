@@ -18,7 +18,12 @@ import { personLabel } from "@/lib/usageLimits";
 
 /** Character caps for prompt fields, plus the per-workspace daily call budget. */
 export const AI_LIMITS = {
-  /** Free-form caption text (an Instagram caption tops out at 2,200). */
+  /**
+   * Kept at 2,200 for auto-caption's photo address (blobUrl), which shares it.
+   * R61 pages-a-4 L1: enhance-caption no longer reads it; a caption sent to
+   * Improve or Adapt is held to MAX_CAPTION_CHARS (lib/captionLimits.ts), as
+   * the page's own counter is.
+   */
   caption: 2200,
   /** Short enum-like values: platform, language, tone, star rating, mime type. */
   shortField: 40,

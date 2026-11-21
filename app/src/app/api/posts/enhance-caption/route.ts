@@ -1,15 +1,14 @@
 import type { Platform } from "@prisma/client";
 import { NextResponse } from "next/server";
 import {
-  AI_LIMITS,
   AI_PROVIDER_TIMEOUT_MS,
   aiInputTooLongResponse,
   aiTimeoutResponse,
   aiWorkspaceLimitResponse,
   checkWorkspaceAiQuota,
-  findOverlongAiField,
   isAiTimeoutError,
 } from "@/lib/aiGuards";
+import { MAX_CAPTION_CHARS, captionCounter } from "@/lib/captionLimits";
 import { workspaceBrandVoicePrompt } from "@/lib/brandVoice";
 import { withoutHashtagSigns } from "@/lib/hashtags";
 import {
@@ -104,12 +103,11 @@ export async function POST(request: Request) {
     const { caption, platform, maxLength } = body;
 
     // 2026-11-01 scale audit (W6): cap the prompt text BEFORE any limiter
-    // counter is spent or the provider is called.
-    const overlong = findOverlongAiField([
-      { field: "caption", value: caption, max: AI_LIMITS.caption },
-    ]);
-    if (overlong) {
-      return aiInputTooLongResponse(overlong);
+    // counter is spent or the provider is called. R61 pages-a-4 L1: Adapt
+    // exists to shorten long captions, so the cap is the caption's own
+    // (MAX_CAPTION_CHARS), counted by captionCounter as the page counts it.
+    if (typeof caption === "string" && captionCounter(caption).over) {
+      return aiInputTooLongResponse({ field: "caption", max: MAX_CAPTION_CHARS });
     }
 
     // "Adapt for {platform}": both fields optional, checked before any limiter
