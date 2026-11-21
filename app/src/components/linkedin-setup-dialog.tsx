@@ -77,6 +77,22 @@ function keepAddress(address: string): void {
 }
 
 /** `workspaceId`: the workspace this page was rendered for; the start route refuses any other (F3). */
+/**
+ * The vanity name (or numeric id) from what the owner typed. Handles
+ * https://www.linkedin.com/company/vibe-surf-school-usa/, its /admin/ address,
+ * linkedin.com/company/82188987, a bare vanity name, or a numeric id. R60
+ * new-customer-2 L1: the host and path match whatever their case, and only
+ * the name taken out is lowercased.
+ */
+export function linkedInVanityName(typed: string): string {
+  let name = typed.trim();
+  const match = name.match(/linkedin\.com\/company\/([^/?#]+)/i);
+  if (match) name = match[1];
+  name = name.replace(/\/$/, "");
+  // A numeric id keeps its form; a vanity name is lowercase, with hyphens for spaces.
+  return /^\d+$/.test(name) ? name : name.toLowerCase().replace(/\s+/g, "-");
+}
+
 export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -124,28 +140,7 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
     }
     setFieldError(null);
 
-    // Extract the vanity name/ID from a full URL if the user pasted one.
-    // Handles: https://www.linkedin.com/company/vibe-surf-school-usa/,
-    // linkedin.com/company/82188987, a bare vanity name, or a numeric ID.
-    let cleanVanityName = vanityName.trim();
-
-    if (cleanVanityName.includes("linkedin.com/company/")) {
-      const match = cleanVanityName.match(/linkedin\.com\/company\/([^/?#]+)/);
-      if (match) {
-        cleanVanityName = match[1];
-      }
-    }
-
-    // Remove any trailing slashes.
-    cleanVanityName = cleanVanityName.replace(/\/$/, "");
-
-    // Only lowercase if it's NOT a numeric ID (preserve case for numeric IDs).
-    const isNumericId = /^\d+$/.test(cleanVanityName);
-    if (!isNumericId) {
-      cleanVanityName = cleanVanityName.toLowerCase();
-      // Replace spaces with hyphens for vanity names.
-      cleanVanityName = cleanVanityName.replace(/\s+/g, "-");
-    }
+    const cleanVanityName = linkedInVanityName(vanityName);
 
     keepAddress(vanityName.trim());
     setIsConnecting(true);
