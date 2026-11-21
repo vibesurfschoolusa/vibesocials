@@ -374,7 +374,7 @@ describe("UploadSummary and the rows: our side or the connection", () => {
   const CONNECTION_ROW = "The upload didn't finish. Check your connection and try again.";
   const OUR_SIDE_ROW = "The upload didn't finish: something went wrong on our side. Try again in a minute.";
   const CONNECTION_SUMMARY = "Check your connection, then try again with the button below.";
-  const OUR_SIDE_SUMMARY = "Something went wrong on our side. Try again in a few minutes with the button below.";
+  const OUR_SIDE_SUMMARY = "Something went wrong on our side. Try again with the button below.";
   const STORAGE_ROW = "File storage didn't take the upload. Try again in a few minutes.";
 
   const html502 = () => new Response("<html>Bad gateway</html>", { status: 502, headers: { "Content-Type": "text/html" } });
@@ -456,6 +456,39 @@ describe("UploadSummary and the rows: our side or the connection", () => {
     expect(render(0, [failure])).toContain(OUR_SIDE_SUMMARY);
   });
 
+  // R54 client-journey L2, pages-a L2: each row names its own wait; the
+  // summary, which points under each file, names none.
+  const WAIT = /in a (few )?minutes?/;
+  const summaryOf = (html: string) => html.slice(html.indexOf("The reason is under"));
+
+  it("one file, unreadable 5xx: the row waits a minute, the summary names no wait", async () => {
+    const failure = await failed(async () => empty500());
+    expect(failure.message).toContain("Try again in a minute.");
+    const html = render(0, [failure]);
+    expect(html).toContain(`The file didn&#x27;t arrive. The reason is under it. ${OUR_SIDE_SUMMARY}`);
+    expect(summaryOf(html)).not.toMatch(WAIT);
+  });
+
+  it("one file, storage refusal: the row waits a few minutes, the summary names no wait", async () => {
+    const failure = await storageRefused(new BlobUnknownError());
+    expect(failure.message).toContain("Try again in a few minutes.");
+    const html = render(0, [failure]);
+    expect(html).toContain(OUR_SIDE_SUMMARY);
+    expect(summaryOf(html)).not.toMatch(WAIT);
+  });
+
+  it("mixed rows, all our side: no wait in the summary", async () => {
+    const failures = [await failed(async () => html502()), await storageRefused(new BlobAccessError())];
+    const html = render(0, failures);
+    expect(html).toContain(`None of the 2 files arrived. The reason is under each file. ${OUR_SIDE_SUMMARY}`);
+    expect(summaryOf(html)).not.toMatch(WAIT);
+  });
+
+  it("any row with no answer: the connection sentence, as now", async () => {
+    const failures = [await failed(async () => html502()), await failed(threw)];
+    expect(render(0, failures)).toContain(`None of the 2 files arrived. The reason is under each file. ${CONNECTION_SUMMARY}`);
+  });
+
   it("too large from storage: the size sentence, no try again", async () => {
     const failure = await storageRefused(new BlobFileTooLargeError("max 512 MB"));
     expect(failure).toEqual({ kind: "file", message: "File is too large (max 512 MB)." });
@@ -482,7 +515,7 @@ describe("UploadSummary and the rows: our side or the connection", () => {
 // own mapping from its state to the summary, fed what sendClientFile throws.
 describe("summaryFailures: the form's failed files, as the summary reads them", () => {
   const CONNECTION_SUMMARY = "Check your connection, then try again with the button below.";
-  const OUR_SIDE_SUMMARY = "Something went wrong on our side. Try again in a few minutes with the button below.";
+  const OUR_SIDE_SUMMARY = "Something went wrong on our side. Try again with the button below.";
   const html502 = () => new Response("<html>Bad gateway</html>", { status: 502, headers: { "Content-Type": "text/html" } });
   const tokenIssued = () =>
     new Response(JSON.stringify({ clientToken: "ct", pathname: "ul/link-1/a.jpg" }), { status: 200, headers: { "Content-Type": "application/json" } });
