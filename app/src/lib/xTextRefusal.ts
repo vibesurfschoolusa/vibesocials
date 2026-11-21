@@ -19,6 +19,10 @@ export const X_TEXT_EMPTY_MESSAGE =
 export const X_TEXT_EMPTY_EDIT_MESSAGE =
   "X removes @mentions from posts sent through its API, so this post would have no text for X. Add some words to the caption or to X's own caption. To post without X, cancel this post and create it again without X.";
 
+/** R64 pages-a L1: a draft card offers Delete, not Cancel. */
+export const X_TEXT_EMPTY_DRAFT_EDIT_MESSAGE =
+  "X removes @mentions from posts sent through its API, so this post would have no text for X. Add some words to the caption or to X's own caption. To post without X, delete this draft and create it again without X.";
+
 /**
  * The refusal for a post without a photo whose X text would be empty, or null.
  * Shared by POST /api/posts and PATCH /api/posts/[postJobId], so the two can't
@@ -33,11 +37,16 @@ export async function xTextEmptyRefusal(args: {
   xOverride: string | null | undefined;
   workspace: CaptionFooterUser & { id: string };
   targetPlatforms: readonly Platform[] | undefined;
-  /** PATCH's sentence instead of POST's. */
-  editing?: boolean;
+  /** PATCH's sentence instead of POST's, worded by the post's status. */
+  editing?: "draft" | "scheduled";
 }): Promise<string | null> {
   const { targetPlatforms, workspace } = args;
-  const message = args.editing ? X_TEXT_EMPTY_EDIT_MESSAGE : X_TEXT_EMPTY_MESSAGE;
+  const message =
+    args.editing === "draft"
+      ? X_TEXT_EMPTY_DRAFT_EDIT_MESSAGE
+      : args.editing === "scheduled"
+        ? X_TEXT_EMPTY_EDIT_MESSAGE
+        : X_TEXT_EMPTY_MESSAGE;
   if (targetPlatforms && !targetPlatforms.includes("x")) return null;
   const caption = args.xOverride ? args.xOverride : args.baseCaption;
   if (removeXMentions(buildCaptionWithFooter(caption, workspace, "x")).trim()) return null;

@@ -310,7 +310,7 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
         xOverride,
         workspace: workspaceContext.workspace,
         targetPlatforms: stored?.targetPlatforms?.length ? stored.targetPlatforms : undefined,
-        editing: true,
+        editing: existing.status === "draft" ? "draft" : "scheduled",
       });
       if (xRefusal) return NextResponse.json({ error: xRefusal }, { status: 400 });
     }
