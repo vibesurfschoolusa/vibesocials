@@ -84,3 +84,37 @@ describe("StoryPlacementSettings", () => {
     );
   });
 });
+
+// R65 review L1: Create locks the placement during a waiting send through this
+// prop, on the component's own fieldset, with no wrapper around the card.
+describe("StoryPlacementSettings - disabled", () => {
+  const html = (disabled?: boolean, fileCount = 1) =>
+    renderToStaticMarkup(
+      createElement(StoryPlacementSettings, {
+        platform: "instagram",
+        choice: FEED_CHOICE,
+        fileCount,
+        videoDurationSec: null,
+        onChange: () => {},
+        ...(disabled === undefined ? {} : { disabled }),
+      }),
+    );
+  const fieldsetTag = (markup: string) => markup.match(/<fieldset[^>]*>/g) ?? [];
+
+  it("with disabled: its fieldset is disabled, so every placement radio is", () => {
+    const tags = fieldsetTag(html(true));
+    expect(tags).toHaveLength(1);
+    expect(tags[0]).toContain('disabled=""');
+    expect(html(true)).toMatch(/^<div class="[^"]*space-y-2 p-4[^"]*">/);
+  });
+
+  it("without disabled: as now, the fieldset is not disabled and only Story with several files is", () => {
+    for (const markup of [html(), html(false)]) {
+      expect(fieldsetTag(markup)[0]).not.toContain(" disabled=\"\"");
+      expect(input(markup, "feed")).not.toContain(" disabled=\"\"");
+      expect(input(markup, "story")).not.toContain(" disabled=\"\"");
+    }
+    expect(input(html(undefined, 2), "story")).toContain('disabled=""');
+    expect(input(html(undefined, 2), "feed")).not.toContain(" disabled=\"\"");
+  });
+});

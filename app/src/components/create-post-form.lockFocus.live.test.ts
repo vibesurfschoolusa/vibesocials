@@ -26,6 +26,7 @@ vi.mock("@/hooks/useConnections", async (importOriginal) => ({
       { platform: "x", connected: true },
       { platform: "linkedin", connected: true },
       { platform: "google_business_profile", connected: true },
+      { platform: "instagram", connected: true },
     ],
     loading: false,
     error: null,
@@ -265,6 +266,30 @@ describe('Create: "Use a different file instead" during a waiting send (R65 publ
     await releaseCover();
   }, 10_000);
 
+  it("looks disabled when it is (R65 review L2)", async () => {
+    query.search = "mediaItemId=item-1";
+    await mount();
+    const classes = String(buttonTexted(DIFFERENT_FILE).attributes.class).split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(["disabled:cursor-not-allowed", "disabled:opacity-50"]));
+  }, 10_000);
+
+  it("a waiting send locks the cover on the reused video, and focus in it moves to the submit button", async () => {
+    postAnswer = REFUSED;
+    await reuseWithUploadedCover();
+    const radio = find(container, (n) => n.nodeName === "INPUT" && props(n)?.value === ("upload" as never));
+    if (!radio) throw new Error("no cover choice");
+    await act(async () => (radio.focus as () => void)());
+    expect(doc.activeElement).toBe(radio);
+    await submit();
+    expect(disabledNow(radio)).toBe(true);
+
+    const focused = doc.activeElement as FakeNode;
+    expect(focused.nodeName).toBe("BUTTON");
+    expect(focused.attributes.type).toBe("submit");
+    await releaseCover();
+    expect(disabledNow(radio)).toBe(false);
+  }, 10_000);
+
   it("after a failed send: it is enabled, and dismisses the item", async () => {
     postAnswer = REFUSED;
     await reuseWithUploadedCover();
@@ -330,15 +355,18 @@ describe("SendLock takes its one child's place (R65 publishing-flow L2)", () => 
     expect(container.childNodes).toHaveLength(0);
   });
 
-  it("every SendLock in create-post-form.tsx wraps one element", () => {
+  it("R65 review L1: the cover, alt text, YouTube and Story parts take disabled={sendLocksFields} and sit where they sat at 0071194, with nothing around them", () => {
     const source = readFileSync(path.join(__dirname, "create-post-form.tsx"), "utf8");
+    const count = (re: RegExp) => source.match(re)?.length ?? 0;
+    // At 0071194 the cover was {coverPicker} straight after the preview, before the file line.
+    expect(count(/\) : null\}\s*\{coverPicker\}\s*<p className="text-xs text-muted-foreground">/g)).toBe(2);
+    expect(source).toMatch(/const coverPicker = coverVideo \? \(\s*<VideoCoverPicker[^<]*?disabled=\{sendLocksFields\}[^<]*?\/>\s*\) : null;/);
+    expect(count(/&& \(\s*<PhotoDescriptionField[^<]*?disabled=\{sendLocksFields\}[^<]*?\/>\s*\)\}/g)).toBe(2);
+    expect(count(/&& \(\s*<YouTubePostSettings[^<]*?disabled=\{sendLocksFields\}[^<]*?\/>\s*\)\}/g)).toBe(1);
+    expect(count(/&& \(\s*<StoryPlacementSettings[^<]*?disabled=\{sendLocksFields\}[^<]*?\/>\s*\)\}/g)).toBe(2);
+    // Pending a decision on google-post-settings.tsx (BA1.md): the Google box is the only part still in a SendLock.
     const uses = [...source.matchAll(/<SendLock locked=\{sendLocksFields\}>([^]*?)<\/SendLock>/g)].map((m) => m[1]!.trim());
-    expect(uses.length).toBeGreaterThanOrEqual(7);
-    for (const inner of uses) {
-      // One expression, or one self-closing component with no element in its props.
-      expect(/^\{\w+\}$/.test(inner) || /^<[A-Z]\w*[^<]*\/>$/.test(inner), inner).toBe(true);
-    }
-    expect(source.match(/<SendLock/g)?.length).toBe(uses.length);
+    expect(uses.map((inner) => /^<([A-Z]\w*)/.exec(inner)?.[1])).toEqual(["GooglePostBox"]);
   });
 
   it("no SendLock wraps AttachedPhotos: it takes disabled={sendLocksFields} itself", () => {
@@ -477,6 +505,34 @@ describe("Create: the lock keeps keyboard focus (R65 new-customer L1, pages-b L1
     expect(active()).toBe(formSubmit());
     await act(async () => postRelease!());
     await settle();
+  }, 10_000);
+
+  it("Enter in a Google field during Schedule: focus is on the submit button", async () => {
+    await scheduleWithStalledPhoto("google6");
+    const field = byId("google-post-type");
+    await focus(field);
+    expect(active()).toBe(field);
+    await submit();
+    expect(disabledNow(field)).toBe(true);
+
+    expect(active()).toBe(formSubmit());
+    await releaseUpload("google6");
+  }, 10_000);
+
+  it("a Story choice focused during Schedule: focus is on the submit button", async () => {
+    postAnswer = REFUSED;
+    await scheduleWithStalledPhoto("story7");
+    const legend = find(container, (n) => n.nodeName === "LEGEND" && n.textContent === "Instagram: post to");
+    const radio = legend?.parentNode ? find(legend.parentNode, (n) => n.nodeName === "INPUT") : null;
+    if (!radio) throw new Error("no Instagram placement");
+    await focus(radio);
+    expect(active()).toBe(radio);
+    await submit();
+    expect(disabledNow(radio)).toBe(true);
+
+    expect(active()).toBe(formSubmit());
+    await releaseUpload("story7");
+    expect(disabledNow(radio)).toBe(false);
   }, 10_000);
 
   it("pressing the Schedule button itself: focus is unchanged", async () => {
