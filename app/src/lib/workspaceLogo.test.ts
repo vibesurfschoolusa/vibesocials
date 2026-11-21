@@ -6,6 +6,7 @@ import {
   logoEndpoint,
   LOGO_ADDRESS_RESERVED_MESSAGE,
   LOGO_HELP_LINE,
+  LOGO_SIZE_LINE,
   LOGO_LIMIT_REASON,
 } from "./workspaceLogo";
 
@@ -57,8 +58,13 @@ describe("logoEndpoint", () => {
 });
 
 describe("LOGO_HELP_LINE", () => {
-  it("says what the server accepts", () => {
-    expect(LOGO_HELP_LINE).toBe("An image up to 1 MB (not SVG). It appears on your monthly report.");
+  // R56 pages-a-4 L1: the picker offers only PNG and JPEG, and the logo also heads the client links' pages.
+  it("says the files the picker offers, and every place the logo shows", () => {
+    expect(LOGO_HELP_LINE).toBe("A PNG or JPEG up to 1 MB. It appears on your monthly report and on your client links' pages.");
+  });
+
+  it("the size rule the plan-note variant starts with names PNG and JPEG", () => {
+    expect(LOGO_SIZE_LINE).toBe("A PNG or JPEG up to 1 MB.");
   });
 });
 

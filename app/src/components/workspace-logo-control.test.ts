@@ -11,6 +11,9 @@ import { WorkspaceLogoControl } from "./workspace-logo-control";
 
 const LOGO = "https://abc.public.blob.vercel-storage.com/logos/ws-1/0123456789abcdef.png";
 
+// R56 pages-a-4 L1: the lines now hold an apostrophe, which the markup escapes.
+const asMarkup = (text: string) => text.replaceAll("'", "&#x27;");
+
 const render = (logoUrl: string | null, isOwner: boolean) =>
   renderToStaticMarkup(createElement(WorkspaceLogoControl, { logoUrl, isOwner, workspaceId: "ws-1" }));
 
@@ -21,7 +24,7 @@ describe("WorkspaceLogoControl", () => {
     expect(html).toContain(`src="${LOGO}"`);
     expect(html).toContain(">Upload<");
     expect(html).toContain(">Remove<");
-    expect(html).toContain(LOGO_HELP_LINE);
+    expect(html).toContain(asMarkup(LOGO_HELP_LINE));
     expect(html).toContain('accept="image/png,image/jpeg"');
   });
 
@@ -50,14 +53,14 @@ describe("WorkspaceLogoControl and the plan", () => {
     const html = renderToStaticMarkup(
       createElement(WorkspaceLogoControl, { logoUrl: LOGO, isOwner: true, workspaceId: "ws-1", planNote: PLAN_LINE }),
     );
-    expect(html).toContain("An image up to 1 MB (not SVG).");
+    expect(html).toContain("A PNG or JPEG up to 1 MB.");
     expect(html).toContain(PLAN_LINE);
-    expect(html).not.toContain("It appears on your monthly report.");
+    expect(html).not.toContain("It appears on your monthly report");
   });
 
   it("without one: today's line exactly", () => {
     const html = render(LOGO, true);
-    expect(html).toContain(LOGO_HELP_LINE);
+    expect(html).toContain(asMarkup(LOGO_HELP_LINE));
     expect(html).not.toContain(PLAN_LINE);
   });
 });
@@ -85,7 +88,9 @@ describe("WorkspaceLogoControl: Upload by plan", () => {
       const markup = html(workspace, ON);
       expect(upload(markup)).toContain('disabled=""');
       expect(upload(markup)).toContain('aria-disabled="true"');
-      expect(markup).toContain("An image up to 1 MB (not SVG). Your logo shows on the monthly report on the Growth and Pro plans.");
+      expect(markup).toContain(
+        asMarkup("A PNG or JPEG up to 1 MB. Your logo shows on the monthly report and on your client links' pages on the Growth and Pro plans."),
+      );
       expect(markup).toMatch(/<input[^>]*type="file"[^>]*disabled=""/);
     }
   });

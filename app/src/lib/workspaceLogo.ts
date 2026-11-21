@@ -14,8 +14,10 @@ export const LOGO_MAX_HEIGHT = 300;
 /** Uploads and removals an owner may make per hour. */
 export const LOGO_CHANGES_PER_HOUR = 10;
 
-export const LOGO_SIZE_LINE = "An image up to 1 MB (not SVG).";
-export const LOGO_HELP_LINE = `${LOGO_SIZE_LINE} It appears on your monthly report.`;
+/** R56 pages-a-4 L1: the picker offers only PNG and JPEG, and every refusal names them. */
+export const LOGO_SIZE_LINE = "A PNG or JPEG up to 1 MB.";
+/** Shown only where the plan includes the logo, which is also where clientPageLogo.ts shows it on /c, /u and /v. */
+export const LOGO_HELP_LINE = `${LOGO_SIZE_LINE} It appears on your monthly report and on your client links' pages.`;
 
 export const LOGO_TOO_LARGE_MESSAGE = "That file is over 1 MB. Choose a smaller PNG or JPEG.";
 export const LOGO_EMPTY_MESSAGE = "No file arrived. Choose a PNG or JPEG and try again.";

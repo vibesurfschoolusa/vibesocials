@@ -16,7 +16,9 @@ export const REVIEW_ALERTS_PLAN_NOTE =
 
 // P1 fix round 2: the monthly report email toggle and the logo.
 export const MONTHLY_REPORT_PLAN_NOTE = "The monthly report email is part of the Growth and Pro plans.";
-export const LOGO_PLAN_NOTE = "Your logo shows on the monthly report on the Growth and Pro plans.";
+// R56 pages-a-4 L1: the client links' pages show the logo on the same plans (clientPageLogo.ts).
+export const LOGO_PLAN_NOTE =
+  "Your logo shows on the monthly report and on your client links' pages on the Growth and Pro plans.";
 
 export type SettingsPlanNotes = { brandVoice?: string; reviewAlerts?: string; monthlyReport?: string; logo?: string };
 
