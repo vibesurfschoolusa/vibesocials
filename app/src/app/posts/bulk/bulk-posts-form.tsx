@@ -464,9 +464,13 @@ export function BulkPostsForm({
 
   useEffect(() => {
     const urls = objectUrlsRef.current;
+    const uploadAborts = uploadAbortsRef.current;
     unmountedRef.current = false;
     return () => {
       unmountedRef.current = true;
+      // R62 lead follow-up: leaving the page stops the row uploading now.
+      for (const abort of uploadAborts.values()) abort.abort();
+      uploadAborts.clear();
       for (const url of urls.values()) URL.revokeObjectURL(url);
       urls.clear();
     };
@@ -586,7 +590,7 @@ export function BulkPostsForm({
       return;
     }
     // Removed while it was prepared: no upload token is asked for.
-    if (!rowsRef.current.some((r) => r.id === id)) return;
+    if (unmountedRef.current || !rowsRef.current.some((r) => r.id === id)) return;
     const abort = new AbortController();
     uploadAbortsRef.current.set(id, abort);
     try {
@@ -855,6 +859,8 @@ export function BulkPostsForm({
     workingRef.current = true;
     try {
       for (;;) {
+        // The page was left: no other row starts.
+        if (unmountedRef.current) break;
         const work = nextWork(rowsRef.current.map((r) => ({ id: r.id, upload: r.upload, caption: r.captionStatus })));
         if (!work) break;
         if (work.step === "upload") await uploadRow(work.id);

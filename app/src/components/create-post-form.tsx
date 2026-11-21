@@ -2112,8 +2112,20 @@ function CreatePostFormInner({
   }, [photoSet, uploadFile, reuseItem, singleAltText]);
 
   const isPhotoAttached = (key: string) => photoSetRef.current.some((photo) => photo.key === key);
-  // R62 publishing-flow-2 L1: the photo uploading now, so Remove stops its bytes.
+  // R62 publishing-flow-2 L1: the photo uploading now, so Remove, Remove all
+  // and leaving the page stop its bytes.
   const photoUploadAbortsRef = useRef(new Map<string, AbortController>());
+  function abortPhotoUploads() {
+    for (const abort of photoUploadAbortsRef.current.values()) abort.abort();
+    photoUploadAbortsRef.current.clear();
+  }
+  useEffect(() => {
+    const aborts = photoUploadAbortsRef.current;
+    return () => {
+      for (const abort of aborts.values()) abort.abort();
+      aborts.clear();
+    };
+  }, []);
   const isCoverPhoto = (key: string) => photoSetRef.current[0]?.key === key;
 
   // Queue photos for upload behind any already uploading. With `wantCaption`
@@ -2278,6 +2290,7 @@ function CreatePostFormInner({
   // get their own; the question says so. Per-platform captions stay.
   const removeAllClearsTheCaption = removeAllClearsCaption(uploadCaption, lastAiCaption);
   function removeAllPhotos() {
+    abortPhotoUploads();
     setUploadError(null);
     clearAttachedPhotos();
   }
