@@ -775,6 +775,12 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
 
   const [file, setFile] = useState<File | null>(null);
   const [baseCaption, setBaseCaption] = useState("");
+  // R65 pages-b L2: the box stays usable during an upload, so the POST reads
+  // the caption as it is once the upload ends, not as it was at the press.
+  const captionRef = useRef(baseCaption);
+  useEffect(() => {
+    captionRef.current = baseCaption;
+  }, [baseCaption]);
   // 2026-11-01 scale audit (jobs, event size): over the 10,000-character cap, which
   // POST /api/media rejects - blocks Upload (lib/captionLimits.ts).
   const captionOver = captionCounter(baseCaption).over;
@@ -911,6 +917,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
         throw await explainUploadFailure(uploadError, workspaceId);
       });
 
+      const sentCaption = captionRef.current;
       const response = await fetchOrNoAnswer("/api/media", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -924,7 +931,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
             filename: prepared.name,
             mimeType: prepared.type,
             sizeBytes: prepared.size,
-            baseCaption,
+            baseCaption: sentCaption,
             workspaceId,
           }),
         ),
@@ -943,8 +950,9 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       const created = (data as CreateResponse).mediaItem;
       // No re-fetch: the new upload is the newest item, so it goes on top.
       setItems((prev) => prependMediaItem(prev, created));
-      setFile(null);
-      setBaseCaption("");
+      // Only what was sent is cleared: a caption typed or a file picked since stays.
+      setFile((current) => (current === file ? null : current));
+      setBaseCaption((current) => (current === sentCaption ? "" : current));
       setFileInputKey((key) => key + 1);
       toast.success("Media uploaded successfully.");
     } catch (err) {
