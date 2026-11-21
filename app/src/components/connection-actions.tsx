@@ -104,19 +104,20 @@ function numbersDeletedSentence(platform: string): string {
  * R5 pages M1: a scheduled post that chose this platform does not skip it:
  * at publish time it gets a failed "not connected" result on it
  * (server/jobs/posting.ts CONNECTION_GONE). `chosenCount` is how many
- * scheduled posts chose it, null when that could not be read.
+ * scheduled posts chose it, null when that could not be read. R61 pages-a-2
+ * L1: the count takes in posts waiting for approval, so the sentence names them.
  */
 function scheduledPostsSentence(platform: string, chosenCount: number | null): string {
   const label = platformLabel(platform as Platform);
   if (chosenCount === null) {
-    return `Scheduled posts that chose ${label} will fail on it until you reconnect it.`;
+    return `Scheduled posts, and posts waiting for approval, that chose ${label} will fail on it until you reconnect it.`;
   }
   if (chosenCount === 0) {
-    return `No scheduled post chose ${label}, so none will fail on it.`;
+    return `No scheduled post, or post waiting for approval, chose ${label}, so none will fail on it.`;
   }
   return chosenCount === 1
-    ? `1 scheduled post chose ${label}. It will fail on ${label} until you reconnect it.`
-    : `${chosenCount} scheduled posts chose ${label}. They will fail on ${label} until you reconnect it.`;
+    ? `1 scheduled post, or post waiting for approval, chose ${label}. It will fail on ${label} until you reconnect it.`
+    : `${chosenCount} scheduled posts, or posts waiting for approval, chose ${label}. They will fail on ${label} until you reconnect it.`;
 }
 
 export function disconnectDescription(platform: string, chosenCount: number | null): string {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Platform } from "@prisma/client";
 
+import { APPROVAL_DECIDABLE_STATUSES } from "@/lib/approval";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getWorkspaceContext } from "@/lib/workspace";
@@ -17,7 +18,10 @@ interface PlatformRouteContext {
  * How many scheduled posts chose this platform, for the Disconnect dialog: at
  * publish time each of them gets a failed "not connected" result on it
  * (server/jobs/posting.ts CONNECTION_GONE). A Feed and Story post counts
- * once. `workspaceId` is the workspace the Settings page was rendered for
+ * once. R61 pages-a-2 L1: a post waiting for approval with a time counts
+ * too (dashboard/summary's AWAITING_APPROVAL): it keeps its time and
+ * platforms, and once approved it fails the same way. The answer stays
+ * `{ count }`, so an open page keeps reading it. `workspaceId` is the workspace the Settings page was rendered for
  * (F3), so a stale tab never shows another workspace's number. Read-only and
  * member-readable, like GET /api/connections/[platform].
  */
@@ -42,7 +46,15 @@ export async function GET(request: NextRequest, context: PlatformRouteContext) {
     const jobs = await prisma.postJob.findMany({
       where: {
         workspaceId: wsContext.workspace.id,
-        status: "scheduled",
+        OR: [
+          { status: "scheduled" },
+          {
+            status: { in: [...APPROVAL_DECIDABLE_STATUSES] },
+            submittedForApprovalAt: { not: null },
+            approvedAt: null,
+            scheduledFor: { not: null },
+          },
+        ],
         publishMetadata: { path: ["targetPlatforms"], array_contains: [platform] },
       },
       select: { id: true, storyOfPostJobId: true },
