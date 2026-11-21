@@ -38,7 +38,8 @@ export async function GET(request: NextRequest) {
 
   if (vanityName) {
     state = `${state}.${Buffer.from(vanityName, "utf8").toString("base64url")}`;
-    console.log("[LinkedIn OAuth] Including vanity name in state:", vanityName);
+    // R65 client-journey-2 L1: the hint can be a person's profile address, so never its value.
+    console.log("[LinkedIn OAuth] Including a vanity-name hint in state", { hasVanityName: true });
   }
 
   // Build LinkedIn authorization URL

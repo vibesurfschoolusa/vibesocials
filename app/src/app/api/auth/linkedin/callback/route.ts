@@ -237,7 +237,8 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
         
         if (isNumericId) {
           // Strategy 3a: Direct lookup by numeric organization ID
-          console.log("[LinkedIn OAuth] Attempting to lookup organization by ID:", vanityName);
+          // R65 client-journey-2 L1: whether a hint was sent, never its value.
+          console.log("[LinkedIn OAuth] Attempting to lookup organization by ID", { hasVanityName: true });
           const lookup = await lookupOrganizationOutcome(tokenData.access_token, vanityName);
           hintLookup = lookup.outcome;
           if (lookup.outcome === "found") {
@@ -251,7 +252,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
           }
         } else {
           // Strategy 3b: Lookup by vanity name
-          console.log("[LinkedIn OAuth] Attempting to lookup organization by vanity name:", vanityName);
+          console.log("[LinkedIn OAuth] Attempting to lookup organization by vanity name", { hasVanityName: true });
           const lookup = await lookupOrganizationByVanityNameOutcome(tokenData.access_token, vanityName);
           hintLookup = lookup.outcome;
           if (lookup.outcome === "found") {
