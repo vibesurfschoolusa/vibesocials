@@ -271,6 +271,20 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
+  // R57 client-journey L1: the answer says the client's approval went, so the card drops its badge.
+  it("approving into a kept slot answers clientApprovedAt: null", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+    const body = await (await POST(req({ decision: "approve" }), ctx("job-1"))).json();
+    expect(body).toHaveProperty("clientApprovedAt", null);
+  });
+
+  it("publishing now or rejecting clears nothing, and the answer says nothing about it", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    expect(await (await POST(req({ decision: "approve" }), ctx("job-1"))).json()).not.toHaveProperty("clientApprovedAt");
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+    expect(await (await POST(req({ decision: "reject" }), ctx("job-1"))).json()).not.toHaveProperty("clientApprovedAt");
+  });
+
   it("publishing now or rejecting leaves the client's marks: the post leaves the client's page", async () => {
     findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
     await POST(req({ decision: "approve" }), ctx("job-1"));
@@ -556,6 +570,8 @@ describe("POST /api/posts/[postJobId]/approval — response contract (2026-11-01
       status: "scheduled",
       approvalState: "approved",
       scheduledFor: FUTURE.toISOString(),
+      // R57 client-journey L1: scheduling it cleared the client's approval.
+      clientApprovedAt: null,
       authorEmail: "sent",
     });
   });
@@ -694,6 +710,8 @@ describe("POST /api/posts/[postJobId]/approval — a scheduled row still awaitin
       status: "scheduled",
       approvalState: "approved",
       scheduledFor: FUTURE.toISOString(),
+      // R57 client-journey L1: scheduling it cleared the client's approval.
+      clientApprovedAt: null,
       authorEmail: "sent",
     });
     expect(updateManyMock).toHaveBeenCalledWith({
@@ -1133,12 +1151,15 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
 
     const res = await POST(req({ decision: "approve", includePair: true }), ctx("job-1"));
 
-    expect((await res.json()).otherHalf).toEqual({
+    const answer = await res.json();
+    expect(answer.otherHalf).toEqual({
       id: "story-1",
       kind: "story",
       changed: true,
       note: "Its Story was approved too.",
     });
+    // R57 client-journey L1: both halves were cleared below, and the answer says so.
+    expect(answer).toHaveProperty("clientApprovedAt", null);
     const approved = {
       status: "scheduled",
       approvedAt: expect.any(Date),

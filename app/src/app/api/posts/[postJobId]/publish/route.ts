@@ -353,6 +353,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         ok: true,
         status: "scheduled",
         scheduledFor: validation.date.toISOString(),
+        // R57 client-journey L1: the write cleared the client's approval (both
+        // halves of a pair), so the Queue card drops its badge.
+        clientApprovedAt: null,
         ...(result.pair ? { otherHalf: result.pair } : {}),
       },
       { status: 200 },

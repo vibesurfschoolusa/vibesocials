@@ -245,6 +245,8 @@ describe("POST /api/posts/[postJobId]/publish", () => {
 
     expect(res.status).toBe(200);
     expect(body.status).toBe("scheduled");
+    // R57 client-journey L1: the write cleared the client's approval, and the answer says so.
+    expect(body).toHaveProperty("clientApprovedAt", null);
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: "job-1", workspaceId: "ws-1", status: "draft" },
       data: { status: "scheduled", scheduledFor: new Date(FUTURE), ...CLEAR_CLIENT_CHANGE },
@@ -1051,6 +1053,8 @@ describe("POST /api/posts/[postJobId]/publish — held posts (ruling R10)", () =
         ok: true,
         status: "scheduled",
         scheduledFor: new Date(FUTURE).toISOString(),
+        // R57 client-journey L1: scheduling it cleared the client's approval.
+        clientApprovedAt: null,
       });
       expect(updateManyMock).toHaveBeenCalledTimes(1);
       expect(updateManyMock).toHaveBeenCalledWith({
@@ -1674,12 +1678,15 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
     const res = await POST(req({ scheduledFor: FUTURE, includePair: true }), ctx("job-1"));
 
     expect(res.status).toBe(200);
-    expect((await res.json()).otherHalf).toEqual({
+    const answer = await res.json();
+    expect(answer.otherHalf).toEqual({
       id: "story-1",
       kind: "story",
       changed: true,
       note: "Its Story was scheduled too.",
     });
+    // R57 client-journey L1: both halves were cleared below, and the answer says so.
+    expect(answer).toHaveProperty("clientApprovedAt", null);
     expect(updateManyMock.mock.calls).toEqual([
       [
         {

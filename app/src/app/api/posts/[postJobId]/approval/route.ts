@@ -486,6 +486,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       status: nextStatus,
       approvalState,
       scheduledFor: scheduledForIso,
+      // R57 client-journey L1: approveData cleared the client's approval (both
+      // halves of a pair), so the Queue card drops its badge.
+      ...(approving && nextStatus === "scheduled" ? { clientApprovedAt: null } : {}),
       authorEmail,
       ...(partial ? { message: `Approved. ${partial}` } : {}),
       // R2's answer, still read by a tab running the old Queue.

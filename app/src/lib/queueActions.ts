@@ -174,6 +174,15 @@ export function applyJobPatch(job: PostJobDTO, patch: JobPatch): PostJobDTO {
 }
 
 /**
+ * R57 client-journey L1: a route that cleared the client's approval answers
+ * `clientApprovedAt: null`, and the card drops its badge. An answer without
+ * it leaves the card as it is.
+ */
+function clientApprovalWithdrawn(r: Record<string, unknown>): JobPatch {
+  return r.clientApprovedAt === null ? { clientApprovedAt: null } : {};
+}
+
+/**
  * `POST /api/posts/{id}/publish` 2xx. A member's submission (202, pending)
  * keeps the card in the list as a pending draft; scheduling a draft (200)
  * turns it into a scheduled card; publishing now (202, in_progress) removes it.
@@ -191,7 +200,7 @@ export function publishOutcome(data: unknown): QueueOutcome {
     const scheduledFor = isoOrNull(r.scheduledFor);
     return {
       kind: "update",
-      patch: { status: "scheduled", ...(scheduledFor ? { scheduledFor } : {}) },
+      patch: { status: "scheduled", ...(scheduledFor ? { scheduledFor } : {}), ...clientApprovalWithdrawn(r) },
       message: "Post scheduled.",
     };
   }
@@ -226,6 +235,7 @@ export function decisionOutcome(decision: "approve" | "reject", data: unknown): 
         status: "scheduled",
         approvalState: "approved",
         ...(scheduledFor ? { scheduledFor } : {}),
+        ...clientApprovalWithdrawn(r),
       },
       message: "Approved — it will publish at its scheduled time.",
     };

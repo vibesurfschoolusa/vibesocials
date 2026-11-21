@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { otherHalfPatch } from "@/app/queue/pairActions";
+
 import {
   applyJobPatch,
   approveHint,
@@ -656,5 +658,76 @@ describe("decisionButtonState", () => {
   it("nothing in flight: neither", () => {
     expect(decisionButtonState(null, "approve")).toEqual({ loading: false, "aria-disabled": undefined });
     expect(decisionButtonState(null, "reject")).toEqual({ loading: false, "aria-disabled": undefined });
+  });
+});
+
+// R57 client-journey L1 / publishing-flow L1: Approve and Schedule clear the
+// client's approval as they schedule the post; the answer says so, and the card
+// (both halves of a Feed and Story card) drops its "Client approved" badge.
+describe("decisionOutcome and publishOutcome: a client approval the schedule withdrew", () => {
+  const held = {
+    id: "job-1",
+    status: "draft",
+    scheduledFor: "2026-11-25T15:00:00.000Z",
+    caption: "Dawn patrol",
+    approvalState: "pending",
+    clientApprovedAt: "2026-11-19T10:00:00.000Z",
+  } as unknown as PostJobDTO;
+  const approveAnswer = {
+    ok: true,
+    decision: "approve",
+    status: "scheduled",
+    approvalState: "approved",
+    scheduledFor: "2026-11-25T15:00:00.000Z",
+    clientApprovedAt: null,
+  };
+  const patchOf = (outcome: ReturnType<typeof decisionOutcome>) => (outcome.kind === "update" ? outcome.patch : {});
+
+  it("Approve on a held post that kept a client approval: no badge", () => {
+    const patch = patchOf(decisionOutcome("approve", approveAnswer));
+    expect(patch).toHaveProperty("clientApprovedAt", null);
+    const after = applyJobPatch(held, patch);
+    expect(after.status).toBe("scheduled");
+    expect(after.clientApprovedAt).toBeNull();
+  });
+
+  it("scheduling a draft that kept one: no badge", () => {
+    const draft = { ...held, approvalState: "none" } as PostJobDTO;
+    const patch = patchOf(
+      publishOutcome({ ok: true, status: "scheduled", scheduledFor: "2026-11-26T15:00:00.000Z", clientApprovedAt: null }),
+    );
+    expect(patch).toHaveProperty("clientApprovedAt", null);
+    const after = applyJobPatch(draft, patch);
+    expect(after.status).toBe("scheduled");
+    expect(after.clientApprovedAt).toBeNull();
+  });
+
+  it("a post with no client approval: unchanged but for the schedule", () => {
+    const plain = { ...held, clientApprovedAt: null } as PostJobDTO;
+    expect(applyJobPatch(plain, patchOf(decisionOutcome("approve", approveAnswer)))).toEqual({
+      ...plain,
+      status: "scheduled",
+      approvalState: "approved",
+    });
+  });
+
+  it("an answer that says nothing about it (an older server) leaves the badge as it is", () => {
+    const older: Record<string, unknown> = { ...approveAnswer };
+    delete older.clientApprovedAt;
+    expect(patchOf(decisionOutcome("approve", older))).not.toHaveProperty("clientApprovedAt");
+    expect(publishOutcome({ ok: true, status: "scheduled" })).toEqual({
+      kind: "update",
+      patch: { status: "scheduled" },
+      message: "Post scheduled.",
+    });
+  });
+
+  it("a pair: the other half's patch withdraws it too", () => {
+    for (const outcome of [
+      decisionOutcome("approve", approveAnswer),
+      publishOutcome({ ok: true, status: "scheduled", clientApprovedAt: null }),
+    ]) {
+      expect(otherHalfPatch(patchOf(outcome))).toHaveProperty("clientApprovedAt", null);
+    }
   });
 });
