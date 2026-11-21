@@ -9,7 +9,6 @@ import {
   movePhoto,
   MULTI_PHOTO_MIME_TYPES,
   multiPhotoPlatformNotes,
-  PHOTO_LIMIT_MESSAGE,
   photoTypeMessage,
   photoPickProblem,
   removePhoto,
@@ -186,10 +185,35 @@ describe("photoPickProblem (the Create page's picker)", () => {
     expect(photoPickProblem(1, [{ name: "photo", type: "image/png" }, { name: "photo", type: "image/webp" }])).toBeNull();
   });
 
-  it("refuses a pick past the limit", () => {
-    expect(photoPickProblem(0, many(11))).toBe("You can attach up to 10 photos.");
-    expect(photoPickProblem(9, many(2))).toBe("You can attach up to 10 photos.");
-    expect(photoPickProblem(10, many(1))).toBe(PHOTO_LIMIT_MESSAGE);
+  // R57 pages-a-4 L2: the pick attaches nothing, so the sentence says so, how
+  // many are attached, and how many more can be chosen.
+  it("refuses a pick past the limit, with some attached: how many more fit", () => {
+    expect(photoPickProblem(8, many(3))).toBe(
+      "None of these were added: a post holds up to 10 photos, and 8 are attached. Choose up to 2 more.",
+    );
+    expect(photoPickProblem(9, many(2))).toBe(
+      "None of these were added: a post holds up to 10 photos, and 9 are attached. Choose up to 1 more.",
+    );
+    expect(photoPickProblem(1, many(10))).toBe(
+      "None of these were added: a post holds up to 10 photos, and 1 is attached. Choose up to 9 more.",
+    );
+  });
+
+  it("refuses a fresh pick of more than 10: choose 10 or fewer", () => {
+    expect(photoPickProblem(0, many(11))).toBe(
+      "None of these were added: a post holds up to 10 photos. Choose 10 or fewer.",
+    );
+  });
+
+  it("refuses a pick when 10 are attached: no room, so remove one first", () => {
+    expect(photoPickProblem(10, many(1))).toBe(
+      "None of these were added: a post holds up to 10 photos, and 10 are attached. Remove a photo to add another.",
+    );
+  });
+
+  it("lets exactly 10 fit", () => {
+    expect(photoPickProblem(0, many(10))).toBeNull();
+    expect(photoPickProblem(7, many(3))).toBeNull();
   });
 
   // R47 pages-a L6: the sentence's step fits the case. A mixed pick with nothing
