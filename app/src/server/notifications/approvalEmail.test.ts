@@ -529,7 +529,7 @@ describe("approved to publish now, one half not sent", () => {
     caption: "x",
     scheduledFor: null,
     appBaseUrl: "https://vibesocials.wtf",
-    alsoAsStory: ["INSTAGRAM"],
+    alsoAsStory: ["instagram"],
   } as const;
   const WHY = "each of its platforms is either not connected or needs reconnecting.";
 
