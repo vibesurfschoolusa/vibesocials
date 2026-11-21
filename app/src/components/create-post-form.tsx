@@ -731,7 +731,7 @@ export function fileLostMessage(connected: readonly Platform[]): string {
 export type FileLostNotice = "none" | "fresh" | "seen";
 
 /** Why the file went away. A pick refused for the file itself is a "refused" event instead. */
-export type FileLostReason = "prepare-failed" | "library-failed" | "photos-failed";
+export type FileLostReason = "prepare-failed" | "library-failed" | "photos-failed" | "share-failed";
 
 /**
  * R51 new-customer L1-L2: a single pick refused for the file itself (over 512
@@ -2274,8 +2274,12 @@ function CreatePostFormInner({
   // Not cancelled on unmount on purpose: the take empties the cache, so a
   // dropped result would lose the file (React's dev double-mount would do
   // exactly that).
-  const attachSharedFile = useEffectEvent((file: File) => {
-    void attachPickedFile(file);
+  // R54 client-journey: a share that brought no file (none stored, or stale)
+  // is a file the person meant to attach that didn't arrive: the lost-file
+  // notice and its stop, so a caption alone doesn't silently post as text.
+  const attachSharedFile = useEffectEvent((file: File | null) => {
+    if (file) void attachPickedFile(file);
+    else loseFile("share-failed");
   });
   const sharedParam = searchParams.get("shared");
   const sharedTakenRef = useRef(false);
@@ -2286,8 +2290,8 @@ function CreatePostFormInner({
       const file = await takeSharedFile();
       // Arrived (now a pick being prepared, in the same render) or found nothing.
       setSharedSettled(true);
-      if (!file) return;
       attachSharedFile(file);
+      // Removed whether a file came or not, so a reload doesn't repeat the notice.
       const url = new URL(window.location.href);
       url.searchParams.delete("shared");
       window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);

@@ -572,3 +572,86 @@ describe("R51 review: the refused file on the phone's bar, and what clears it", 
     expect(lineSays(TOO_LARGE)).toBe(false);
   });
 });
+
+// R54 client-journey: a share to the Android app that brought no file (none
+// stored, or stale) opened Create with no word, and a caption then posted as
+// text. It is a file the person meant to attach that didn't arrive: the
+// lost-file notice and its stop. ?shared is removed once the take settles.
+describe("R54: a shared file that didn't arrive", () => {
+  const replaced: string[] = [];
+  function share(stored: Response | null) {
+    const entries = new Map<string, Response>();
+    if (stored) entries.set("/shared-file", stored);
+    vi.stubGlobal("caches", {
+      open: async () => ({
+        match: async (key: string) => entries.get(key),
+        delete: async (key: string) => entries.delete(key),
+      }),
+    });
+  }
+  const storedAt = (at: number) =>
+    new Response("photo", { headers: { "Content-Type": "image/jpeg", "X-File-Name": "wave.jpg", "X-Shared-At": String(at) } });
+  async function openShared(platforms: string[], params = "shared=1") {
+    await act(async () => root.unmount());
+    conn.platforms = platforms;
+    nav.params = new URLSearchParams(params);
+    replaced.length = 0;
+    Object.assign(window as object, {
+      location: { href: `http://localhost/posts/new${params ? `?${params}` : ""}` },
+      history: { state: null, replaceState: (_s: unknown, _t: string, url: string) => replaced.push(url) },
+    });
+    root = createRoot(container as unknown as HTMLElement);
+    await mount();
+    await settle();
+  }
+
+  it("a fresh file: attached, no notice, ?shared removed", async () => {
+    share(storedAt(Date.now() - 1000));
+    await openShared(["x"]);
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
+    expect(pageSays("wave.jpg")).toBe(true);
+    expect(replaced).toEqual(["/posts/new"]);
+  });
+
+  it("no file in the cache: the notice, ?shared removed, and the press is stopped", async () => {
+    share(null);
+    await openShared(["x"]);
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(true);
+    expect(replaced).toEqual(["/posts/new"]);
+    await typeCaption("Surf lesson today");
+    await submit();
+    expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(true);
+    expect(calls).not.toContain("/api/posts");
+  });
+
+  it("a stale file: the same notice and stop", async () => {
+    share(storedAt(Date.now() - 2 * 60 * 60 * 1000));
+    await openShared(["x"]);
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(true);
+    expect(replaced).toEqual(["/posts/new"]);
+    await typeCaption("Surf lesson today");
+    await submit();
+    expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(true);
+    expect(calls).not.toContain("/api/posts");
+  });
+
+  it("no file, only Instagram connected: the notice offers no going on without it", async () => {
+    share(null);
+    await openShared(["instagram"]);
+    expect(lineSays(FILE_LOST_FILE_ONLY_MESSAGE)).toBe(true);
+  });
+
+  it("nothing connected yet: nothing taken, ?shared kept", async () => {
+    share(storedAt(Date.now() - 1000));
+    await openShared([]);
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
+    expect(replaced).toEqual([]);
+  });
+
+  it("no shared parameter: nothing", async () => {
+    share(null);
+    await openShared(["x"], "");
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
+    expect(replaced).toEqual([]);
+  });
+});
