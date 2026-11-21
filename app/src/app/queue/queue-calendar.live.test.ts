@@ -15,6 +15,7 @@ import { AnnouncerProvider } from "@/components/ui/announcer";
 import { ToastProvider } from "@/components/ui/toast";
 
 import { QueueCalendar } from "./queue-calendar";
+import type { QueueCard } from "./pairActions";
 
 let root: Root;
 let container: FakeNode;
@@ -70,7 +71,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function mount() {
+async function mount(extra: { jobs?: QueueCard[]; moreToLoad?: boolean } = {}) {
   await act(async () => {
     root.render(
       createElement(
@@ -79,7 +80,7 @@ async function mount() {
         createElement(
           ToastProvider,
           null,
-          createElement(QueueCalendar, { jobs: [], onShowList: () => {}, onEdit: () => {}, onRescheduled: () => {} }),
+          createElement(QueueCalendar, { jobs: [], onShowList: () => {}, onEdit: () => {}, onRescheduled: () => {}, ...extra }),
         ),
       ),
     );
@@ -106,5 +107,47 @@ describe("Queue calendar: the month is announced when it changes", () => {
     });
     await settle();
     expect(region().textContent).toBe(monthOf(0));
+  });
+});
+
+// R61 pages-a L1: an emptied page above Load more isn't an empty month; older
+// pages may hold this month's posts.
+describe("Queue calendar: the empty-month line and Load more", () => {
+  const thisMonthCard = (): QueueCard => {
+    const now = new Date();
+    return {
+      id: "j1",
+      status: "scheduled",
+      createdAt: "2026-11-01T00:00:00.000Z",
+      updatedAt: "2026-11-01T00:00:00.000Z",
+      scheduledFor: new Date(now.getFullYear(), now.getMonth(), 15, 12, 0).toISOString(),
+      caption: "Summer sale",
+      platformCaptions: null,
+      results: [],
+      media: null,
+      mediaCount: 1,
+      publish: null,
+      createdBy: null,
+      approvalState: "none",
+    } as QueueCard;
+  };
+  const text = () => String(container.textContent);
+
+  it("an empty page with more to load: the next-page line, not the empty month", async () => {
+    await mount({ jobs: [], moreToLoad: true });
+    expect(text()).toContain("Older posts may be on the next page.");
+    expect(text()).not.toContain("Nothing scheduled this month.");
+  });
+
+  it("the last page and empty: the empty month", async () => {
+    await mount({ jobs: [], moreToLoad: false });
+    expect(text()).toContain("Nothing scheduled this month.");
+    expect(text()).not.toContain("Older posts may be on the next page.");
+  });
+
+  it("a month with cards: no line", async () => {
+    await mount({ jobs: [thisMonthCard()], moreToLoad: true });
+    expect(text()).not.toContain("Nothing scheduled this month.");
+    expect(text()).not.toContain("Older posts may be on the next page.");
   });
 });

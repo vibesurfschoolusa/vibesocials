@@ -70,6 +70,8 @@ interface QueueCalendarProps {
   onReload?: () => void;
   /** R31 pages L2: the workspace the Queue was drawn for, sent with each move. */
   workspaceId?: string | null;
+  /** R61 pages-a L1: older pages are still to load, so an empty list isn't an empty month. */
+  moreToLoad?: boolean;
 }
 
 /**
@@ -122,6 +124,7 @@ export function QueueCalendar({
   onShowList,
   onReload = () => {},
   workspaceId = null,
+  moreToLoad = false,
 }: QueueCalendarProps) {
   const toast = useToast();
   const [monthCursor, setMonthCursor] = useState(() => {
@@ -242,9 +245,13 @@ export function QueueCalendar({
         </div>
       </div>
 
-      {/* N3: an empty Queue still shows the month, with this line above it. */}
+      {/* N3: an empty Queue still shows the month, with this line above it.
+          R61 pages-a L1: while Load more is below, page 2 may hold this
+          month's posts, so the list's sentence shows instead. */}
       {jobs.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Nothing scheduled this month.</p>
+        <p className="text-sm text-muted-foreground">
+          {moreToLoad ? "Older posts may be on the next page." : "Nothing scheduled this month."}
+        </p>
       ) : null}
 
       {offCalendar.awaitingApproval > 0 || offCalendar.drafts > 0 ? (

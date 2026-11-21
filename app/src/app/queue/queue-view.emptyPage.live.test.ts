@@ -179,6 +179,9 @@ describe("Queue: every loaded card removed", () => {
     await showCalendar();
     expect(calendarShown()).toBe(true);
     expect(loadMore()).toHaveLength(1);
+    // R61 pages-a L1: page 2 may hold this month's posts.
+    expect(text()).not.toContain("Nothing scheduled this month.");
+    expect(text()).toContain("Older posts may be on the next page.");
   }, 10_000);
 
   it("calendar, the last page: the empty month and no Load more, as now", async () => {

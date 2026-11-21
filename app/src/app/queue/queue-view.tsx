@@ -1739,6 +1739,7 @@ export function QueueView({
                 onRescheduled={applyReschedule}
                 onReload={reloadSilently}
                 workspaceId={workspaceId}
+                moreToLoad={nextCursor !== null}
               />
             ) : (cards ?? []).length === 0 ? (
               // R60 client-journey-2 L1: every card on this page was removed; Load more is below.
