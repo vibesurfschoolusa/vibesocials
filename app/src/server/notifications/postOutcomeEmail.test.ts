@@ -242,6 +242,76 @@ describe("buildPostOutcomeEmail", () => {
     expect(email.subject).toBe("Surf Co: your post failed to publish");
   });
 
+  // R54 AO1 fix review: a row that may already be live (isUnconfirmedResult)
+  // is counted on its own, so the heading never calls it failed or published.
+  describe("headings with rows that may already be live", () => {
+    const unconfirmed = (platform: PostOutcomeResultSummary["platform"], errorCode: string, story?: boolean) => ({
+      platform,
+      status: "failed" as const,
+      errorCode,
+      errorMessage: "We couldn't confirm this post.",
+      ...(story ? { story } : {}),
+    });
+    const heading = (results: PostOutcomeResultSummary[]) => {
+      const email = buildPostOutcomeEmail({ results, appBaseUrl: null, ...WS });
+      const h1 = email.html.slice(email.html.indexOf("<h1>") + 4, email.html.indexOf("</h1>"));
+      return { subject: email.subject, h1 };
+    };
+
+    it.each(["PUBLISH_UNCONFIRMED", "TIKTOK_PUBLISH_PENDING"])("one row, %s: we couldn't confirm it", (code) => {
+      const { subject, h1 } = heading([unconfirmed("tiktok", code)]);
+      expect(h1).toBe("We couldn&#39;t confirm your post was published");
+      expect(subject).toBe("Surf Co: we couldn't confirm your post was published");
+      expect(subject).not.toMatch(/failed|successfully/);
+    });
+
+    it("all rows unconfirmed: we couldn't confirm it", () => {
+      const { subject } = heading([unconfirmed("tiktok", "TIKTOK_PUBLISH_PENDING"), unconfirmed("x", "PUBLISH_UNCONFIRMED")]);
+      expect(subject).toBe("Surf Co: we couldn't confirm your post was published");
+    });
+
+    it("succeeded plus unconfirmed: the count, with the unconfirmed one named", () => {
+      const { subject } = heading([{ platform: "x", status: "success" }, unconfirmed("tiktok", "TIKTOK_PUBLISH_PENDING")]);
+      expect(subject).toBe("Surf Co: your post finished: 1 of 2 platforms succeeded, 1 not confirmed");
+      expect(subject).not.toMatch(/successfully/);
+    });
+
+    it("failed plus unconfirmed: the count, not failed to publish to all", () => {
+      const { subject } = heading([
+        { platform: "youtube", status: "failed", errorMessage: "Quota exceeded" },
+        unconfirmed("x", "PUBLISH_UNCONFIRMED"),
+      ]);
+      expect(subject).toBe("Surf Co: your post finished: 0 of 2 platforms succeeded, 1 not confirmed");
+      expect(subject).not.toMatch(/failed/);
+    });
+
+    it("a Feed and Story pair with one half unconfirmed", () => {
+      const { subject } = heading([
+        { platform: "instagram", status: "success" },
+        unconfirmed("instagram", "PUBLISH_UNCONFIRMED", true),
+      ]);
+      expect(subject).toBe("Surf Co: your post and Story finished: 1 of 2 succeeded, 1 not confirmed");
+    });
+
+    it("a Feed and Story pair, both unconfirmed", () => {
+      const { subject } = heading([
+        unconfirmed("instagram", "PUBLISH_UNCONFIRMED"),
+        unconfirmed("instagram", "PUBLISH_UNCONFIRMED", true),
+      ]);
+      expect(subject).toBe("Surf Co: we couldn't confirm your post and Story were published");
+    });
+
+    it("a Story alone, unconfirmed", () => {
+      expect(heading([unconfirmed("instagram", "PUBLISH_UNCONFIRMED", true)]).subject).toBe(
+        "Surf Co: we couldn't confirm your Story was published",
+      );
+    });
+
+    it("a stalled row still counts as failed", () => {
+      expect(heading([{ platform: "x", status: "failed", errorCode: "PUBLISH_STALLED" }]).subject).toBe("Surf Co: your post failed to publish");
+    });
+  });
+
   it("includes the Activity link when a base URL is given", () => {
     const email = buildPostOutcomeEmail({
       results: mixedResults,
@@ -1014,7 +1084,8 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
       afterPairWait: true,
     });
 
-    expect(sent(0).subject).toBe("Surf Co: your post and Story finished: 2 of 4 succeeded");
+    // R54: the two Story rows may already be live, so they are counted on their own.
+    expect(sent(0).subject).toBe("Surf Co: your post and Story finished: 2 of 4 succeeded, 2 not confirmed");
     // R27 MM4: an unconfirmed row says the shared sentence (it may already be live).
     expect(sent(0).html).toContain(`<li>Instagram Story: ${escapeForHtml(PUBLISH_UNCONFIRMED_MESSAGE)}</li>`);
     expect(keyOf(0)).toBe(keyOf(1));

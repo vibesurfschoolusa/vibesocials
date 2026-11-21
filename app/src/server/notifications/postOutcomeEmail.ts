@@ -150,11 +150,27 @@ function oneLine(value: string): string {
 function buildHeadline(results: readonly PostOutcomeResultSummary[]): string {
   const total = results.length;
   const succeededCount = results.filter((r) => r.status === "success").length;
-  const failedCount = results.filter((r) => r.status === "failed" || r.notSent).length;
+  // R54: a row that may already be live (the card's rule) is neither failed nor
+  // published, so the heading counts it on its own and never invites a retry.
+  const isUnconfirmed = (r: PostOutcomeResultSummary) =>
+    !r.notSent && isUnconfirmedResult({ status: r.status, errorCode: r.errorCode ?? null });
+  const unconfirmedCount = results.filter(isUnconfirmed).length;
+  const failedCount = results.filter((r) => (r.status === "failed" || r.notSent) && !isUnconfirmed(r)).length;
   if (total === 0) return "Your post has finished processing";
   const stories = results.filter((r) => r.story).length;
+  const pair = stories > 0 && stories < total;
+  if (unconfirmedCount > 0) {
+    if (unconfirmedCount === total) {
+      const what = pair ? "your post and Story were" : stories === total ? "your Story was" : "your post was";
+      return `We couldn't confirm ${what} published`;
+    }
+    const tally = pair
+      ? `Your post and Story finished: ${succeededCount} of ${total} succeeded`
+      : `${stories === total ? "Your Story" : "Your post"} finished: ${succeededCount} of ${total} platforms succeeded`;
+    return `${tally}, ${unconfirmedCount} not confirmed`;
+  }
   // A Feed and Story pair: its rows are feed posts and Stories, not platforms.
-  if (stories > 0 && stories < total) {
+  if (pair) {
     if (failedCount === 0) return "Your post and Story published successfully";
     if (succeededCount === 0) return "Your post and Story failed to publish";
     return `Your post and Story finished: ${succeededCount} of ${total} succeeded`;
