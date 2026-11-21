@@ -17,6 +17,8 @@ vi.mock("@/hooks/useConnections", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useConnections")>()),
   useConnections: () => ({ connections: [{ platform: "x", connected: true }], loading: false, error: null, reload: () => {} }),
 }));
+/** A file named "slowprep" stays preparing until the test lets it go. */
+const prepareRelease: (() => void)[] = [];
 vi.mock("@/lib/prepareUploadFile", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/lib/prepareUploadFile")>();
   // A file named "huge" is refused as one over 512 MB is (R63: the refused replacement).
@@ -25,7 +27,9 @@ vi.mock("@/lib/prepareUploadFile", async (importOriginal) => {
     prepareUploadFile: (file: File) =>
       file.name.includes("huge")
         ? Promise.reject(new real.PrepareFileError("file", "This file is over 512 MB, so it can't be posted."))
-        : Promise.resolve(file),
+        : file.name.includes("slowprep")
+          ? new Promise<File>((resolve) => prepareRelease.push(() => resolve(file)))
+          : Promise.resolve(file),
   };
 });
 /** Every upload asked for: the key and its signal. Keys naming a `stall` entry never finish unless aborted. */
@@ -484,6 +488,55 @@ describe("Create: the media changed while it uploads", () => {
     await pick(video("huge"));
 
     expect(pageSays("Uploading")).toBe(false);
+  }, 10_000);
+
+  // R63 coordinator: the page left while the replacement is still being prepared.
+  async function leaveForm() {
+    await act(async () => {
+      root.render(createElement(ToastProvider, null, null));
+    });
+    await settle();
+  }
+
+  it("a pressed send whose replacement is still being prepared ends quietly when the page is left", async () => {
+    stall.add("waited");
+    prepareRelease.length = 0;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await typeCaption("Surf lesson today");
+      await pick(video("waited"));
+      await pressPublishAndConfirm();
+      await pick(video("slowprep"));
+      expect(uploadsOf("waited")[0]!.signal?.aborted).toBe(true);
+
+      await leaveForm();
+      // The replacement finishes preparing after the page is gone.
+      await act(async () => prepareRelease.forEach((go) => go()));
+      await settle();
+
+      expect(posted).toHaveLength(0);
+      expect(pageSays("nothing was posted")).toBe(false);
+      expect(pageSays(UNEXPECTED)).toBe(false);
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  }, 10_000);
+
+  it("a pressed Publish waiting on an upload that was not replaced still posts after the page is left", async () => {
+    stall.add("kept");
+    await typeCaption("Surf lesson today");
+    await pick(video("kept"));
+    await pressPublishAndConfirm();
+
+    await leaveForm();
+    expect(uploadsOf("kept")[0]!.signal?.aborted).toBe(false);
+    await act(async () => release.get(uploadsOf("kept")[0]!.key)!());
+    await settle();
+
+    expect(posted).toHaveLength(1);
+    expect(pageSays("nothing was posted")).toBe(false);
+    expect(pageSays(UNEXPECTED)).toBe(false);
   }, 10_000);
 
   it("a file replaced by another mid-upload: the new file's bar shows, not the old one's", async () => {
