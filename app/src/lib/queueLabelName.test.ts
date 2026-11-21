@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { cardName, labelName } from "./queueLabelName";
+import { cardName, labelName, wasScheduledDraft } from "./queueLabelName";
 
 // R5-pages L12: a button's name carries the caption's start, not all of it.
 describe("labelName, the caption in a Queue button's name", () => {
@@ -79,5 +79,18 @@ describe("cardName, a card's name in its buttons", () => {
   it("a Story half with no readable time is the caption and Story", () => {
     expect(cardName("Saturday surf lesson", null, { storyHalf: true })).toBe("Saturday surf lesson, Story");
     expect(cardName("Saturday surf lesson", "not a date", { storyHalf: true })).toBe("Saturday surf lesson, Story");
+  });
+});
+
+// R59 client-journey L1: a post the client sent back from /v is a draft that keeps its time.
+describe("wasScheduledDraft", () => {
+  const iso = "2026-11-21T14:00:00.000Z";
+  it("a draft that still has a time", () => {
+    expect(wasScheduledDraft({ status: "draft", approvalState: "none", scheduledFor: iso })).toBe(true);
+  });
+  it("not a plain draft, a scheduled post, or a post waiting for approval (Proposed for)", () => {
+    expect(wasScheduledDraft({ status: "draft", approvalState: "none", scheduledFor: null })).toBe(false);
+    expect(wasScheduledDraft({ status: "scheduled", approvalState: "none", scheduledFor: iso })).toBe(false);
+    expect(wasScheduledDraft({ status: "draft", approvalState: "pending", scheduledFor: iso })).toBe(false);
   });
 });

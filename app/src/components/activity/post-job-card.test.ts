@@ -16,6 +16,7 @@ import { answerLostText } from "@/lib/answerLost";
 import { dispatchFailedText } from "@/lib/composerSubmitOutcome";
 
 import {
+  activityCardName,
   ByName,
   cardTime,
   createSendAgain,
@@ -151,7 +152,12 @@ describe("cardTime", () => {
   });
   it("shows the creation time for a post published straight away, and for a draft", () => {
     expect(cardTime({ status: "completed", createdAt: created, scheduledFor: null })).toEqual({ label: null, iso: created });
-    expect(cardTime({ status: "draft", createdAt: created, scheduledFor: scheduled })).toEqual({ label: null, iso: created });
+    expect(cardTime({ status: "draft", createdAt: created, scheduledFor: null })).toEqual({ label: null, iso: created });
+  });
+  // R59 client-journey L1: a post the client sent back from /v is a draft that keeps its time.
+  it("a draft that still has a time: Was scheduled for that time; one waiting for approval, as before", () => {
+    expect(cardTime({ status: "draft", createdAt: created, scheduledFor: scheduled })).toEqual({ label: "Was scheduled for", iso: scheduled });
+    expect(cardTime({ status: "draft", approvalState: "pending", createdAt: created, scheduledFor: scheduled })).toEqual({ label: null, iso: created });
   });
   it("is null with no time at all", () => {
     expect(cardTime({ status: "completed", createdAt: null, scheduledFor: null })).toBeNull();
@@ -863,5 +869,30 @@ describe("PostJobCard - repeated buttons name the post", () => {
     const b = nameOf(html(job({ id: "b", status: "failed", scheduledFor: "2026-11-12T15:00:00.000Z" })));
     expect(a).toBe(`Two spots left today, ${at("2026-11-11T15:00:00.000Z")}`);
     expect(b).toBe(`Two spots left today, ${at("2026-11-12T15:00:00.000Z")}`);
+  });
+});
+
+// R59 client-journey L1: a post the client sent back from /v shows the time it was scheduled for.
+describe("PostJobCard - a draft that still has a time", () => {
+  it("says Was scheduled for that time, not its save time", () => {
+    const html = render(job({ status: "draft", results: [], scheduledFor: "2026-11-21T14:00:00.000Z" }));
+    expect(html).toContain("Was scheduled for <time");
+    expect(html).toContain('dateTime="2026-11-21T14:00:00.000Z"');
+  });
+  it("two posts of one series the client sent back get different names", () => {
+    const at = (iso: string) =>
+      new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    const sentBack = (scheduledFor: string) =>
+      job({ status: "draft", caption: "Sunday session", createdAt: "2026-11-14T15:02:00.000Z", scheduledFor });
+    expect(activityCardName(sentBack("2026-11-21T14:00:00.000Z"))).toBe(`Sunday session, was ${at("2026-11-21T14:00:00.000Z")}`);
+    expect(activityCardName(sentBack("2026-11-28T14:00:00.000Z"))).toBe(`Sunday session, was ${at("2026-11-28T14:00:00.000Z")}`);
+  });
+  it("a plain draft and a scheduled post: as before", () => {
+    const at = (iso: string) =>
+      new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    expect(activityCardName(job({ status: "draft", caption: "Dawn" }))).toBe(`Dawn, ${at("2026-11-10T10:00:00.000Z")}`);
+    expect(activityCardName(job({ status: "scheduled", caption: "Dawn", scheduledFor: "2026-11-21T14:00:00.000Z" }))).toBe(
+      `Dawn, ${at("2026-11-21T14:00:00.000Z")}`,
+    );
   });
 });

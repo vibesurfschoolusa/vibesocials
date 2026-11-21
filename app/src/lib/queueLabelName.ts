@@ -37,3 +37,18 @@ export function cardName(
   if (!date || Number.isNaN(date.getTime())) return head;
   return `${head}, ${options.was ? "was " : ""}${date.toLocaleString(undefined, CARD_TIME)}`;
 }
+
+/**
+ * R59 client-journey L1: a draft that still carries a time, such as a post the
+ * client sent back from /v (the change request keeps its time). A Repeat
+ * series is saved in one request, so its save time can't tell its posts
+ * apart; the time it was scheduled for can, named with `was`. A post waiting
+ * for approval shows its time as Proposed for instead.
+ */
+export function wasScheduledDraft(job: {
+  status: string;
+  approvalState?: string | null;
+  scheduledFor: string | null;
+}): boolean {
+  return job.status === "draft" && job.approvalState !== "pending" && Boolean(job.scheduledFor);
+}

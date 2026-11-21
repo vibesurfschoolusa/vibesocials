@@ -15,7 +15,7 @@ import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
-import { cardName } from "@/lib/queueLabelName";
+import { cardName, wasScheduledDraft } from "@/lib/queueLabelName";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { answerLostText } from "@/lib/answerLost";
 import { dispatchFailedText } from "@/lib/composerSubmitOutcome";
@@ -223,15 +223,36 @@ function orderResults(results: PostJobDTO["results"]): PostJobDTO["results"] {
  */
 export function cardTime(job: {
   status: string;
+  approvalState?: string | null;
   createdAt: string | null;
   scheduledFor: string | null;
-}): { label: "Scheduled for" | "Publishing time:" | "Was set for" | null; iso: string } | null {
+}): { label: "Scheduled for" | "Publishing time:" | "Was set for" | "Was scheduled for" | null; iso: string } | null {
+  // R59 client-journey L1: a draft that kept its time (sent back from /v) shows that time.
+  if (job.scheduledFor && wasScheduledDraft(job)) return { label: "Was scheduled for", iso: job.scheduledFor };
   if (job.scheduledFor && job.status !== "draft") {
     const label =
       job.status === "scheduled" ? "Scheduled for" : job.status === "cancelled" ? "Was set for" : "Publishing time:";
     return { label, iso: job.scheduledFor };
   }
   return job.createdAt ? { label: null, iso: job.createdAt } : null;
+}
+
+/**
+ * The card's name in its buttons. R57 pages-b L1: the buttons repeat on every
+ * card, so each one's name carries the post's caption, as the Queue's do.
+ * R58 pages-a L1: and the card's time, since a series shares one caption.
+ * R58 fix review L1: a Story half shares its Feed job's caption and time, so
+ * its name says Story. R59 client-journey L1: a draft that kept its time is
+ * named "was" that time.
+ */
+export function activityCardName(
+  job: Pick<PostJobDTO, "caption" | "status" | "approvalState" | "createdAt" | "scheduledFor" | "storyOf" | "storyHalf">,
+): string {
+  const time = cardTime(job);
+  return cardName(job.caption, time?.iso, {
+    storyHalf: Boolean(job.storyOf || job.storyHalf),
+    was: time?.label === "Was scheduled for",
+  });
 }
 
 /** What Send again says when the server refused without a sentence. */
@@ -480,10 +501,7 @@ export function PostJobCard({
   const status = JOB_STATUS_META[displayedJobStatus(job.status, sentAgain)];
   const results = orderResults(job.results);
   const time = cardTime(job);
-  // R57 pages-b L1: the buttons repeat on every card, so each one's name carries the post's caption, as the Queue's do.
-  // R58 pages-a L1: and the card's time, since a series shares one caption.
-  // R58 fix review L1: a Story half shares its Feed job's caption and time, so its name says Story.
-  const name = cardName(job.caption, time?.iso, { storyHalf: Boolean(job.storyOf || job.storyHalf) });
+  const name = activityCardName(job);
   // 2026-11-10: platforms this post went to as a Story (labelled, and no link built from the id).
   const isStory = (platform: Platform) => job.storyPlatforms?.includes(platform) ?? false;
   const postUrl = (result: PostJobDTO["results"][number]) =>

@@ -16,6 +16,7 @@ import {
   isTextPost,
   pairLabel,
   queueCardName,
+  queueCardTime,
   queueListUrl,
   QUEUE_FAILED_TEXT,
   QUEUE_OFFLINE_TEXT,
@@ -253,8 +254,23 @@ describe("queueCardName", () => {
   it("uses the time the card shows: Proposed for, Scheduled for, else Saved", () => {
     const proposed = job("p", { caption: "Dawn", approvalState: "pending", scheduledFor: "2026-11-21T14:00:00.000Z" });
     expect(queueCardName(proposed)).toBe(`Dawn, ${at("2026-11-21T14:00:00.000Z")}`);
-    const draft = job("d", { caption: "Dawn", scheduledFor: "2026-11-21T14:00:00.000Z" });
+    const draft = job("d", { caption: "Dawn" });
     expect(queueCardName(draft)).toBe(`Dawn, ${at("2026-11-01T00:00:00.000Z")}`);
+  });
+
+  // R59 client-journey L1: a Repeat series is saved in one request, so its posts share a save time.
+  it("two posts of one series the client sent back are named by the time each was scheduled for", () => {
+    const sentBack = (id: string, scheduledFor: string) =>
+      job(id, { caption: "Sunday session", scheduledFor, clientChangeRequestedAt: "2026-11-15T09:00:00.000Z" });
+    const a = queueCardName(sentBack("a", "2026-11-21T14:00:00.000Z"));
+    const b = queueCardName(sentBack("b", "2026-11-28T14:00:00.000Z"));
+    expect(a).toBe(`Sunday session, was ${at("2026-11-21T14:00:00.000Z")}`);
+    expect(b).toBe(`Sunday session, was ${at("2026-11-28T14:00:00.000Z")}`);
+  });
+
+  it("a plain draft with no time and a scheduled post: as before", () => {
+    expect(queueCardName(job("d", { caption: "Dawn" }))).toBe(`Dawn, ${at("2026-11-01T00:00:00.000Z")}`);
+    expect(queueCardName(series("s", "2026-11-21T14:00:00.000Z"))).toBe(`Saturday surf lesson, ${at("2026-11-21T14:00:00.000Z")}`);
   });
 
   it("a post with no caption is Untitled post plus its time", () => {
@@ -279,7 +295,7 @@ describe("Queue card by lines", () => {
   it("name the author through ByName", () => {
     const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
     expect(queueSource.match(/by \{job\.createdBy\.name\}/g) ?? []).toEqual([]);
-    expect(queueSource.match(/ · by <ByName name=\{job\.createdBy\.name\} \/>/g) ?? []).toHaveLength(3);
+    expect(queueSource.match(/ · by <ByName name=\{job\.createdBy\.name\} \/>/g) ?? []).toHaveLength(1);
   });
 });
 
@@ -505,5 +521,25 @@ describe("The Edit dialog's time", () => {
     expect(save).toContain("editTimeToSend({");
     expect(save).toContain("savedScheduledFor: job.scheduledFor");
     expect(save).not.toContain("checkScheduleTime(");
+  });
+});
+
+// R59 client-journey L1: the line under the caption shows the time the name carries.
+describe("queueCardTime", () => {
+  const iso = "2026-11-21T14:00:00.000Z";
+  it("a draft that still has a time: Was scheduled for that time", () => {
+    expect(queueCardTime(job("d", { scheduledFor: iso }))).toEqual({ label: "Was scheduled for", iso });
+  });
+  it("a plain draft: Saved, at its save time", () => {
+    expect(queueCardTime(job("d"))).toEqual({ label: "Saved", iso: "2026-11-01T00:00:00.000Z" });
+  });
+  it("a scheduled post: Scheduled for; a post waiting for approval: Proposed for", () => {
+    expect(queueCardTime(job("s", { status: "scheduled", scheduledFor: iso }))).toEqual({ label: "Scheduled for", iso });
+    expect(queueCardTime(job("p", { approvalState: "pending", scheduledFor: iso }))).toEqual({ label: "Proposed for", iso });
+  });
+  it("the card shows the label and the time from queueCardTime", () => {
+    const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+    expect(queueSource).toContain("const time = queueCardTime(job);");
+    expect(queueSource).toContain("{time.label}{\" \"}");
   });
 });

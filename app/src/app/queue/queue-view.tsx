@@ -57,7 +57,7 @@ import {
 } from "./pairActions";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { cn } from "@/lib/cn";
-import { cardName } from "@/lib/queueLabelName";
+import { cardName, wasScheduledDraft } from "@/lib/queueLabelName";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { queueOverridesToSend, type PlatformOverrides } from "@/lib/platformOverrides";
@@ -295,16 +295,31 @@ interface QueueCardProps {
   approveRefusal: string | null;
 }
 
+type CardTimeFacts = Pick<QueueCardPost, "status" | "approvalState" | "scheduledFor" | "createdAt">;
+
 /**
- * The card's name in its buttons: the caption and the time the card shows
- * (Proposed for, Scheduled for, else Saved), through cardName.
+ * The time the card shows under its caption: Proposed for, Scheduled for, Was
+ * scheduled for (a draft that kept its time, R59 client-journey L1), else Saved.
  */
-export function queueCardName(
-  job: Pick<QueueCardPost, "caption" | "status" | "approvalState" | "scheduledFor" | "createdAt" | "storyOf" | "storyHalf">,
-): string {
-  const shown =
-    (job.approvalState === "pending" || job.status === "scheduled") && job.scheduledFor ? job.scheduledFor : job.createdAt;
-  return cardName(job.caption, shown, { storyHalf: Boolean(job.storyOf || job.storyHalf) });
+export function queueCardTime(job: CardTimeFacts): {
+  label: "Proposed for" | "Scheduled for" | "Was scheduled for" | "Saved";
+  iso: string;
+} {
+  if (job.scheduledFor) {
+    if (job.approvalState === "pending") return { label: "Proposed for", iso: job.scheduledFor };
+    if (job.status === "scheduled") return { label: "Scheduled for", iso: job.scheduledFor };
+    if (wasScheduledDraft(job)) return { label: "Was scheduled for", iso: job.scheduledFor };
+  }
+  return { label: "Saved", iso: job.createdAt };
+}
+
+/** The card's name in its buttons: the caption and the time the card shows, through cardName. */
+export function queueCardName(job: CardTimeFacts & Pick<QueueCardPost, "caption" | "storyOf" | "storyHalf">): string {
+  const time = queueCardTime(job);
+  return cardName(job.caption, time.iso, {
+    storyHalf: Boolean(job.storyOf || job.storyHalf),
+    was: time.label === "Was scheduled for",
+  });
 }
 
 function QueueCard({
@@ -320,10 +335,10 @@ function QueueCard({
   deciding,
   approveRefusal,
 }: QueueCardProps) {
-  const awaitingApproval = job.approvalState === "pending";
   const actions = getQueueCardActions(job, viewer);
   const badge = queueStatusBadge(job);
   const title = job.caption?.trim() || "Untitled post";
+  const time = queueCardTime(job);
   const name = queueCardName(job);
   // 2026-11-01 audit (M1): the per-platform texts that REPLACE the base caption
   // on publish. Shown on every card that has them, most importantly to the owner
@@ -359,29 +374,11 @@ function QueueCard({
           {/* A post awaiting approval is technically a draft, but it may carry
               the time its author chose — show that, or the owner is asked to
               approve a schedule they can't see. */}
-          {awaitingApproval && job.scheduledFor ? (
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Proposed for{" "}
-              <time dateTime={job.scheduledFor}>
-                {formatTimestamp(job.scheduledFor)}
-              </time>
-              {showAttribution && job.createdBy ? <> · by <ByName name={job.createdBy.name} /></> : null}
-            </p>
-          ) : job.status === "scheduled" && job.scheduledFor ? (
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Scheduled for{" "}
-              <time dateTime={job.scheduledFor}>
-                {formatTimestamp(job.scheduledFor)}
-              </time>
-              {showAttribution && job.createdBy ? <> · by <ByName name={job.createdBy.name} /></> : null}
-            </p>
-          ) : (
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Saved{" "}
-              <time dateTime={job.createdAt}>{formatTimestamp(job.createdAt)}</time>
-              {showAttribution && job.createdBy ? <> · by <ByName name={job.createdBy.name} /></> : null}
-            </p>
-          )}
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {time.label}{" "}
+            <time dateTime={time.iso}>{formatTimestamp(time.iso)}</time>
+            {showAttribution && job.createdBy ? <> · by <ByName name={job.createdBy.name} /></> : null}
+          </p>
           <p className="mt-1 text-xs text-muted-foreground">
             {job.publish?.targetPlatforms?.length
               ? `Publishing to ${listing.platformLabels.join(", ")}`
