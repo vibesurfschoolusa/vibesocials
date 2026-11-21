@@ -1,3 +1,4 @@
+import { truncateGraphemes } from "@/lib/truncate";
 import { emailSettingsLine, workspaceLink } from "@/server/notifications/links";
 
 /**
@@ -31,10 +32,14 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-/** The first `max` characters, counted by code point so an emoji is never split. */
+/**
+ * The first `max` characters, then "…" when cut. R59 client-journey-2 L1:
+ * counted in whole characters (graphemes), as approvalEmail.ts does, so a
+ * flag or a skin-tone emoji at the cut is never split; code points did split them.
+ */
 export function firstChars(text: string, max: number): string {
-  const chars = Array.from(text);
-  return chars.length <= max ? text : `${chars.slice(0, max).join("")}…`;
+  const cut = truncateGraphemes(text, max);
+  return cut === text ? text : `${cut}…`;
 }
 
 function reviewLine(review: NewReviewSummary): string {

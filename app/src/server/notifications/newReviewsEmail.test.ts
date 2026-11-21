@@ -121,3 +121,25 @@ describe("buildNewReviewsEmail", () => {
     expect(html).toContain("1 new Google review for Surf Co. Open Reviews to read it.");
   });
 });
+
+// R59 client-journey-2 L1: the 300-character cut counts whole characters
+// (graphemes), as the approval emails do, so an emoji is never split.
+describe("buildNewReviewsEmail: the comment cut keeps emoji whole", () => {
+  const head = "a".repeat(299);
+
+  it("a flag at the cut stays whole", () => {
+    const { html } = emailFor([review({ comment: `${head}\u{1F1FA}\u{1F1F8} great` })]);
+    expect(html).toContain(`${head}\u{1F1FA}\u{1F1F8}…`);
+  });
+
+  it("a skin-tone emoji at the cut stays whole", () => {
+    const { html } = emailFor([review({ comment: `${head}\u{1F44D}\u{1F3FD} more` })]);
+    expect(html).toContain(`${head}\u{1F44D}\u{1F3FD}…`);
+  });
+
+  it("plain text is cut at 300 characters, as now", () => {
+    const { html } = emailFor([review({ comment: "b".repeat(400) })]);
+    expect(html).toContain(`${"b".repeat(300)}…`);
+    expect(html).not.toContain("b".repeat(301));
+  });
+});
