@@ -323,6 +323,59 @@ describe("POST /api/posts - textOnly (a post without a photo)", () => {
     expect(postJobUpdateMock).not.toHaveBeenCalled();
   });
 
+  // R62 platform-clients L2: X takes @mentions out (lib/xMentions.ts), so a
+  // text made only of them would go to X empty and fail on every Retry.
+  describe("a text that X's mention removal leaves empty", () => {
+    const X_EMPTY = "X removes @mentions from posts sent through its API, so this post has no text left for X. Add some words, or leave X out.";
+
+    it("refuses \"@surfshop @wavecafe\" to X and LinkedIn, and creates nothing", async () => {
+      const response = await POST(textRequest({ baseCaption: "@surfshop @wavecafe", platforms: ["x", "linkedin"] }));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: X_EMPTY });
+      expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    });
+
+    it("accepts the same text without X", async () => {
+      const response = await POST(textRequest({ baseCaption: "@surfshop @wavecafe", platforms: ["linkedin"] }));
+      expect(response.status).toBe(200);
+      expect(createPostJobOnlyMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("accepts an X caption override with words", async () => {
+      const response = await POST(
+        textRequest({
+          baseCaption: "@surfshop @wavecafe",
+          platforms: ["x", "linkedin"],
+          perPlatformOverrides: { x: "Thanks to our friends at the surf shop" },
+        }),
+      );
+      expect(response.status).toBe(200);
+      expect(createPostJobOnlyMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses an X override made only of mentions, even when the base has words", async () => {
+      const response = await POST(
+        textRequest({ baseCaption: "Thanks, friends", platforms: ["x"], perPlatformOverrides: { x: "@surfshop" } }),
+      );
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: X_EMPTY });
+    });
+
+    it("answers a post with a photo as before", async () => {
+      const response = await POST(
+        jsonRequest({
+          blobUrl: "https://test.public.blob.vercel-storage.com/x.mp4",
+          filename: "x.mp4",
+          sizeBytes: 10,
+          baseCaption: "@surfshop @wavecafe",
+          platforms: ["x", "linkedin"],
+        }),
+      );
+      expect(response.status).toBe(200);
+      expect(createPostJobOnlyMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("without textOnly the old answers are unchanged", async () => {
     const missing = await POST(jsonRequest({ baseCaption: "hi" }));
     expect(missing.status).toBe(400);
