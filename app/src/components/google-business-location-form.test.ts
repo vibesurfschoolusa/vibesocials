@@ -21,7 +21,9 @@ import {
   pickAfterSave,
   saveFailureAt,
   savedLocationLine,
+  savedToastText,
   fieldSaveButton,
+  titleAfterSave,
 } from "./google-business-location-form";
 import { SignInAgainLink } from "./gbp-sign-in-link";
 
@@ -385,5 +387,49 @@ describe("Google location save when the answer is lost", () => {
     expect(locationSaveFallback(500)).toBe(LOCATION_MESSAGES.saveLost);
     expect(locationSaveFallback(400)).toBe(LOCATION_MESSAGES.saveFailed);
     expect(save).toMatch(/locationFailure\(data, locationSaveFallback\(response\.status\), workspaceId\)/);
+  });
+});
+
+// R56 fix review: a save from the Advanced field sends no title, and the form
+// kept none, so its line and toast named the resource name while "Connected
+// as" (server-rendered) named the business. The route's answer now holds the
+// title from Google's list, and the form takes it from there.
+describe("Google location form: the title after a save comes from the route's answer", () => {
+  const answer = (locationTitle: unknown) => ({ ok: true, connection: { id: "conn-1", metadata: { locationName: "x", locationTitle } } });
+
+  it("a pick, then a save from the Advanced field: the line and toast name the business", () => {
+    const title = titleAfterSave(answer("Vibe Surf School"), null);
+    expect(title).toBe("Vibe Surf School");
+    expect(savedLocationLine(title, "accounts/1/locations/2")).toBe(
+      "Posting to Vibe Surf School. Press Fetch locations from Google to choose another.",
+    );
+    expect(savedToastText(title)).toBe("Saved. Posts will go to Vibe Surf School on Google Maps.");
+  });
+
+  it("a pasted store code matching one listed location: the same", () => {
+    const title = titleAfterSave(answer("Second Shop"), null);
+    expect(title).toBe("Second Shop");
+    expect(savedLocationLine(title, "STORE-42")).toBe("Posting to Second Shop. Press Fetch locations from Google to choose another.");
+    expect(savedToastText(title)).toBe("Saved. Posts will go to Second Shop on Google Maps.");
+  });
+
+  it("a listed location with no title: as before", () => {
+    const title = titleAfterSave(answer(null), null);
+    expect(title).toBeNull();
+    expect(savedLocationLine(title, "STORE-1")).toBe(
+      "Posting to the location you saved (STORE-1). Press Fetch locations from Google to choose it by name.",
+    );
+    expect(savedToastText(title)).toBe("Saved. Future posts will use this Maps location.");
+    // An answer with no readable title keeps the title the form sent.
+    expect(titleAfterSave(null, "Joe's Pizza")).toBe("Joe's Pizza");
+    expect(titleAfterSave(answer(7), null)).toBeNull();
+  });
+
+  it("saveLocation uses the answer's title for both the line and the toast", () => {
+    const save = formSource.slice(formSource.indexOf("async function saveLocation"), formSource.indexOf("async function handleSubmit"));
+    expect(save).toContain("const savedAs = titleAfterSave(data, title);");
+    expect(save).toContain("setSavedTitle(savedAs);");
+    expect(save).toContain("toast.success(savedToastText(savedAs));");
+    expect(save).not.toContain("setSavedTitle(title);");
   });
 });

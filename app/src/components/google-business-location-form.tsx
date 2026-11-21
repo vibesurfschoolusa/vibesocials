@@ -161,6 +161,27 @@ export function pickAfterSave(name: string, from: SavePlace, ok: boolean): strin
  * name, else (R26 new-customer L1: an Advanced save has no name) by what was
  * saved, else the first step.
  */
+/**
+ * R56 fix review: the business name the route saved, from Google's list (its
+ * answer's connection.metadata.locationTitle). A save from the Advanced field
+ * sends none, and this form mounts with no key, so router.refresh() keeps its
+ * state: without this its line and toast named the resource name while
+ * "Connected as" named the business. An answer with no readable title keeps
+ * the title the form sent.
+ */
+export function titleAfterSave(data: unknown, sentTitle: string | null): string | null {
+  const connection = (data as { connection?: { metadata?: { locationTitle?: unknown } } } | null)?.connection;
+  const saved = connection?.metadata?.locationTitle;
+  if (typeof saved === "string") return saved.trim() || null;
+  if (saved === null) return null;
+  return sentTitle;
+}
+
+/** The toast after a save, naming the business when there is a name. */
+export function savedToastText(title: string | null): string {
+  return title ? `Saved. Posts will go to ${title} on Google Maps.` : "Saved. Future posts will use this Maps location.";
+}
+
 export function savedLocationLine(title: string | null, name: string | null): string {
   if (title) return `Posting to ${title}. Press Fetch locations from Google to choose another.`;
   const saved = name?.trim();
@@ -234,12 +255,11 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
         return;
       }
 
-      setSavedTitle(title);
+      const savedAs = titleAfterSave(data, title);
+      setSavedTitle(savedAs);
       setSavedName(name);
       setPicked(pickAfterSave(name, from, true));
-      toast.success(
-        title ? `Saved. Posts will go to ${title} on Google Maps.` : "Saved. Future posts will use this Maps location.",
-      );
+      toast.success(savedToastText(savedAs));
       setSavingFrom(null);
       // Settings' "Connected as" label is server-rendered from the saved name.
       router.refresh();
