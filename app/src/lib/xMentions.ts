@@ -74,10 +74,15 @@ function linkSpans(line: string): Array<[number, number]> {
 
 function inRunningText(line: string): string {
   if (!line.includes("@")) return line;
-  const spans = linkSpans(line);
-  return line.replace(MENTION, (whole: string, name: string, offset: number) =>
-    spans.some(([start, end]) => offset >= start && offset < end) ? whole : bareName(name),
-  );
+  // Every link has a dot, so a line without one needs no split.
+  const spans = line.includes(".") ? linkSpans(line) : [];
+  // Matches come in order, so one pass over the spans finds each one's link.
+  let next = 0;
+  return line.replace(MENTION, (whole: string, name: string, offset: number) => {
+    while (next < spans.length && spans[next][1] <= offset) next += 1;
+    const inLink = next < spans.length && spans[next][0] <= offset;
+    return inLink ? whole : bareName(name);
+  });
 }
 
 /** One paragraph's lines: a footer paragraph loses its mentions whole, any other only their "@". */
