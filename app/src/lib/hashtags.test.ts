@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { hashtagsIn } from "./hashtags";
+import { hashtagsIn, withoutHashtagSigns } from "./hashtags";
 import { fitInstagramTags } from "@/server/platforms/instagramClient";
 
 // R58 platform-clients L1: one hashtag rule for Instagram and YouTube.
@@ -40,18 +40,18 @@ describe("hashtagsIn", () => {
   // R60 platform-clients L1: as twitter-text, a variation selector (U+FE0E,
   // U+FE0F, which ends "☀️" and "❤️") may come right before the "#".
   it.each([
-    ["☀️#summer", ["#summer"]],
-    ["🏄‍♂️#surf", ["#surf"]],
-    ["❤️#love #surf", ["#love", "#surf"]],
-    ["☀︎#summer", ["#summer"]],
+    ["☀\uFE0F#summer", ["#summer"]],
+    ["🏄\u200D♂\uFE0F#surf", ["#surf"]],
+    ["❤\uFE0F#love #surf", ["#love", "#surf"]],
+    ["☀\uFE0E#summer", ["#summer"]],
   ])("a tag right after an emoji is a tag: %s", (text, expected) => {
     expect(tags(text)).toEqual(expected);
   });
 
-  it("the keycap \"#️⃣\" is not a tag, nor a \"#\" before U+20E3", () => {
-    expect(tags("Press #️⃣ now")).toEqual([]);
-    expect(tags("#⃣")).toEqual([]);
-    expect(tags("#️⃣ #surf")).toEqual(["#surf"]);
+  it("the keycap \"#\uFE0F\u20E3\" is not a tag, nor a \"#\" before U+20E3", () => {
+    expect(tags("Press #\uFE0F\u20E3 now")).toEqual([]);
+    expect(tags("#\u20E3")).toEqual([]);
+    expect(tags("#\uFE0F\u20E3 #surf")).toEqual(["#surf"]);
   });
 });
 
@@ -66,8 +66,21 @@ describe("Instagram's hashtag limit with combining marks", () => {
   // R60 platform-clients L1: a tag right after an emoji counts towards the 30.
   it("counts emoji-led tags, so a 31st is dropped", () => {
     const thirty = Array.from({ length: 29 }, (_, i) => `#t${i}`).join(" ");
-    const { caption, droppedHashtags } = fitInstagramTags(`Waves ☀️#summer ${thirty} ❤️#love`);
+    const { caption, droppedHashtags } = fitInstagramTags(`Waves ☀\uFE0F#summer ${thirty} ❤\uFE0F#love`);
     expect(droppedHashtags).toEqual(["#love"]);
-    expect(caption).toBe(`Waves ☀️#summer ${thirty} ❤️`);
+    expect(caption).toBe(`Waves ☀\uFE0F#summer ${thirty} ❤\uFE0F`);
+  });
+});
+
+// R60 new-customer L2: the AI answers lose a tag's "#" only when its word has a
+// letter or a mark (brandVoice's TAG_WORD), so "#1" stays.
+describe("withoutHashtagSigns", () => {
+  it.each([
+    ["Voted #1 surf school #surf", "Voted #1 surf school surf"],
+    ["#2024 was a year of #niños and ##waves", "#2024 was a year of niños and waves"],
+    ["A lone # goes", "A lone  goes"],
+    ["No signs here", "No signs here"],
+  ])("%s", (text, expected) => {
+    expect(withoutHashtagSigns(text)).toBe(expected);
   });
 });

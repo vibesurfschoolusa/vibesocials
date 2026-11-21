@@ -11,6 +11,7 @@ import {
   isAiTimeoutError,
 } from "@/lib/aiGuards";
 import { workspaceBrandVoicePrompt } from "@/lib/brandVoice";
+import { withoutHashtagSigns } from "@/lib/hashtags";
 import {
   RECENT_CAPTIONS_LIMIT,
   captionVarietyBlock,
@@ -57,7 +58,7 @@ function adaptSystemPrompt(platform: Platform, maxLength: number | undefined): s
   const lines = [
     `- Written for ${platformLabel(platform)}: ${PLATFORM_GUIDANCE[platform](maxLength)}`,
     ...(maxLength ? [`- At most ${maxLength} characters`] : []),
-    "- Use plain text only with NO hashtags (no '#' characters at all)",
+    "- Use plain text only with NO hashtags",
   ];
   return `You are a social media expert who rewrites a caption so it suits one platform. The caption should be:
 ${lines.join("\n")}
@@ -170,7 +171,7 @@ export async function POST(request: Request) {
       ? adaptSystemPrompt(adaptPlatform, adaptMaxLength)
       : `You are a social media expert specializing in creating engaging, SEO-optimized captions for social media posts. Your captions should be:
 - Short and concise (1-2 sentences, max 150 characters)
-- Use plain text only with NO hashtags (no '#' characters at all)
+- Use plain text only with NO hashtags
 - Be engaging and call-to-action oriented
 - SEO-friendly with keywords naturally integrated
 - Suitable for platforms like Instagram, TikTok, YouTube, and X (Twitter)
@@ -228,7 +229,7 @@ Create an enhanced version that's perfect for social media.${varietyBlock}`;
     const llmData = await llmResponse.json();
     let enhancedCaption = llmData.choices?.[0]?.message?.content?.trim() || "";
 
-    enhancedCaption = enhancedCaption.replace(/#/g, "").trim();
+    enhancedCaption = withoutHashtagSigns(enhancedCaption).trim();
 
     if (!enhancedCaption) {
       console.error(`[Enhance Caption] ${llm.providerLabel} returned an empty caption`);

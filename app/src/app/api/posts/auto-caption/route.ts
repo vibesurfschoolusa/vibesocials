@@ -13,6 +13,7 @@ import {
 import { cleanAltText, fitAltText } from "@/lib/altText";
 import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
 import { workspaceBrandVoicePrompt } from "@/lib/brandVoice";
+import { withoutHashtagSigns } from "@/lib/hashtags";
 import {
   RECENT_CAPTIONS_LIMIT,
   captionVarietyBlock,
@@ -284,7 +285,7 @@ export async function POST(request: Request) {
 
     const systemPrompt = `You are a social media expert creating short, engaging captions for photos and videos.
 Your captions must:
-- Be plain text only with NO hashtags (do not use the '#' character at all)
+- Be plain text only with NO hashtags
 - Be engaging and call-to-action oriented
 - Be suitable for platforms like Instagram, TikTok, YouTube, LinkedIn, X, and Facebook
 - Feel professional yet approachable
@@ -383,7 +384,7 @@ The media is a short social media video. You do not have direct access to the vi
     const llmData = await llmResponse.json();
     let caption = llmData.choices?.[0]?.message?.content?.trim() ?? "";
 
-    caption = caption.replace(/#/g, "").trim();
+    caption = withoutHashtagSigns(caption).trim();
 
     if (typeof maxLength === "number" && maxLength > 0 && caption.length > maxLength) {
       caption = caption.slice(0, maxLength).trim();
@@ -466,7 +467,7 @@ async function describePhoto(args: {
   const llmData = await llmResponse.json();
   const raw = llmData.choices?.[0]?.message?.content;
   const altText = fitAltText(
-    cleanAltText(typeof raw === "string" ? raw.replace(/#/g, "").replace(EMOJI, "") : "").replace(/ {2,}/g, " "),
+    cleanAltText(typeof raw === "string" ? withoutHashtagSigns(raw).replace(EMOJI, "") : "").replace(/ {2,}/g, " "),
     AI_ALT_TEXT_MAX,
   );
 
