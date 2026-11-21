@@ -248,6 +248,17 @@ function formatWhen(iso: string | null): string {
   });
 }
 
+/**
+ * The post in a card button's accessible name. R57 client-journey L2: a
+ * Story-only post's caption is one fixed line for every such card, so it is
+ * named by its time instead. Story-only is every platform listed as a Story
+ * (storyPlatformLabel), the server's own test for showing that fixed line.
+ */
+export function reviewCardName(post: Pick<ReviewPostDTO, "platforms" | "caption" | "scheduledFor">): string {
+  const storyOnly = post.platforms.length > 0 && post.platforms.every((label) => label.endsWith(" (Story)"));
+  return storyOnly ? `Story, ${formatWhen(post.scheduledFor)}` : labelName(post.caption);
+}
+
 function PostMedia({ post }: { post: ReviewPostDTO }) {
   if (!post.media) return null;
   return (
@@ -347,7 +358,7 @@ export function ReviewPostCard({
   const askRef = useRef<HTMLButtonElement>(null);
   const state = stateText(post);
   // R56: the buttons repeat on every card, so each one's accessible name carries the post's caption, as the Queue's do.
-  const cardName = labelName(post.caption);
+  const cardName = reviewCardName(post);
   // R30 lead review: one card of many, so only a change of its state is read out.
   useAnnounceOnShow(() => state ?? "", true, false);
   // Whole characters, as the server counts them (an emoji is one, not two).
