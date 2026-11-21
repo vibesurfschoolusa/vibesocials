@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { LoadError } from "@/components/load-error";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { Card } from "@/components/ui/card";
-import { platformListAlert } from "@/components/create-post-form";
+import { NO_PLATFORM_SELECTED_MESSAGE } from "@/lib/platformSelection";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useConnections } from "@/hooks/useConnections";
@@ -926,10 +926,12 @@ export function BulkPostsForm({
   };
   const googleShown = selectedPlatforms.includes("google_business_profile");
   const googleError = googleShown ? bulkGoogleMetadataError(googleMetadata) : null;
-  // Both finish buttons are disabled with nothing ticked; say why, in Create's own sentence.
+  // Both finish buttons are disabled with nothing ticked; say why, in the sentence Create uses. Nothing is ticked only after the person unticks: every offered platform starts ticked, so no alert fires on load.
   const noPlatformLine =
     connections && !connectionsError && offeredPlatforms.length > 0
-      ? platformListAlert({ selectedCount: selectedPlatforms.length, allDisabled: false, noFile: false, triedSend: false })
+      ? selectedPlatforms.length === 0
+        ? NO_PLATFORM_SELECTED_MESSAGE
+        : null
       : null;
   const batchCheck: BulkBatchCheck = { selectedPlatforms, stories, googleError };
   // Once a row's check passes its press is over; a later edit that fails a
