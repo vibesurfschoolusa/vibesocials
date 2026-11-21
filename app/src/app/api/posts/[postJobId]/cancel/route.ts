@@ -124,6 +124,14 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   if (!result.ok) {
     // Lost the race (the scanner claimed it): read the status again, for the sentence only.
     const now = await prisma.postJob.findFirst({ where: { id: postJobId, workspaceId }, select: { status: true } });
+    // R58 pages-a-3 L2: the write is pinned to the approval fields, so it also
+    // misses when an owner approved meanwhile and the post is still cancellable.
+    if (now && MUTABLE_POST_JOB_STATUSES.includes(now.status)) {
+      return NextResponse.json(
+        { error: "This post changed in the meantime. Try again.", code: "NOT_CANCELABLE" },
+        { status: 409 },
+      );
+    }
     return notCancelable(now?.status);
   }
 

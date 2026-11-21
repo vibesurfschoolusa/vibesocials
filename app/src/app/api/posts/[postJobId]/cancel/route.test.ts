@@ -202,6 +202,29 @@ describe("POST /api/posts/[postJobId]/cancel", () => {
     );
   });
 
+  // R58 pages-a-3 L2: the write is pinned to the approval fields, so it can
+  // miss while the post is still cancellable (a member cancelling while an
+  // owner approves). "Only scheduled or draft posts" would be untrue.
+  it.each(["scheduled", "draft"])("a lost race whose re-read is still %s: the post changed, try again", async (status) => {
+    findFirstMock.mockResolvedValueOnce(jobRow()).mockResolvedValue(jobRow({ status }));
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req, ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "NOT_CANCELABLE", error: "This post changed in the meantime. Try again." });
+  });
+
+  it("a lost race whose re-read is no longer cancellable keeps its own sentence", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow()).mockResolvedValue(jobRow({ status: "cancelled" }));
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req, ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "NOT_CANCELABLE", error: "This post was already cancelled." });
+  });
+
   it("cross-workspace isolation: a job in another workspace 404s via the workspace-scoped read (not 403 — no existence oracle)", async () => {
     findFirstMock.mockResolvedValue(null); // ws-1's WHERE wouldn't match a ws-2 job
 
