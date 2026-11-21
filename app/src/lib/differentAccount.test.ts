@@ -4,6 +4,7 @@ import {
   accountCheckFailedMessage,
   accountCheckFailedPlatform,
   connectedAccountName,
+  connectionShownName,
   differentAccountCode,
   differentAccountPlatform,
   linkDifferentAccountMessage,
@@ -167,6 +168,26 @@ describe("different account on reconnect", () => {
     expect(connectedAccountName({ platform: "google_business_profile", username: null, accountIdentifier: "" })).toBe(
       "the connected Google Business Profile account",
     );
+  });
+
+  // R60 pages-a L2: one rule decides the name every screen shows.
+  it("connectionShownName never gives an opaque id, and keeps the X and Instagram fallbacks", () => {
+    expect(connectionShownName({ platform: "tiktok", username: null, accountIdentifier: "-000AbOpenId" })).toBeNull();
+    expect(connectionShownName({ platform: "linkedin", username: null, accountIdentifier: "aB3xYz9q" })).toBeNull();
+    expect(connectionShownName({ platform: "facebook_page", username: null, accountIdentifier: "102938475610" })).toBeNull();
+    expect(
+      connectionShownName({ platform: "google_business_profile", username: null, accountIdentifier: "google_business_profile" }),
+    ).toBeNull();
+    expect(connectionShownName({ platform: "tiktok", username: "Vibe Surf", accountIdentifier: "-000AbOpenId" })).toBe("Vibe Surf");
+    expect(connectionShownName({ platform: "x", username: null, accountIdentifier: "vibesurf" })).toBe("vibesurf");
+    expect(connectionShownName({ platform: "instagram", username: null, accountIdentifier: "ig-1" })).toBe("ig-1");
+    expect(connectionShownName({ platform: "x", username: "", accountIdentifier: "" })).toBeNull();
+  });
+
+  it("a Business Profile's placeholder identifier is never a name in a sentence", () => {
+    expect(
+      connectedAccountName({ platform: "google_business_profile", username: null, accountIdentifier: "google_business_profile" }),
+    ).toBe("the connected Google Business Profile account");
   });
 
   it("reads no name from the address any more", () => {

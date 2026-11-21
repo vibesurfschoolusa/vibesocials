@@ -307,4 +307,26 @@ describe("ConnectionsSection, a TikTok row with no account name", () => {
     const html = render({ connections: [{ ...connected("x"), accountIdentifier: "vibesurf", username: null }] });
     expect(html).toContain("Connected as vibesurf");
   });
+
+  // R60 pages-a L2: one helper decides the name; LinkedIn's and a Page's ids are opaque too.
+  it("a nameless LinkedIn page or Facebook Page says Connected, never its id", () => {
+    for (const [platform, id] of [["linkedin", "aB3xYz9q"], ["facebook_page", "102938475610"]] as const) {
+      const html = render({ connections: [{ ...connected(platform), accountIdentifier: id, username: null }] });
+      expect(html).toContain(">Connected</p>");
+      expect(html).not.toContain(id);
+    }
+  });
+
+  it("Instagram still falls back to its account id, as now", () => {
+    const html = render({ connections: [{ ...connected("instagram"), accountIdentifier: "ig-1", username: null }] });
+    expect(html).toContain("Connected as ig-1");
+  });
+
+  it("the row's name comes from the shared helper, not its own rule", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./connections-section.tsx", import.meta.url)), "utf8");
+    expect(source).not.toMatch(/\.accountIdentifier/);
+    expect(source).toContain("connectionShownName(");
+  });
 });

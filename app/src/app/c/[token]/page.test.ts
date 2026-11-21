@@ -208,6 +208,47 @@ describe("the connect link page", () => {
     expect(html).not.toContain('value="tiktok"');
   });
 
+  // R60 pages-a L2: a nameless TikTok row never shows its open_id.
+  it("a TikTok row with no name says Connected, never the open_id, also in the reconnect-soon line", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "tiktok", accountIdentifier: "-000AbOpenId", username: null, locationName: null, needsReconnect: false, reconnectSoon: true },
+    ]);
+    const html = await render();
+    expect(html).toContain(">Connected. It stops working soon: press Reconnect to keep it posting.</span>");
+    expect(html).not.toContain("-000AbOpenId");
+  });
+
+  it("an ended TikTok row with no name starts with what to do, never the open_id", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "tiktok", accountIdentifier: "-000AbOpenId", username: null, locationName: null, needsReconnect: false, reconnectSoon: true, ended: true },
+    ]);
+    const html = await render();
+    expect(html).toContain(">It stopped working: press Reconnect.</span>");
+    expect(html).not.toContain("-000AbOpenId");
+  });
+
+  it("a working nameless TikTok row says Connected; X and Instagram keep their fallback", async () => {
+    h.findLink.mockResolvedValue({ ...LINK, platforms: ["instagram", "tiktok", "x"] });
+    h.listConnections.mockResolvedValue([
+      { platform: "tiktok", accountIdentifier: "-000AbOpenId", username: null, locationName: null, needsReconnect: false, reconnectSoon: false },
+      { platform: "x", accountIdentifier: "vibesurf", username: null, locationName: null, needsReconnect: false, reconnectSoon: false },
+      { platform: "instagram", accountIdentifier: "ig-1", username: null, locationName: null, needsReconnect: false, reconnectSoon: false },
+    ]);
+    const html = await render();
+    expect(html).toContain(">Connected</span>");
+    expect(html).not.toContain("-000AbOpenId");
+    expect(html).toContain("Connected: vibesurf</span>");
+    expect(html).toContain("Connected: ig-1</span>");
+  });
+
+  it("the row's name comes from the shared helper, not its own rule", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./page.tsx", import.meta.url)), "utf8");
+    expect(source).not.toMatch(/\.accountIdentifier/);
+    expect(source).toContain("connectionShownName(");
+  });
+
   it("a connection whose end date passed (not flagged yet) says it stopped working, with Reconnect", async () => {
     h.listConnections.mockResolvedValue([
       { platform: "instagram", accountIdentifier: "ig-1", username: "surfco", locationName: null, needsReconnect: false, reconnectSoon: true, ended: true },
