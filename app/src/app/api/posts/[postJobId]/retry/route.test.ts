@@ -306,6 +306,38 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
+  // R57 pages-a-2 L1: a teammate's retry claimed it first, or it went out.
+  it("a single platform no longer failed: names it and says why", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "instagram", status: "failed" }]));
+    resultUpdateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({ platform: "instagram" }), ctx("job-1"));
+    const body = (await res.json()) as { code?: string; error?: string };
+
+    expect(res.status).toBe(409);
+    expect(body.code).toBe("NOTHING_TO_RETRY");
+    expect(body.error).toBe("Instagram is already being retried or has gone out. Activity now shows where it stands.");
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("Retry all failed with none still failed: the plural sentence", async () => {
+    postJobFindFirstMock.mockResolvedValue(
+      makeJob([
+        { platform: "instagram", status: "failed" },
+        { platform: "tiktok", status: "failed" },
+      ]),
+    );
+    resultUpdateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+    const body = (await res.json()) as { code?: string; error?: string };
+
+    expect(res.status).toBe(409);
+    expect(body.code).toBe("NOTHING_TO_RETRY");
+    expect(body.error).toBe("Nothing to retry: none of this post's platforms has failed. Activity now shows where it stands.");
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
   it("single platform happy path: atomic claim, in_progress, event with just that platform", async () => {
     postJobFindFirstMock.mockResolvedValue(
       makeJob([{ platform: "tiktok", status: "failed" }]),

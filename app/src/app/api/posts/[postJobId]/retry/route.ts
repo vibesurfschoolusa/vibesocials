@@ -8,7 +8,7 @@ import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { logger } from "@/lib/logger";
-import { PLATFORM_ORDER } from "@/lib/platforms";
+import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { isUnconfirmedResult } from "@/lib/postsDto";
 import { leftOutSentence, needsReconnecting, retryAllPlan, type LeftOut } from "@/lib/retryAll";
 import { getWorkspaceContext } from "@/lib/workspace";
@@ -324,7 +324,12 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     await withdrawRetry({ postJobId, requestId });
     return NextResponse.json(
       {
-        error: "Nothing to retry — those platforms aren't in a failed state.",
+        // R57 pages-a-2 L1: Activity shows this answer as it is, so a single
+        // platform is named, with why: a teammate's retry claimed it, or it went out.
+        error:
+          target.kind === "platform"
+            ? `${platformLabel(target.platform)} is already being retried or has gone out. Activity now shows where it stands.`
+            : "Nothing to retry: none of this post's platforms has failed. Activity now shows where it stands.",
         code: "NOTHING_TO_RETRY",
       },
       { status: 409 },
