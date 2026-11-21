@@ -189,7 +189,7 @@ describe("checkWorkspaceAiQuota", () => {
 
     expect(memberFindManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", role: "owner" },
-      select: { userId: true, user: { select: { email: true, emailVerifiedAt: true } } },
+      select: { userId: true, user: { select: { email: true, emailVerifiedAt: true, name: true } } },
     });
     expect(checkRateLimitMock.mock.calls.map(([opts]) => opts)).toEqual([
       expect.objectContaining({ userId: "ai:workspace:ws-1" }),
@@ -214,6 +214,8 @@ describe("checkWorkspaceAiQuota", () => {
       allowed: false,
       retryAfterSeconds: 99,
       budget: "owner",
+      // R56 pages-a-4 L3: which owner is spent travels with the refusal.
+      spentOwner: { userId: "owner-1", name: null, email: "one@example.com", ownerUserIds: ["owner-1"] },
     });
   });
 
@@ -268,6 +270,8 @@ describe("checkWorkspaceAiQuota", () => {
         allowed: false,
         retryAfterSeconds: Math.ceil(((bucket + 1) * DAY - NOW.getTime()) / 1000),
         budget: "owner",
+        // R56 pages-a-4 L3: the owner whose counter is spent, not the first owner.
+        spentOwner: { userId: "owner-2", name: null, email: "two@example.com", ownerUserIds: ["owner-1", "owner-2"] },
       });
       expect(checkRateLimitMock).not.toHaveBeenCalled();
     });
@@ -382,6 +386,104 @@ describe("aiWorkspaceLimitResponse", () => {
       const body = await aiWorkspaceLimitResponse(seconds).json();
       expect(body.error).toBe(`This workspace has reached today's AI limit. ${wait}`);
     });
+  });
+});
+
+// R56 pages-a-4 L3: in a co-owned workspace the sentence says which owner's
+// budget is spent, as the per-person post limit does (R7 point 6, R8-pages L3).
+describe("aiWorkspaceLimitResponse: which owner is spent", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW = new Date("2026-11-14T15:00:00.000Z");
+  const bucket = Math.floor(NOW.getTime() / DAY);
+  const ownerKey = (id: string) => `ai:owner:${id}:ai/owner-daily:${bucket}`;
+  const ANA = { userId: "owner-a", user: { email: "ana@example.com", emailVerifiedAt: null, name: "Ana Diaz" } };
+  const BEN = { userId: "owner-b", user: { email: "ben@example.com", emailVerifiedAt: null, name: null } };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    checkRateLimitMock.mockResolvedValue({ allowed: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function refusalFor(owners: unknown[], spentId: string, readerUserId: string) {
+    memberFindManyMock.mockResolvedValue(owners);
+    entryFindManyMock.mockResolvedValue([{ key: ownerKey(spentId), count: AI_LIMITS.ownerDailyCalls }]);
+    const quota = await checkWorkspaceAiQuota("ws-1");
+    const response = aiWorkspaceLimitResponse(quota.retryAfterSeconds, quota.budget, quota.spentOwner, readerUserId);
+    return { status: response.status, body: await response.json() };
+  }
+
+  it("the reader is the spent owner: 'You have reached'", async () => {
+    const { status, body } = await refusalFor([ANA, BEN], "owner-a", "owner-a");
+    expect(status).toBe(429);
+    expect(body).toMatchObject({
+      code: "AI_WORKSPACE_DAILY_LIMIT",
+      budget: "owner",
+      error: "You have reached today's AI limit across the workspaces you own. It resets in 9 hours.",
+    });
+  });
+
+  it("the reader is a single owner who is spent: 'You have reached' too", async () => {
+    const { body } = await refusalFor([ANA], "owner-a", "owner-a");
+    expect(body.error).toBe("You have reached today's AI limit across the workspaces you own. It resets in 9 hours.");
+  });
+
+  it("a co-owner is spent: names them to the other owner", async () => {
+    const { status, body } = await refusalFor([ANA, BEN], "owner-a", "owner-b");
+    expect(status).toBe(429);
+    expect(body).toMatchObject({
+      code: "AI_WORKSPACE_DAILY_LIMIT",
+      budget: "owner",
+      error:
+        "Ana Diaz, an owner of this workspace, has reached today's AI limit across the workspaces they own. It resets in 9 hours.",
+    });
+  });
+
+  it("a co-owner with no name: the other owner reads their address, a member only the part before the @", async () => {
+    expect((await refusalFor([ANA, BEN], "owner-b", "owner-a")).body.error).toBe(
+      "ben@example.com, an owner of this workspace, has reached today's AI limit across the workspaces they own. It resets in 9 hours.",
+    );
+    expect((await refusalFor([ANA, BEN], "owner-b", "member-1")).body.error).toBe(
+      "ben, an owner of this workspace, has reached today's AI limit across the workspaces they own. It resets in 9 hours.",
+    );
+  });
+
+  it("a single owner, as a member sees it: as before", async () => {
+    const { body } = await refusalFor([ANA], "owner-a", "member-1");
+    expect(body.error).toBe(
+      "This workspace's owner has reached today's AI limit across all the workspaces they own. It resets in 9 hours.",
+    );
+  });
+
+  it("the workspace-wide limit's sentence is unchanged, whoever reads it", async () => {
+    memberFindManyMock.mockResolvedValue([ANA, BEN]);
+    entryFindManyMock.mockResolvedValue([{ key: `ai:workspace:ws-1:ai/workspace-daily:${bucket}`, count: 200 }]);
+    const quota = await checkWorkspaceAiQuota("ws-1");
+    expect(quota.spentOwner).toBeUndefined();
+    for (const reader of ["owner-a", "member-1"]) {
+      const response = aiWorkspaceLimitResponse(quota.retryAfterSeconds, quota.budget, quota.spentOwner, reader);
+      expect(response.status).toBe(429);
+      expect(await response.json()).toEqual({
+        code: "AI_WORKSPACE_DAILY_LIMIT",
+        budget: "workspace",
+        error: "This workspace has reached today's AI limit. It resets in 9 hours.",
+        retryAfterSeconds: quota.retryAfterSeconds,
+      });
+    }
+  });
+
+  it("the spent owner found while spending is carried too", async () => {
+    memberFindManyMock.mockResolvedValue([ANA, BEN]);
+    checkRateLimitMock.mockImplementation(async ({ userId }: { userId: string }) =>
+      userId === "ai:owner:owner-b" ? { allowed: false, retryAfterSeconds: 60 } : { allowed: true },
+    );
+    const quota = await checkWorkspaceAiQuota("ws-1");
+    expect(quota.spentOwner?.userId).toBe("owner-b");
+    const body = await aiWorkspaceLimitResponse(quota.retryAfterSeconds, quota.budget, quota.spentOwner, "owner-b").json();
+    expect(body.error).toBe("You have reached today's AI limit across the workspaces you own. It resets in a minute.");
   });
 });
 

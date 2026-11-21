@@ -143,6 +143,26 @@ describe("POST /api/posts/enhance-caption", () => {
       expect(checkRateLimitMock).toHaveBeenCalledWith(expect.objectContaining({ userId: "ai:owner:owner-1" }));
     });
 
+    // R56 pages-a-4 L3: the signed-in person is the owner whose budget is spent.
+    it("tells the signed-in owner it is their own AI budget that is spent", async () => {
+      memberFindManyMock.mockResolvedValue([
+        { userId: "user-1", user: { email: "owner@example.com", emailVerifiedAt: null, name: "Owner" } },
+        { userId: "owner-2", user: { email: "two@example.com", emailVerifiedAt: null, name: "Second Owner" } },
+      ]);
+      checkRateLimitMock.mockImplementation(async (opts: { userId: string }) =>
+        opts.userId === "ai:owner:user-1" ? { allowed: false, retryAfterSeconds: 60 } : { allowed: true },
+      );
+
+      const response = await post({ caption: "fresh bread" });
+
+      expect(response.status).toBe(429);
+      await expect(response.json()).resolves.toMatchObject({
+        code: "AI_WORKSPACE_DAILY_LIMIT",
+        budget: "owner",
+        error: "You have reached today's AI limit across the workspaces you own. It resets in a minute.",
+      });
+    });
+
     it("returns 429 AI_WORKSPACE_DAILY_LIMIT when the workspace quota is spent, without calling the provider", async () => {
       checkRateLimitMock.mockImplementation(async (opts: { userId: string }) =>
         opts.userId.startsWith("ai:workspace:")

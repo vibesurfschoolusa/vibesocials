@@ -163,7 +163,7 @@ export async function POST(request: Request) {
     const quota = await checkWorkspaceAiQuota(context.workspace.id);
     if (quota.unavailable) return limitUncheckedResponse();
     if (!quota.allowed) {
-      return aiWorkspaceLimitResponse(quota.retryAfterSeconds, quota.budget);
+      return aiWorkspaceLimitResponse(quota.retryAfterSeconds, quota.budget, quota.spentOwner, context.user.id);
     }
 
     const basePrompt = adaptPlatform

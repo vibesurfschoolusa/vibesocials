@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { isOperatorUser } from "@/lib/operator";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { personLabel } from "@/lib/usageLimits";
 
 /**
  * Shared guards for the three LLM-backed routes (posts/auto-caption,
@@ -96,10 +97,33 @@ export function aiInputTooLongResponse(overlong: { field: string; max: number })
 /** Which budget refused: the workspace's, or one of its owners' across their workspaces. */
 export type AiBudget = "workspace" | "owner";
 
-/** `unavailable`: a counter store that couldn't answer (fail closed); the caller answers limitUncheckedResponse. */
-export type AiQuotaResult = { allowed: boolean; retryAfterSeconds?: number; budget?: AiBudget; unavailable?: true };
+/**
+ * R56 pages-a-4 L3: the owner whose budget refused, read from the workspace's
+ * own owners (never the request), and every owner's id, so the sentence can
+ * say "You" to them and name them to a co-owner.
+ */
+export type AiSpentOwner = { userId: string; name: string | null; email: string; ownerUserIds: string[] };
 
-type BudgetCounter = { userId: string; route: string; limit: number; budget: AiBudget };
+/** `unavailable`: a counter store that couldn't answer (fail closed); the caller answers limitUncheckedResponse. */
+export type AiQuotaResult = {
+  allowed: boolean;
+  retryAfterSeconds?: number;
+  budget?: AiBudget;
+  spentOwner?: AiSpentOwner;
+  unavailable?: true;
+};
+
+type BudgetCounter = { userId: string; route: string; limit: number; budget: AiBudget; owner?: AiSpentOwner };
+
+/** The refusal for a spent counter; an owner's carries which owner it is. */
+function refusalFor(counter: BudgetCounter, retryAfterSeconds: number | undefined): AiQuotaResult {
+  return {
+    allowed: false,
+    retryAfterSeconds,
+    budget: counter.budget,
+    ...(counter.owner ? { spentOwner: counter.owner } : {}),
+  };
+}
 
 /**
  * The counter key checkRateLimit uses for a window of WORKSPACE_QUOTA_WINDOW_MS
@@ -123,7 +147,7 @@ async function firstSpentBudget(counters: BudgetCounter[], now: number): Promise
     const spent = counters.find((counter, index) => (counts.get(keys[index]) ?? 0) >= counter.limit);
     if (!spent) return null;
     const resetAt = (Math.floor(now / WORKSPACE_QUOTA_WINDOW_MS) + 1) * WORKSPACE_QUOTA_WINDOW_MS;
-    return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((resetAt - now) / 1000)), budget: spent.budget };
+    return refusalFor(spent, Math.max(1, Math.ceil((resetAt - now) / 1000)));
   } catch (error) {
     logger.warn("[ai] Couldn't read the AI budgets before spending; spending decides", {
       error: error instanceof Error ? error.message : String(error),
@@ -157,15 +181,17 @@ export async function checkWorkspaceAiQuota(workspaceId: string): Promise<AiQuot
   try {
     const owners = await prisma.workspaceMember.findMany({
       where: { workspaceId, role: "owner" },
-      select: { userId: true, user: { select: { email: true, emailVerifiedAt: true } } },
+      select: { userId: true, user: { select: { email: true, emailVerifiedAt: true, name: true } } },
     });
     if (!owners.some((owner) => isOperatorUser(owner.user))) {
+      const ownerUserIds = owners.map((owner) => owner.userId);
       for (const owner of owners) {
         counters.push({
           userId: `ai:owner:${owner.userId}`,
           route: "ai/owner-daily",
           limit: AI_LIMITS.ownerDailyCalls,
           budget: "owner",
+          owner: { userId: owner.userId, name: owner.user.name ?? null, email: owner.user.email, ownerUserIds },
         });
       }
     }
@@ -187,7 +213,7 @@ export async function checkWorkspaceAiQuota(workspaceId: string): Promise<AiQuot
       windowMs: WORKSPACE_QUOTA_WINDOW_MS,
       failClosed: true,
     });
-    if (!result.allowed) return { ...result, budget: counter.budget };
+    if (!result.allowed) return { ...result, ...refusalFor(counter, result.retryAfterSeconds) };
   }
   return { allowed: true };
 }
@@ -208,12 +234,33 @@ function aiLimitResetsText(retryAfterSeconds: number | undefined): string {
   return hours === 1 ? "It resets in 1 hour." : `It resets in ${hours} hours.`;
 }
 
+/**
+ * Whose budget is spent. R56 pages-a-4 L3: as the per-person post limit
+ * (R7 point 6, R8-pages L3), "You" to the spent owner, and their name to
+ * anyone else in a co-owned workspace, so a co-owner who used none isn't
+ * told the owner is spent.
+ */
+function aiLimitReason(budget: AiBudget, spentOwner: AiSpentOwner | undefined, readerUserId: string | undefined): string {
+  if (budget !== "owner") return "This workspace has reached today's AI limit.";
+  if (spentOwner && readerUserId === spentOwner.userId) {
+    return "You have reached today's AI limit across the workspaces you own.";
+  }
+  if (spentOwner && spentOwner.ownerUserIds.length > 1) {
+    const readerIsOwner = readerUserId !== undefined && spentOwner.ownerUserIds.includes(readerUserId);
+    const name = personLabel(spentOwner, readerIsOwner);
+    return `${name}, an owner of this workspace, has reached today's AI limit across the workspaces they own.`;
+  }
+  return "This workspace's owner has reached today's AI limit across all the workspaces they own.";
+}
+
 /** `429 { code: "AI_WORKSPACE_DAILY_LIMIT", budget, error, retryAfterSeconds }` + `Retry-After`. */
-export function aiWorkspaceLimitResponse(retryAfterSeconds?: number, budget: AiBudget = "workspace"): NextResponse {
-  const reason =
-    budget === "owner"
-      ? "This workspace's owner has reached today's AI limit across all the workspaces they own."
-      : "This workspace has reached today's AI limit.";
+export function aiWorkspaceLimitResponse(
+  retryAfterSeconds?: number,
+  budget: AiBudget = "workspace",
+  spentOwner?: AiSpentOwner,
+  readerUserId?: string,
+): NextResponse {
+  const reason = aiLimitReason(budget, spentOwner, readerUserId);
   return NextResponse.json(
     {
       code: "AI_WORKSPACE_DAILY_LIMIT",
