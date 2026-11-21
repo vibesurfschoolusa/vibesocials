@@ -138,6 +138,29 @@ describe("removeXMentions", () => {
     expect(removeXMentions("  Lesson   $50\n\n@kai @mia\n\n  Board    $20")).toBe("  Lesson   $50\n\n  Board    $20");
   });
 
+  // R60 fix review M1: an "@" inside a link the X count finds is part of the
+  // link (a YouTube, TikTok or Threads handle address), never a mention.
+  it.each([
+    "See youtube.com/@x",
+    "Watch https://www.youtube.com/@vibesurfschool",
+    "Follow https://www.tiktok.com/@vibe.surf.co",
+    "Ride the waves!\n\nFor more info visit https://www.tiktok.com/@vibesurfschool",
+    "Ride the waves!\n\nFor more info visit www.tiktok.com/@vibe.surf.co",
+  ])("%s: the link stays whole", (text) => {
+    expect(removeXMentions(text)).toBe(text);
+  });
+
+  it("a real mention right after a link still loses its @", () => {
+    expect(removeXMentions("Lessons at https://surf.co/surf @kai")).toBe("Lessons at https://surf.co/surf kai");
+    expect(removeXMentions("youtube.com/@x with @kai")).toBe("youtube.com/@x with kai");
+  });
+
+  // R60 fix review L1: a footer after leading blank lines leaves no stray newline.
+  it("a footer after leading blank lines takes the blank lines on both sides with it", () => {
+    expect(removeXMentions("\n\n@kai\n\nText")).toBe("Text");
+    expect(removeXMentions("\n\n@kai\n\n")).toBe("");
+  });
+
   it("in running text, the name stays and counts on X", () => {
     const text = computeTweetText(`Surf with @ana_surf ${"a".repeat(280)}`);
     expect(text.startsWith("Surf with ana_surf ")).toBe(true);

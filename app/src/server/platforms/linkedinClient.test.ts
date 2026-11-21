@@ -4098,7 +4098,7 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       });
       // Its own sentence: the cover was never sent, so it was not refused either.
       expect(LINKEDIN_COVER_LARGE_VIDEO_NOTE).toBe(
-        "Cover not set: a video over 50 MB is sent to LinkedIn in parts, without the chosen cover, so the video uses its own.",
+        "Cover not set: a video over 50 MB is sent to LinkedIn in parts, without the chosen cover, so LinkedIn shows a frame from the video. To use your cover, post a video of 50 MB or less.",
       );
     });
 
