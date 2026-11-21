@@ -742,3 +742,43 @@ describe("Retry when the answer is lost", () => {
     expect(retry).toMatch(/JSON\.stringify\(retryRequestBody\(target, workspaceId\)\)/);
   });
 });
+
+// R57 pages-b L1 (#282's rule): every card repeats these buttons, so each
+// one's name starts with its text and names the post, as the Queue's do.
+describe("PostJobCard - repeated buttons name the post", () => {
+  const failed = (platform: Platform) =>
+    result({ platform, status: "failed", externalPostId: null, errorMessage: "No.", externalPostUrl: null });
+  const html = (value: PostJobDTO) => render(value).replace(/<!-- -->/g, "");
+  // Send again shows only inside the fixture's 7-day window, whatever today is.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-14T12:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("Retry <platform>, Retry all failed and Show N errors", () => {
+    const out = html(job({ status: "failed", results: [failed("x"), failed("linkedin")] }));
+    expect(out).toMatch(/aria-label="Retry X &quot;Two spots left today&quot;"[^>]*>Retry X<\/button>/);
+    expect(out).toMatch(/aria-label="Retry LinkedIn &quot;Two spots left today&quot;"[^>]*>Retry LinkedIn<\/button>/);
+    expect(out).toMatch(/aria-label="Retry all failed &quot;Two spots left today&quot;"[^>]*>Retry all failed<\/button>/);
+    expect(out).toMatch(/aria-label="Show 2 errors &quot;Two spots left today&quot;"/);
+  });
+
+  it("Send again", () => {
+    const out = html(job({ status: "failed", results: [], publish: null }));
+    expect(out).toMatch(/aria-label="Send again &quot;Two spots left today&quot;"[^>]*>Send again<\/button>/);
+  });
+
+  it("View on <platform>, with its new-tab hint", () => {
+    const out = html(job({ results: [result({ platform: "x", externalPostId: "123", externalPostUrl: "https://x.com/i/status/123" })] }));
+    expect(out).toContain('aria-label="View on X (opens in a new tab) &quot;Two spots left today&quot;"');
+  });
+
+  it("a card with no caption is named Untitled post", () => {
+    expect(html(job({ caption: "", status: "failed", results: [], publish: null }))).toContain(
+      'aria-label="Send again &quot;Untitled post&quot;"',
+    );
+  });
+});
