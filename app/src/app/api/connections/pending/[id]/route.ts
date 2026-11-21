@@ -39,6 +39,13 @@ interface PendingRouteContext {
  * a stale tab is told to reload instead of "This choice expired".
  */
 
+/**
+ * R56 fix review: Settings reads only the owner's own choices. A client's /c
+ * choice carries the link creator's user id, so without this an owner given
+ * its id could list, finish or cancel it; it answers as a missing row.
+ */
+const OWNER_FLOW = { connectLinkId: null };
+
 /** The platforms whose connect can end in a choice (server/connections/pendingConnection.ts). */
 const CHOOSABLE = ["facebook_page", "instagram", "linkedin", "pinterest"] as const;
 
@@ -58,9 +65,14 @@ async function notFound(request: Request, id: string, owner: { workspaceId: stri
   // sign-in button (R31 platform-clients L1).
   const choice = await prisma.pendingConnection.findUnique({
     where: { id },
-    select: { workspaceId: true, userId: true, expiresAt: true, platform: true },
+    select: { workspaceId: true, userId: true, expiresAt: true, platform: true, connectLinkId: true },
   });
-  if (choice && choice.userId === owner.userId && choice.workspaceId !== owner.workspaceId) {
+  if (
+    choice &&
+    (choice.connectLinkId ?? null) === null &&
+    choice.userId === owner.userId &&
+    choice.workspaceId !== owner.workspaceId
+  ) {
     const step = await otherWorkspaceStep(choice.workspaceId, owner.userId, choice.platform);
     const error =
       choice.expiresAt.getTime() <= Date.now()
@@ -210,7 +222,7 @@ export async function GET(request: Request, { params }: PendingRouteContext) {
   const { id } = await params;
 
   try {
-    const pending = await loadPendingConnection(id, ownerOf(contextOrError));
+    const pending = await loadPendingConnection(id, ownerOf(contextOrError), OWNER_FLOW);
     if (!pending) {
       return await notFound(request, id, ownerOf(contextOrError));
     }
@@ -282,7 +294,7 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
 
   let pending: Awaited<ReturnType<typeof loadPendingConnection>>;
   try {
-    pending = await loadPendingConnection(id, owner);
+    pending = await loadPendingConnection(id, owner, OWNER_FLOW);
     if (!pending) {
       return await notFound(request, id, ownerOf(contextOrError));
     }
@@ -375,7 +387,7 @@ export async function DELETE(request: Request, { params }: PendingRouteContext) 
   // R42 pages-a L6: what the load read, so a failed Cancel says when the choice really ends.
   let loaded: LoadedPendingConnection | null = null;
   try {
-    const pending = await loadPendingConnection(id, ownerOf(contextOrError));
+    const pending = await loadPendingConnection(id, ownerOf(contextOrError), OWNER_FLOW);
     if (!pending) {
       return await notFound(request, id, ownerOf(contextOrError));
     }

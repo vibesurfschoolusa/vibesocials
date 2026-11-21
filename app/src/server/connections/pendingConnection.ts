@@ -160,13 +160,21 @@ function isChoosablePlatform(platform: Platform): platform is ChoosablePlatform 
  * The pending connect `id`, if it exists, hasn't expired, and was started by
  * `userId` in `workspaceId`; otherwise null. An expired (or unreadable) row of
  * the caller's is deleted on the way.
+ *
+ * `flow`, when given, is the flow the caller reads for: null for the owner's
+ * Settings, a link's id for /c. A row from another flow is not found and left
+ * alone (R56 fix review: a client's choice carries the link creator's user id).
  */
 export async function loadPendingConnection(
   id: string,
   owner: { workspaceId: string; userId: string },
+  flow?: { connectLinkId: string | null },
 ): Promise<LoadedPendingConnection | null> {
   const row = await prisma.pendingConnection.findUnique({ where: { id } });
   if (!row || row.workspaceId !== owner.workspaceId || row.userId !== owner.userId) {
+    return null;
+  }
+  if (flow && (row.connectLinkId ?? null) !== flow.connectLinkId) {
     return null;
   }
 

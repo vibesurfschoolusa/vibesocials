@@ -147,7 +147,7 @@ const TOKENS = ["page-token-1", "page-token-2", "li-access", "li-refresh", "pin-
 
 function row(
   payload: PendingConnectionPayload,
-  overrides: Partial<{ workspaceId: string; userId: string; expiresAt: Date; payload: string }> = {},
+  overrides: Partial<{ workspaceId: string; userId: string; expiresAt: Date; payload: string; connectLinkId: string | null }> = {},
 ) {
   return {
     id: PENDING_ID,
@@ -297,6 +297,37 @@ describe.each(HANDLERS)("%s /api/connections/pending/[id]: access", (_method, ha
     expect(response.status).toBe(404);
     expect(deleteManyMock).not.toHaveBeenCalled();
     expectNothingSaved();
+  });
+
+  // R56 fix review: a client's /c choice carries the link creator's user id,
+  // so Settings treats a link's row as missing: the owner can't list, finish
+  // or cancel it.
+  it("a client link's choice answers exactly as a missing one, and is left alone", async () => {
+    findUniqueMock.mockResolvedValue(null);
+    const missing = await handler(request(), ctx());
+    const missingAnswer = { status: missing.status, body: await missing.json() };
+
+    for (const expiresAt of [new Date(Date.now() + 10 * 60 * 1000), new Date(Date.now() - 1000)]) {
+      findUniqueMock.mockResolvedValue(row(FACEBOOK, { connectLinkId: "link-1", expiresAt }));
+      const response = await handler(request(), ctx());
+      expect(response.status).toBe(404);
+      expect({ status: response.status, body: await response.json() }).toEqual(missingAnswer);
+    }
+    expect(deleteManyMock).not.toHaveBeenCalled();
+    expectNothingSaved();
+  });
+
+  it("a client link's choice in another workspace never says it was started there", async () => {
+    findUniqueMock.mockResolvedValue(row(FACEBOOK, { connectLinkId: "link-1", workspaceId: "ws-other" }));
+    const response = await handler(request(), ctx());
+    expect(response.status).toBe(404);
+    expect((await response.json()).error).not.toContain("another workspace");
+  });
+
+  it("the owner's own choice (no link) works as before", async () => {
+    findUniqueMock.mockResolvedValue(row(FACEBOOK, { connectLinkId: null }));
+    const response = await handler(request(), ctx());
+    expect(response.status).toBe(200);
   });
 
   it("404s on a payload that can't be opened (e.g. the key changed), and deletes it", async () => {
