@@ -28,17 +28,22 @@ export const UPLOAD_LINK_IP_LIMIT_MESSAGE = `${UPLOAD_LINK_IP_LIMIT_REASON} Try 
 export const UPLOAD_LINK_BYTES_LIMIT_REASON = "This link has taken 20 GB of files today, its daily limit.";
 export const UPLOAD_LINK_BYTES_LIMIT_MESSAGE = `${UPLOAD_LINK_BYTES_LIMIT_REASON} Send the rest tomorrow.`;
 
+/** How the link's "past 20 GB" refusal starts, so /u (send-file.ts) knows it. */
+export const UPLOAD_LINK_BYTES_PAST_START = "This file would take this link past today's 20 GB.";
+
 /**
  * R62 pages-a-2 L1: the link's 20 GB refusal, from the bytes its day had left
  * before this file. Under 1 MB left, the day is used up; unknown, a smaller
- * file may still fit. Not in send-file.ts's limit list, so /u shows it as it is.
+ * file may still fit. R63 client-journey L1: it ends with the "used up"
+ * sentence's "Send the rest tomorrow.", which /u replaces with the answer's
+ * real wait and the retry step, as for every limit.
  */
 export function uploadLinkBytesLimitMessage(leftBytes: number | undefined): string {
-  const past = "This file would take this link past today's 20 GB upload limit.";
-  if (leftBytes === undefined) return `${past} A smaller file may still go today; the limit resets at midnight UTC.`;
+  const next = UPLOAD_LINK_BYTES_LIMIT_MESSAGE.slice(UPLOAD_LINK_BYTES_LIMIT_REASON.length);
+  if (leftBytes === undefined) return `${UPLOAD_LINK_BYTES_PAST_START} A smaller file may still go today.${next}`;
   const leftMb = Math.floor(leftBytes / (1024 * 1024));
   if (leftMb < 1) return UPLOAD_LINK_BYTES_LIMIT_MESSAGE;
-  return `${past} A file under ${leftMb} MB can still go today; the limit resets at midnight UTC.`;
+  return `${UPLOAD_LINK_BYTES_PAST_START} A file under ${leftMb} MB can still go today.${next}`;
 }
 
 /** Files one link takes in a UTC day, counted on the upload token and on the registration. */

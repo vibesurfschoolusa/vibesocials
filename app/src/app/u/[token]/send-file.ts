@@ -6,6 +6,7 @@ import { waitSecondsOf, waitText } from "@/lib/tooManyTriesText";
 import {
   UPLOAD_LINK_BYTES_LIMIT_MESSAGE,
   UPLOAD_LINK_BYTES_LIMIT_REASON,
+  UPLOAD_LINK_BYTES_PAST_START,
   UPLOAD_LINK_DAILY_LIMIT_MESSAGE,
   UPLOAD_LINK_DAILY_LIMIT_REASON,
   UPLOAD_LINK_IP_LIMIT_MESSAGE,
@@ -116,6 +117,22 @@ const LIMIT_REASONS: ReadonlyMap<string, string> = new Map([
   [UPLOAD_LINK_BYTES_LIMIT_MESSAGE, UPLOAD_LINK_BYTES_LIMIT_REASON],
 ]);
 
+/** The "used up" sentence's last part, which the "past 20 GB" sentence ends with too. */
+const BYTES_LIMIT_NEXT = UPLOAD_LINK_BYTES_LIMIT_MESSAGE.slice(UPLOAD_LINK_BYTES_LIMIT_REASON.length);
+
+/**
+ * R63 client-journey L1: a limit's reason. The "past 20 GB" sentence names the
+ * size that can still go, so it is known by how it starts and ends.
+ */
+function limitReasonOf(routeSentence: string): string | undefined {
+  const reason = LIMIT_REASONS.get(routeSentence);
+  if (reason) return reason;
+  if (routeSentence.startsWith(UPLOAD_LINK_BYTES_PAST_START) && routeSentence.endsWith(BYTES_LIMIT_NEXT)) {
+    return routeSentence.slice(0, -BYTES_LIMIT_NEXT.length);
+  }
+  return undefined;
+}
+
 /**
  * R45 pages-a L6, lead review: a limit's refusal names the answer's real wait
  * (the routes' "tomorrow" is a UTC day), then the step that keeps the
@@ -124,7 +141,7 @@ const LIMIT_REASONS: ReadonlyMap<string, string> = new Map([
  * refusal keeps the route's sentence.
  */
 export function uploadLimitText(routeSentence: string, waitSeconds: number | undefined): string {
-  const reason = LIMIT_REASONS.get(routeSentence);
+  const reason = limitReasonOf(routeSentence);
   if (!reason) return routeSentence;
   return waitSeconds
     ? `${reason} Wait ${waitText(waitSeconds)}, then try the files that didn't send.`
