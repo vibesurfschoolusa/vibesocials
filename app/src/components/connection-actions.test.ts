@@ -153,9 +153,11 @@ describe("Switch account dialog", () => {
   });
 
   // R63 client-journey L2: a Google account posts nowhere until a location is chosen.
+  // R64 client-journey L1: so the second sentence names the location too, since a
+  // connected account with no location still fails.
   it("Google Business Profile: the posts go to the new account once you sign in and choose its location", () => {
     const sentence =
-      "Scheduled posts, and posts waiting for approval, that chose Google Business Profile go to the new account once you sign in and choose its location. If you stop before then, they fail on Google Business Profile until you connect an account again.";
+      "Scheduled posts, and posts waiting for approval, that chose Google Business Profile go to the new account once you sign in and choose its location. If you stop before then, they fail on Google Business Profile until an account is connected and its location chosen.";
     expect(switchScheduledSentence("google_business_profile")).toBe(sentence);
     expect(switchDescription("google_business_profile")).toContain(sentence);
   });
