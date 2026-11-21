@@ -109,15 +109,21 @@ function numbersDeletedSentence(platform: string): string {
  */
 function scheduledPostsSentence(platform: string, chosenCount: number | null): string {
   const label = platformLabel(platform as Platform);
+  // R65 client-journey L1: a Google Business Profile connected again has no
+  // location, and its posts fail until one is chosen, as Switch says.
+  const until =
+    platform === "google_business_profile"
+      ? "until it is connected again and its location chosen"
+      : "until you reconnect it";
   if (chosenCount === null) {
-    return `Scheduled posts, and posts waiting for approval, that chose ${label} will fail on it until you reconnect it.`;
+    return `Scheduled posts, and posts waiting for approval, that chose ${label} will fail on it ${until}.`;
   }
   if (chosenCount === 0) {
     return `No scheduled post, or post waiting for approval, chose ${label}, so none will fail on it.`;
   }
   return chosenCount === 1
-    ? `1 scheduled post, or post waiting for approval, chose ${label}. It will fail on ${label} until you reconnect it.`
-    : `${chosenCount} scheduled posts, or posts waiting for approval, chose ${label}. They will fail on ${label} until you reconnect it.`;
+    ? `1 scheduled post, or post waiting for approval, chose ${label}. It will fail on ${label} ${until}.`
+    : `${chosenCount} scheduled posts, or posts waiting for approval, chose ${label}. They will fail on ${label} ${until}.`;
 }
 
 export function disconnectDescription(platform: string, chosenCount: number | null): string {
