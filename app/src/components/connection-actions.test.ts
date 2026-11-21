@@ -73,6 +73,44 @@ describe("Disconnect dialog", () => {
   });
 });
 
+// R65 client-journey L1: a Google Business Profile connected again has no
+// location, so its posts fail until one is chosen; the dialog names that step.
+describe("Disconnect dialog: Google Business Profile names choosing the location", () => {
+  const GBP = "Google Business Profile";
+
+  it("count unread: fails until it is connected again and its location chosen", () => {
+    expect(disconnectDescription("google_business_profile", null)).toContain(
+      `Scheduled posts, and posts waiting for approval, that chose ${GBP} will fail on it until it is connected again and its location chosen.`,
+    );
+  });
+
+  it("1: fails until it is connected again and its location chosen", () => {
+    expect(disconnectDescription("google_business_profile", 1)).toContain(
+      `1 scheduled post, or post waiting for approval, chose ${GBP}. It will fail on ${GBP} until it is connected again and its location chosen.`,
+    );
+  });
+
+  it("3: fail until it is connected again and its location chosen", () => {
+    expect(disconnectDescription("google_business_profile", 3)).toContain(
+      `3 scheduled posts, or posts waiting for approval, chose ${GBP}. They will fail on ${GBP} until it is connected again and its location chosen.`,
+    );
+  });
+
+  it("0: as before", () => {
+    expect(disconnectDescription("google_business_profile", 0)).toBe(
+      `No scheduled post, or post waiting for approval, chose ${GBP}, so none will fail on it. Your past posts stay in Activity, and you can reconnect at any time. ${GBP_GONE}`,
+    );
+  });
+
+  it("another platform: as before", () => {
+    for (const count of [null, 1, 3]) {
+      const text = disconnectDescription("instagram", count);
+      expect(text).toContain("until you reconnect it.");
+      expect(text).not.toContain("location");
+    }
+  });
+});
+
 describe("fetchScheduledCount", () => {
   it("asks the server for the rendered workspace's count", async () => {
     const impl = vi.fn(async () => new Response(JSON.stringify({ count: 3 }), { status: 200 })) as unknown as typeof fetch;
