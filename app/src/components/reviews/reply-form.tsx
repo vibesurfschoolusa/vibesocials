@@ -139,11 +139,14 @@ export function DraftAIButton({
   onDraft,
   size = "md",
   id,
+  reviewer,
 }: {
   drafting: boolean;
   onDraft: () => void;
   size?: "sm" | "md";
   id?: string;
+  /** R57 pages-b L3: on a card, where it repeats, the reviewer it drafts for. */
+  reviewer?: string;
 }) {
   const icon = size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4";
   return (
@@ -155,6 +158,13 @@ export function DraftAIButton({
       onClick={draftClick(drafting, onDraft)}
       aria-disabled={drafting || undefined}
       aria-busy={drafting || undefined}
+      aria-label={
+        reviewer === undefined
+          ? undefined
+          : drafting
+            ? `Generating… a reply to the review by ${reviewer}`
+            : `Draft AI response to the review by ${reviewer}`
+      }
       className={drafting ? "aria-disabled:cursor-progress opacity-50" : undefined}
     >
       {drafting ? <Spinner size="sm" /> : <Sparkles aria-hidden className={icon} />}

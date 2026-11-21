@@ -146,11 +146,21 @@ export function ReviewCard({
               ) : (
                 // R23 pages L2: wraps, so "Draft AI response" stays on a 375 px screen.
                 <div className="flex flex-wrap gap-3">
-                  <Button id={replyButtonId(review.reviewId)} type="button" onClick={onOpenReply}>
+                  <Button
+                    id={replyButtonId(review.reviewId)}
+                    type="button"
+                    aria-label={`Reply to review by ${review.reviewer.displayName}`}
+                    onClick={onOpenReply}
+                  >
                     <MessageSquare aria-hidden className="h-4 w-4" />
                     Reply to review
                   </Button>
-                  <DraftAIButton id={draftButtonId(review.reviewId)} drafting={isGeneratingAI} onDraft={onDraftAI} />
+                  <DraftAIButton
+                    id={draftButtonId(review.reviewId)}
+                    drafting={isGeneratingAI}
+                    onDraft={onDraftAI}
+                    reviewer={review.reviewer.displayName}
+                  />
                 </div>
               )}
             </div>

@@ -389,6 +389,7 @@ export function MediaCard({ item, onReuse, onDeleteRequest, selected, canSelect,
             variant="outline"
             size="sm"
             className="w-full min-w-0 sm:w-auto sm:flex-1"
+            aria-label={`Use in new post ${item.originalFilename}`}
             onClick={() => onReuse(item)}
           >
             <Repeat className="h-3.5 w-3.5 shrink-0" aria-hidden />
