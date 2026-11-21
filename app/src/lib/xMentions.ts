@@ -4,9 +4,15 @@ import { countsAsLink } from "@/lib/xWeightedLength";
 
 // R60 platform-clients L2: as twitter-text, a mention starts after any character
 // outside [A-Za-z0-9_!#$%&*@＠], so ".@kai", "—@ana" and "📸@kai" are mentions
-// on X too, and "info@surf.com" is not.
-const MENTION = /(?<![A-Za-z0-9_!#$%&*@＠])@([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)/g;
-const MENTION_TOKEN = /^@[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*[,;]*$/;
+// on X too, and "info@surf.com" is not. R61 platform-clients L1: as in
+// twitter-text, the full-width "＠" is a mention sign too.
+const MENTION = /(?<![A-Za-z0-9_!#$%&*@＠])[@＠]([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)/g;
+const MENTION_TOKEN = /^[@＠][A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*[,;]*$/;
+
+/** Whether `text` has either mention sign, so a text without one is returned as is. */
+function hasMentionSign(text: string): boolean {
+  return text.includes("@") || text.includes("＠");
+}
 // Characters people put between footer tags: "#surf · @kai | @mia, @ana".
 const SEPARATOR_TOKEN = /^[·•|,;/–—-]+$/;
 
@@ -73,7 +79,7 @@ function linkSpans(line: string): Array<[number, number]> {
 }
 
 function inRunningText(line: string): string {
-  if (!line.includes("@")) return line;
+  if (!hasMentionSign(line)) return line;
   // Every link has a dot, so a line without one needs no split.
   const spans = line.includes(".") ? linkSpans(line) : [];
   // Matches come in order, so one pass over the spans finds each one's link.
@@ -120,7 +126,7 @@ interface Block {
  * (live post, 2026-11-08), because the caption footer tags many accounts.
  * Only the X text changes: other platforms keep their mentions.
  *
- * A mention is an `@` at the start of the text or after any character but a
+ * A mention is an `@` (or the full-width `＠`) at the start of the text or after any character but a
  * letter, digit or one of `_!#$%&*@＠`, followed by a handle; dotted Instagram-style handles
  * (`@vibesurfschool.za`) count as one. An email address (`info@example.com`)
  * is not a mention and is kept.
@@ -139,7 +145,7 @@ interface Block {
  * comes back exactly as written.
  */
 export function removeXMentions(text: string): string {
-  if (!text.includes("@")) return text;
+  if (!hasMentionSign(text)) return text;
   const blocks: Block[] = [];
   for (const line of text.split("\n")) {
     const blank = line.trim() === "";
