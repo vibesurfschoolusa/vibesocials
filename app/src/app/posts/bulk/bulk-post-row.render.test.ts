@@ -56,13 +56,15 @@ function render(
     locked?: boolean;
     aiCaptions?: boolean;
     skipped?: Platform[];
+    index?: number;
+    count?: number;
   } = {},
 ) {
   return renderToStaticMarkup(
     createElement(BulkPostRow, {
       row: r,
-      index: 0,
-      count: 1,
+      index: extra.index ?? 0,
+      count: extra.count ?? 1,
       skipped: extra.skipped ?? [],
       locked: extra.locked ?? false,
       minWhen: "2026-11-14T10:00",
@@ -428,17 +430,28 @@ describe("Add many row: the caption counter", () => {
 });
 
 // R55 pages-a-2 L2: Up and Down name their file; so do Remove and Retry.
+// R58 pages-a-2 L1: with the row number the row shows, as two phones give
+// files the same name.
 describe("Add many row: buttons name their file", () => {
+  it("two rows with the same file name have different names, by their row number", () => {
+    const first = render(row({ fileName: "IMG_0001.JPG" }), { index: 0, count: 2 });
+    const second = render(row({ fileName: "IMG_0001.JPG" }), { index: 1, count: 2 });
+    expect(first).toContain('aria-label="Remove 1. IMG_0001.JPG"');
+    expect(second).toContain('aria-label="Remove 2. IMG_0001.JPG"');
+    expect(first).toContain('aria-label="Move 1. IMG_0001.JPG down"');
+    expect(second).toContain('aria-label="Move 2. IMG_0001.JPG up"');
+  });
+
   it("the row's Remove names the file", () => {
-    expect(render(row({ fileName: "surf.jpg" }))).toContain('aria-label="Remove surf.jpg"');
+    expect(render(row({ fileName: "surf.jpg" }))).toContain('aria-label="Remove 1. surf.jpg"');
   });
 
   it("the failed-upload Remove and Retry name the file", () => {
     const html = render(
       row({ fileName: "surf.jpg", upload: "failed", blob: null, uploadError: "x", uploadErrorKind: "network" }),
     );
-    expect(html.match(/aria-label="Remove surf\.jpg"/g)?.length).toBe(2);
-    expect(html).toContain('aria-label="Retry surf.jpg"');
+    expect(html.match(/aria-label="Remove 1\. surf\.jpg"/g)?.length).toBe(2);
+    expect(html).toContain('aria-label="Retry 1. surf.jpg"');
   });
 });
 
@@ -450,24 +463,24 @@ describe("Add many row: per-row buttons name their file", () => {
 
   it("Write again, Improve caption and Write it for me", () => {
     const html = render(row({ mediaItemId: "m1" }));
-    expect(button(html, "Write again")).toContain('aria-label="Write again a.jpg"');
-    expect(button(html, "Improve caption")).toContain('aria-label="Improve caption a.jpg"');
-    expect(button(html, "Write it for me")).toContain('aria-label="Write it for me a.jpg"');
+    expect(button(html, "Write again")).toContain('aria-label="Write again 1. a.jpg"');
+    expect(button(html, "Improve caption")).toContain('aria-label="Improve caption 1. a.jpg"');
+    expect(button(html, "Write it for me")).toContain('aria-label="Write it for me 1. a.jpg"');
   });
 
   it("Improve names the file while it reads Improving", () => {
-    expect(button(render(row({ improving: true })), "Improving...")).toContain('aria-label="Improving... a.jpg"');
+    expect(button(render(row({ improving: true })), "Improving...")).toContain('aria-label="Improving... 1. a.jpg"');
   });
 
   it("Change cover and Done", () => {
     const video = row({ fileName: "clip.mp4", mimeType: "video/mp4" });
-    expect(button(render(video), "Change cover")).toContain('aria-label="Change cover clip.mp4"');
-    expect(button(render(video, { coverOpen: true }), "Done")).toContain('aria-label="Done clip.mp4"');
+    expect(button(render(video), "Change cover")).toContain('aria-label="Change cover 1. clip.mp4"');
+    expect(button(render(video, { coverOpen: true }), "Done")).toContain('aria-label="Done 1. clip.mp4"');
   });
 
   it("It is in the Queue and Send again", () => {
     const html = render(row({ uncertain: true }));
-    expect(button(html, "It is in the Queue")).toContain('aria-label="It is in the Queue a.jpg"');
-    expect(button(html, "Send again")).toContain('aria-label="Send again a.jpg"');
+    expect(button(html, "It is in the Queue")).toContain('aria-label="It is in the Queue 1. a.jpg"');
+    expect(button(html, "Send again")).toContain('aria-label="Send again 1. a.jpg"');
   });
 });

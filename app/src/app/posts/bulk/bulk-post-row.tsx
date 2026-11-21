@@ -200,6 +200,9 @@ export function BulkPostRow({
   const isPhoto = row.mimeType.startsWith("image/");
   const isVideo = row.mimeType.startsWith("video/");
   const status = uploadText(row);
+  // R58 pages-a-2 L1: two phones give files the same name, so the buttons name
+  // the row by the number it shows and its file.
+  const rowName = `${index + 1}. ${row.fileName}`;
   const captionRef = useRef<HTMLTextAreaElement>(null);
   const captionIsLocked = captionLocked(row);
   // R27 MM4: Write again hides both caption buttons and the old text stays, so this line says it is working.
@@ -222,7 +225,7 @@ export function BulkPostRow({
                 size="md"
                 disabled={!editable || index === 0}
                 onClick={() => onMove(-1)}
-                aria-label={`Move ${row.fileName} up`}
+                aria-label={`Move ${rowName} up`}
               >
                 Up
               </Button>
@@ -231,11 +234,11 @@ export function BulkPostRow({
                 size="md"
                 disabled={!editable || index === count - 1}
                 onClick={() => onMove(1)}
-                aria-label={`Move ${row.fileName} down`}
+                aria-label={`Move ${rowName} down`}
               >
                 Down
               </Button>
-              <Button variant="ghost" size="md" disabled={!editable} onClick={onRemove} aria-label={`Remove ${row.fileName}`}>
+              <Button variant="ghost" size="md" disabled={!editable} onClick={onRemove} aria-label={`Remove ${rowName}`}>
                 Remove
               </Button>
             </div>
@@ -250,11 +253,11 @@ export function BulkPostRow({
             <div className="mt-2 flex gap-2">
               {/* R48 publishing L4: a file refused for itself is refused on every Retry. */}
               {row.uploadErrorKind === "file" ? null : (
-                <Button size="md" disabled={locked} onClick={onRetry} aria-label={`Retry ${row.fileName}`}>
+                <Button size="md" disabled={locked} onClick={onRetry} aria-label={`Retry ${rowName}`}>
                   Retry
                 </Button>
               )}
-              <Button variant="outline" size="md" disabled={locked} onClick={onRemove} aria-label={`Remove ${row.fileName}`}>
+              <Button variant="outline" size="md" disabled={locked} onClick={onRemove} aria-label={`Remove ${rowName}`}>
                 Remove
               </Button>
             </div>
@@ -296,7 +299,7 @@ export function BulkPostRow({
                   variant="outline"
                   size="md"
                   disabled={row.improving}
-                  aria-label={`Write again ${row.fileName}`}
+                  aria-label={`Write again ${rowName}`}
                   onClick={(event) => {
                     focusAfterPress(event.currentTarget, () => captionRef.current);
                     onWriteAgain();
@@ -311,7 +314,7 @@ export function BulkPostRow({
                   size="md"
                   loading={row.improving}
                   aria-busy={row.improving}
-                  aria-label={`${row.improving ? "Improving..." : "Improve caption"} ${row.fileName}`}
+                  aria-label={`${row.improving ? "Improving..." : "Improve caption"} ${rowName}`}
                   onClick={onImprove}
                 >
                   {row.improving ? "Improving..." : "Improve caption"}
@@ -351,7 +354,7 @@ export function BulkPostRow({
                   variant="outline"
                   size="md"
                   loading={row.altTextWriting}
-                  aria-label={`Write it for me ${row.fileName}`}
+                  aria-label={`Write it for me ${rowName}`}
                   onClick={onWriteDescription}
                 >
                   Write it for me
@@ -374,7 +377,7 @@ export function BulkPostRow({
                 <Button
                   variant="outline"
                   size="md"
-                  aria-label={`${coverOpen ? "Done" : "Change cover"} ${row.fileName}`}
+                  aria-label={`${coverOpen ? "Done" : "Change cover"} ${rowName}`}
                   onClick={() => onCoverOpenChange(!coverOpen)}
                 >
                   {coverOpen ? "Done" : "Change cover"}
@@ -439,10 +442,10 @@ export function BulkPostRow({
           <Alert variant="warning">
             <p>{BULK_MAYBE_CREATED_MESSAGE}</p>
             <div className="mt-2 flex flex-wrap gap-2">
-              <Button size="md" disabled={locked} aria-label={`It is in the Queue ${row.fileName}`} onClick={onConfirmInQueue}>
+              <Button size="md" disabled={locked} aria-label={`It is in the Queue ${rowName}`} onClick={onConfirmInQueue}>
                 It is in the Queue
               </Button>
-              <Button variant="outline" size="md" disabled={locked} aria-label={`Send again ${row.fileName}`} onClick={onSendAgain}>
+              <Button variant="outline" size="md" disabled={locked} aria-label={`Send again ${rowName}`} onClick={onSendAgain}>
                 Send again
               </Button>
             </div>

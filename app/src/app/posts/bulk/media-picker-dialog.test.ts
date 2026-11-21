@@ -7,6 +7,7 @@ import {
   LOAD_MORE_FAILED_MESSAGE,
   mediaCountLine,
   mediaPageUrl,
+  pickerItemName,
 } from "./media-picker-dialog";
 
 // R32 publishing L1: the picker lists the library of the workspace Add many
@@ -121,5 +122,24 @@ describe("Media picker says it is loading, then the result", () => {
   it("the list's line says how many are shown", () => {
     expect(mediaCountLine(1)).toBe("Showing 1 photo or video.");
     expect(mediaCountLine(12)).toBe("Showing 12 photos and videos.");
+  });
+});
+
+// R58 pages-a-2 L1: two Media items often share a file name, so a checkbox
+// names the item's upload time too (cardName).
+describe("the picker's checkboxes", () => {
+  const at = (iso: string) =>
+    new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
+  it("two items with the same file name have different names, by their upload date", () => {
+    const a = pickerItemName({ originalFilename: "IMG_0001.JPG", createdAt: "2026-11-12T15:00:00.000Z" });
+    const b = pickerItemName({ originalFilename: "IMG_0001.JPG", createdAt: "2026-11-14T15:00:00.000Z" });
+    expect(a).toBe(`IMG_0001.JPG, ${at("2026-11-12T15:00:00.000Z")}`);
+    expect(b).toBe(`IMG_0001.JPG, ${at("2026-11-14T15:00:00.000Z")}`);
+  });
+
+  it("each checkbox's name is Choose and that name", () => {
+    const source = readFileSync(new URL("./media-picker-dialog.tsx", import.meta.url), "utf8");
+    expect(source).toContain("aria-label={`Choose ${pickerItemName(item)}`}");
   });
 });

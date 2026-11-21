@@ -18,7 +18,16 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { toggleMediaSelection } from "@/lib/bulkMedia";
 import { appendMediaPage, type MediaItemDto } from "@/lib/mediaDto";
+import { cardName } from "@/lib/queueLabelName";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
+
+/**
+ * A Media item in its checkbox's name. R58 pages-a-2 L1: two items often share
+ * a file name, so it carries the upload time too (cardName).
+ */
+export function pickerItemName(item: Pick<MediaItemDto, "originalFilename" | "createdAt">): string {
+  return cardName(item.originalFilename, item.createdAt);
+}
 
 interface MediaPickerDialogProps {
   /** R32: the workspace Add many was drawn for; every page read sends it. */
@@ -201,7 +210,7 @@ export function MediaPickerDialog({ workspaceId, open, onOpenChange, addedIds, r
                           checked={checked}
                           disabled={added || (!checked && atLimit)}
                           onChange={() => setSelected((current) => toggleMediaSelection(current, item.id))}
-                          aria-label={`Choose ${item.originalFilename}`}
+                          aria-label={`Choose ${pickerItemName(item)}`}
                         />
                       </span>
                       <span className="block p-2 text-xs">
