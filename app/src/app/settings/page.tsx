@@ -179,16 +179,24 @@ export default async function SettingsPage({
     };
   }
   if (different) {
-    oauthResult = differentFrom
-      ? {
-          variant: "danger",
-          platform: different.platform,
-          message: (different.told ? reconnectDifferentAccountMessage : differentAccountKeptMessage)(
-            different.platform,
-            connectedAccountName(differentFrom),
-          ),
-        }
-      : null;
+    oauthResult = !differentFrom
+      ? null
+      : different.told
+        ? {
+            variant: "danger",
+            platform: different.platform,
+            message: reconnectDifferentAccountMessage(different.platform, connectedAccountName(differentFrom)),
+          }
+        : {
+            variant: "danger",
+            platform: different.platform,
+            message: differentAccountKeptMessage(
+              different.platform,
+              connectedAccountName(differentFrom),
+              context.role === "owner",
+            ),
+            helpLink: false,
+          };
   }
   const now = new Date();
   // Unconfirmed (R7 client-journey): the LinkedIn callback flagged a reconnect
@@ -306,7 +314,7 @@ export default async function SettingsPage({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <p>{oauthResult.message}</p>
-              {oauthResult.variant === "danger" && oauthResult.platform ? (
+              {oauthResult.variant === "danger" && oauthResult.platform && oauthResult.helpLink !== false ? (
                 <Link
                   href={platformHelpHref(oauthResult.platform)}
                   className="mt-1 inline-block text-sm font-medium text-primary underline-offset-4 hover:underline"

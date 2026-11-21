@@ -46,6 +46,12 @@ export interface OAuthResult {
   variant: "success" | "warning" | "danger";
   message: string;
   platform: Platform | null;
+  /**
+   * R54 fix review L2: false where the platform's how-to-connect guide can't
+   * help (a sign-in refused over a connection that works). A danger result
+   * links to it otherwise.
+   */
+  helpLink?: false;
 }
 
 /**
@@ -84,9 +90,13 @@ export function differentAccountBanner(
  * is refused as a different account too (saveConnection.ts), and a reload or
  * Back after a reconnect worked keeps the code; nothing changed either way.
  * `connectedName` comes from the workspace's own row, never the address.
+ * R54 fix review L1: an owner's working row shows Switch account on every
+ * platform (connection-actions.tsx), the way to another account; a member
+ * can't connect, so the member gets only what happened.
  */
-export function differentAccountKeptMessage(platform: Platform, connectedName: string): string {
-  return `Nothing changed: ${PLATFORM_LABELS[platform]} stays connected as ${connectedName}.`;
+export function differentAccountKeptMessage(platform: Platform, connectedName: string, isOwner: boolean): string {
+  const kept = `Nothing changed: ${PLATFORM_LABELS[platform]} stays connected as ${connectedName}.`;
+  return isOwner ? `${kept} To connect a different account instead, use Switch account.` : kept;
 }
 
 /**

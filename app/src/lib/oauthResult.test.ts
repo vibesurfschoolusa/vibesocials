@@ -770,9 +770,17 @@ describe("describeOAuthResult — every sentence names only the button the row s
 // R53 client-journey: one rule for Settings and /c.
 // R54 client-journey L1: a refused sign-in over a working row.
 describe("differentAccountKeptMessage", () => {
-  it("says nothing changed and names the platform and the connected account", () => {
-    expect(differentAccountKeptMessage("youtube", "Surf Co channel")).toBe("Nothing changed: YouTube stays connected as Surf Co channel.");
-    expect(differentAccountKeptMessage("x", "@surfco")).toBe("Nothing changed: X stays connected as @surfco.");
+  it("an owner: nothing changed, then the working row's Switch account", () => {
+    expect(differentAccountKeptMessage("youtube", "Surf Co channel", true)).toBe(
+      "Nothing changed: YouTube stays connected as Surf Co channel. To connect a different account instead, use Switch account.",
+    );
+    expect(differentAccountKeptMessage("x", "@surfco", true)).toBe(
+      "Nothing changed: X stays connected as @surfco. To connect a different account instead, use Switch account.",
+    );
+  });
+
+  it("a member, who can't connect: the first sentence only", () => {
+    expect(differentAccountKeptMessage("youtube", "Surf Co channel", false)).toBe("Nothing changed: YouTube stays connected as Surf Co channel.");
   });
 });
 

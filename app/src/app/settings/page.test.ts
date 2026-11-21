@@ -652,12 +652,36 @@ describe("SettingsPage — the different-account sentence follows the row's butt
   it("a working connection: nothing changed, named from the row, as an alert", async () => {
     findConnectionsMock.mockResolvedValue([youtube({})]);
     const html = await render("youtube_different_account");
-    expect(html).toContain("Nothing changed: YouTube stays connected as Surf Co channel.");
+    // R54 fix review L1: the owner's way forward, the working row's own button.
+    expect(html).toContain(
+      "Nothing changed: YouTube stays connected as Surf Co channel. To connect a different account instead, use Switch account.",
+    );
+    // R54 fix review L2: Help's how-to-connect doesn't help a working row.
+    expect(html).not.toContain("See how to connect");
     // The variant googlePermissionMessage's working-row sentence has (danger).
     const before = html.slice(0, html.indexOf("Nothing changed: YouTube"));
     expect(before.slice(before.lastIndexOf("<div role="))).toMatch(/^<div role="alert" class="[^"]*border-destructive\/25/);
     expect(html).not.toContain(YOUTUBE);
     expect(html).not.toContain("Switch account to change");
+  });
+
+  it("a member with a working row: the first sentence only, no button to name", async () => {
+    findConnectionsMock.mockResolvedValue([youtube({})]);
+    getWorkspaceContextMock.mockResolvedValue(context("member"));
+    const html = renderToStaticMarkup(
+      (await SettingsPage({ searchParams: Promise.resolve({ error: "youtube_different_account" }) })) as ReactElement,
+    );
+    expect(html).toContain("Nothing changed: YouTube stays connected as Surf Co channel.</p>");
+    expect(html).not.toContain("Switch account");
+    expect(html).not.toContain("See how to connect");
+  });
+
+  it("a flagged row keeps its sentence and its help link", async () => {
+    findConnectionsMock.mockResolvedValue([youtube({ needsReconnect: true })]);
+    const html = await render("youtube_different_account");
+    expect(html).toContain(YOUTUBE);
+    expect(html).toContain("See how to connect YouTube");
+    expect(html).not.toContain("Nothing changed:");
   });
 
   it("no connection: no sentence at all", async () => {
@@ -677,7 +701,9 @@ describe("SettingsPage — the different-account sentence follows the row's butt
   it("LinkedIn working: nothing changed, with the row's page name", async () => {
     findConnectionsMock.mockResolvedValue([linkedIn({})]);
     const html = await render("linkedin_different_account");
-    expect(html).toContain("Nothing changed: LinkedIn stays connected as Surf Co page.");
+    expect(html).toContain(
+      "Nothing changed: LinkedIn stays connected as Surf Co page. To connect a different account instead, use Switch account.",
+    );
     expect(html).not.toContain("Reconnect shows the steps");
   });
 
@@ -933,6 +959,18 @@ describe("SettingsPage — a missing Google permission", () => {
 
     expect(html).toContain("YouTube wasn&#x27;t reconnected: the permission to upload videos wasn&#x27;t allowed. Click Reconnect and");
     expect(html).not.toContain("Click Connect again");
+  });
+
+  // R54 fix review: the kept different-account sentence changed nothing here.
+  it("a working YouTube row: Google's own sentence and its help link, unchanged", async () => {
+    findConnectionsMock.mockResolvedValue([
+      { platform: "youtube", accountIdentifier: "chan-1", metadata: { username: "Surf Co channel" }, needsReconnect: false, expiresAt: null, refreshToken: "sealed" },
+    ]);
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+    const html = await render("youtube_upload_not_allowed");
+    expect(html).toContain("Nothing changed: the permission to upload videos wasn&#x27;t allowed, and YouTube stays connected as before.</p>");
+    expect(html).toContain("See how to connect YouTube");
+    expect(html).not.toContain("Switch account");
   });
 
   it("no YouTube row: Connect", async () => {
