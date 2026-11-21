@@ -19,7 +19,14 @@ vi.mock("@/hooks/useConnections", async (importOriginal) => ({
 }));
 vi.mock("@/lib/prepareUploadFile", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/lib/prepareUploadFile")>();
-  return { ...real, prepareUploadFile: (file: File) => Promise.resolve(file) };
+  // A file named "huge" is refused as one over 512 MB is (R63: the refused replacement).
+  return {
+    ...real,
+    prepareUploadFile: (file: File) =>
+      file.name.includes("huge")
+        ? Promise.reject(new real.PrepareFileError("file", "This file is over 512 MB, so it can't be posted."))
+        : Promise.resolve(file),
+  };
 });
 /** Every upload asked for: the key and its signal. Keys naming a `stall` entry never finish unless aborted. */
 const uploads: { key: string; signal: AbortSignal | undefined }[] = [];
@@ -375,5 +382,117 @@ describe("Create: a photo removed while it uploads", () => {
         "You changed the file while the post was sending, so nothing was posted. Press Save draft again with the new file.",
       ),
     ).toBe(true);
+  }, 10_000);
+});
+
+// R63 new-customer L1, L2 and pages-b L1: every change that empties or replaces
+// the media stops all its uploads, the stop is worded by what the page holds
+// once the change settles, and a dropped upload's bar goes.
+describe("Create: the media changed while it uploads", () => {
+  const typeCaption = (value: string) => run(() => props(byId("post-caption")).onChange({ target: { value } }));
+  const video = (name: string) => new File(["v"], `${name}.mp4`, { type: "video/mp4" });
+  const UNEXPECTED = "Unexpected error while creating post.";
+  const REMOVED = "You removed the file while the post was sending, so nothing was posted.";
+  const changed = (label: string) =>
+    `You changed the file while the post was sending, so nothing was posted. Press ${label} again with the new file.`;
+  function tomorrowNoon(): string {
+    const now = new Date(Date.now());
+    const at = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 12, 0);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T12:00`;
+  }
+  async function pressPublishAndConfirm() {
+    await run(() => props(byId("create-post-form")).onSubmit({ preventDefault() {} }));
+    const dialog = find(body, (n) => n.attributes?.role === "dialog");
+    if (!dialog) throw new Error("no Publish dialog");
+    const confirm = find(
+      dialog,
+      (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() !== "Cancel" && (n.textContent as string).trim() !== "",
+    );
+    if (!confirm) throw new Error("no confirm button");
+    await run(() => props(confirm).onClick());
+  }
+
+  it("a one-photo set replaced by 3 new photos: the old upload is aborted and the new ones start at once", async () => {
+    stall.add("keep");
+    stall.add("drop");
+    await pick(photo("keep"), photo("drop"));
+    // Before the second photo starts, it is removed: the set is one photo, still uploading.
+    await run(() => props(buttonLabelled("Remove photo 2")).onClick());
+    expect(uploadsOf("keep")).toHaveLength(1);
+    expect(uploadsOf("keep")[0]!.signal?.aborted).toBe(false);
+
+    await pick(photo("n1"), photo("n2"), photo("n3"));
+
+    expect(uploadsOf("keep")[0]!.signal?.aborted).toBe(true);
+    expect(uploadsOf("n1")).toHaveLength(1);
+    expect(uploadsOf("n2")).toHaveLength(1);
+    expect(uploadsOf("n3")).toHaveLength(1);
+    expect(pageSays("Waiting")).toBe(false);
+  }, 10_000);
+
+  it("a single video replaced by 3 photos during a pressed Schedule: the changed sentence", async () => {
+    stall.add("sched");
+    await typeCaption("Surf lesson today");
+    await run(() => props(buttonTexted("Schedule")).onClick());
+    await run(() => props(byId("post-schedule")).onChange({ target: { value: tomorrowNoon() } }));
+    await pick(video("sched"));
+    await run(() => props(byId("create-post-form")).onSubmit({ preventDefault() {} }));
+    expect(posted).toHaveLength(0);
+
+    await pick(photo("p1"), photo("p2"), photo("p3"));
+
+    expect(uploadsOf("sched")[0]!.signal?.aborted).toBe(true);
+    expect(posted).toHaveLength(0);
+    expect(pageSays(UNEXPECTED)).toBe(false);
+    expect(pageSays(REMOVED)).toBe(false);
+    expect(pageSays(changed("Schedule post"))).toBe(true);
+  }, 10_000);
+
+  it("a refused replacement (over 512 MB) during a pressed send: the removed sentence", async () => {
+    stall.add("before");
+    await typeCaption("Surf lesson today");
+    await pick(video("before"));
+    await pressPublishAndConfirm();
+
+    await pick(video("huge"));
+
+    expect(uploadsOf("before")[0]!.signal?.aborted).toBe(true);
+    expect(posted).toHaveLength(0);
+    expect(pageSays(UNEXPECTED)).toBe(false);
+    expect(pageSays("You changed the file")).toBe(false);
+    expect(pageSays(REMOVED)).toBe(true);
+  }, 10_000);
+
+  it("a file cleared mid-upload: the bar is gone", async () => {
+    stall.add("barred");
+    await pick(video("barred"));
+    expect(pageSays("Uploading")).toBe(true);
+
+    await pick();
+
+    expect(uploadsOf("barred")[0]!.signal?.aborted).toBe(true);
+    expect(pageSays("Uploading")).toBe(false);
+  }, 10_000);
+
+  it("a refused replacement mid-upload: the bar is gone too", async () => {
+    stall.add("barred2");
+    await pick(video("barred2"));
+    expect(pageSays("Uploading")).toBe(true);
+
+    await pick(video("huge"));
+
+    expect(pageSays("Uploading")).toBe(false);
+  }, 10_000);
+
+  it("a file replaced by another mid-upload: the new file's bar shows, not the old one's", async () => {
+    stall.add("first");
+    stall.add("second");
+    await pick(video("first"));
+    await pick(video("second"));
+
+    expect(uploadsOf("first")[0]!.signal?.aborted).toBe(true);
+    expect(uploadsOf("second")).toHaveLength(1);
+    expect(pageSays("Uploading")).toBe(true);
   }, 10_000);
 });
