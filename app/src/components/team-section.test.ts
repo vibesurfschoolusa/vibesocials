@@ -124,8 +124,9 @@ describe("Team section: a new invite link replaces the old one", () => {
     expect(inviteCreatedText(false)).toBe("Invite link created.");
   });
 
-  it("the toast is chosen by whether a link was showing before the press", () => {
-    expect(source).toContain("const replaced = invite !== null;");
+  // R59 new-customer L1: or whether the read failed, so a link may be live (team-section.inviteRead.live.test.ts).
+  it("the toast is chosen by whether a link was showing, or couldn't be read, before the press", () => {
+    expect(source).toContain("const replaced = invite !== null || inviteUnknown;");
     expect(source).toContain("toast.success(inviteCreatedText(replaced));");
   });
 

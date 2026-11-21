@@ -81,6 +81,14 @@ export function inviteCreatedText(replaced: boolean): string {
   return replaced ? "New invite link created. The old link no longer works, so send this one instead." : "Invite link created.";
 }
 
+/**
+ * R59 new-customer L1: the invite read failed, so a link may be live. Making a
+ * new one turns it off (invites/route.ts), so Create then uses the replace
+ * wording and toast.
+ */
+export const INVITE_UNREAD_TEXT =
+  "Couldn't read the current invite link, so a link you already sent may still work. Try again to see it. A new link turns off any old one.";
+
 /** What a failed Create invite link says, from the answer it got. */
 export function inviteFailureText(status: number, data: { error?: unknown } | null): string {
   return answerFailureText(status, data, INVITE_MAYBE_MADE_MESSAGE, "Couldn't create an invite link. Reload the page and try again.");
@@ -855,6 +863,10 @@ function OwnerView({
   const [invite, setInvite] = useState<InviteMeta | null>(null);
   const [freshUrl, setFreshUrl] = useState<string | null>(null);
   const [inviteLoading, setInviteLoading] = useState(true);
+  // R59 new-customer L1: the read failed, so whether a link is live isn't known.
+  const [inviteUnknown, setInviteUnknown] = useState(false);
+  // Bumped by Try again, so the read runs again.
+  const [inviteAttempt, setInviteAttempt] = useState(0);
   const [inviteBusy, setInviteBusy] = useState(false);
   const [revokeOpen, setRevokeOpen] = useState(false);
 
@@ -865,14 +877,17 @@ function OwnerView({
         // R32: the page's workspace; a refusal leaves the link unknown, as any failure does.
         const response = await fetch(withWorkspaceId("/api/workspaces/invites", workspaceId));
         const data = (await response.json().catch(() => null)) as
-          | { invite: InviteMeta | null }
+          | { invite?: InviteMeta | null }
           | null;
-        if (!cancelled && response.ok && data) {
+        if (cancelled) return;
+        if (response.ok && data && data.invite !== undefined) {
           setInvite(data.invite);
+          setInviteUnknown(false);
+        } else {
+          setInviteUnknown(true);
         }
       } catch {
-        // Leave `invite` at null — worst case the owner sees "Create invite
-        // link" and creating one still works fine (POST re-validates itself).
+        if (!cancelled) setInviteUnknown(true);
       } finally {
         if (!cancelled) setInviteLoading(false);
       }
@@ -880,13 +895,14 @@ function OwnerView({
     return () => {
       cancelled = true;
     };
-  }, [workspaceId]);
+  }, [workspaceId, inviteAttempt]);
 
   const copyInviteRef = useRef<HTMLButtonElement>(null);
 
   const createInvite = useCallback(async (event?: MouseEvent<HTMLElement>) => {
     const pressed = event?.currentTarget ?? null;
-    const replaced = invite !== null;
+    // An unread link may be live, and making one turns it off.
+    const replaced = invite !== null || inviteUnknown;
     setInviteBusy(true);
     try {
       const response = await fetchOrNoAnswer("/api/workspaces/invites", {
@@ -905,6 +921,7 @@ function OwnerView({
       focusAfterPress(pressed, () => copyInviteRef.current);
       setFreshUrl(data.url);
       setInvite({ expiresAt: data.expiresAt, createdAt: new Date().toISOString() });
+      setInviteUnknown(false);
       toast.success(inviteCreatedText(replaced));
     } catch (error) {
       const text = confirmFailureText(error, INVITE_MAYBE_MADE_MESSAGE);
@@ -912,7 +929,7 @@ function OwnerView({
     } finally {
       setInviteBusy(false);
     }
-  }, [invite, toast, workspaceId]);
+  }, [invite, inviteUnknown, toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure (the
   // error is already surfaced via toast here).
@@ -930,6 +947,7 @@ function OwnerView({
     }
     setInvite(null);
     setFreshUrl(null);
+    setInviteUnknown(false);
     toast.success("Invite link revoked.");
   }, [toast, workspaceId]);
 
@@ -1262,6 +1280,24 @@ function OwnerView({
                 onClick={() => setRevokeOpen(true)}
               >
                 Revoke
+              </Button>
+            </div>
+          </div>
+        ) : inviteUnknown ? (
+          <div className="mt-2 flex flex-col gap-2">
+            <Alert variant="danger">
+              <LoadError
+                message={INVITE_UNREAD_TEXT}
+                retryLabel="Try again"
+                onRetry={() => {
+                  setInviteLoading(true);
+                  setInviteAttempt((attempt) => attempt + 1);
+                }}
+              />
+            </Alert>
+            <div>
+              <Button size="sm" variant="outline" loading={inviteBusy} onClick={createInvite}>
+                Create new invite link
               </Button>
             </div>
           </div>
