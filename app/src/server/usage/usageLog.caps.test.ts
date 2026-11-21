@@ -372,8 +372,12 @@ describe("new and unconfirmed accounts have a pool of their own", () => {
       store.posts.push({ id: `ws-1-z-${i}`, workspaceId: "ws-1", status: "scheduled", scheduledFor: NOW, createdAt: LONG_AGO });
     }
     expect(
-      (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now", ...zone }))?.error,
-    ).toContain("Approve it again from Saturday, 7:00 PM EST (00:00 UTC), or reject it");
+      (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now", viewerUserId: "owner-1", ...zone }))
+        ?.error,
+    ).toContain(
+      // R57 fix review: the reader is the spent owner, so the step is theirs.
+      "If you have another post still scheduled for today, in any workspace you own, cancel or move it, then approve again. Or approve it again from Saturday, 7:00 PM EST (00:00 UTC), or reject it",
+    );
   });
 
   // R56 publishing-flow L1: the pools count runs already gone out, so a full
@@ -519,13 +523,13 @@ describe("the per-person number", () => {
     ).resolves.toEqual({
       code: "OWNER_DAILY_POST_LIMIT",
       error:
-        "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Approve it again once that day has room, or reject it and ask the member to submit it for another day.",
+        "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). If this workspace's owner has another post still scheduled for that day, they can cancel or move it to make room. Or approve it again once that day has room, or reject it and ask the member to submit it for another day.",
     });
     scheduled("ws-1", 15, NOW);
     expect(
       (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now", steps: "approval" }))?.error,
     ).toBe(
-      "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. Approve it again from 00:00 UTC on November 15, 2026, or reject it and ask the member to schedule it for another day.",
+      "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. If this workspace's owner has another post still scheduled for today, they can cancel or move it to make room. Or approve it again from 00:00 UTC on November 15, 2026, or reject it and ask the member to schedule it for another day.",
     );
   });
 
@@ -536,7 +540,7 @@ describe("the per-person number", () => {
     expect(
       (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: future, mode: "schedule", steps: "approval" }))?.error,
     ).toBe(
-      "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Approve it again once that day has room, or reject it and ask the member to submit it for another day.",
+      "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). If this workspace's owner has another post still scheduled for that day, they can cancel or move it to make room. Or approve it again once that day has room, or reject it and ask the member to submit it for another day.",
     );
     const later = new Date("2026-11-14T20:00:00Z");
     scheduled("ws-1", 15, later);
@@ -552,7 +556,7 @@ describe("the per-person number", () => {
         })
       )?.error,
     ).toBe(
-      "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Cancel or move another post still scheduled for today, then approve again. Or approve it again from 00:00 UTC on November 15, 2026, when it publishes at once, or reject it and ask the member to schedule it for another day.",
+      "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). If this workspace's owner has another post still scheduled for that day, they can cancel or move it to make room. Or approve it again from 00:00 UTC on November 15, 2026, when it publishes at once, or reject it and ask the member to schedule it for another day.",
     );
   });
 

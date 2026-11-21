@@ -139,7 +139,7 @@ describe("checkDailyPostLimit", () => {
     expect(approver).toEqual({
       code: plain?.code,
       error:
-        "That day already has 20 posts, which is this workspace's daily limit. Cancel or move another post on that day, then approve again, or reject this one and ask the member to submit it for another day.",
+        "That day already has 20 posts, which is this workspace's daily limit. If another post here is still scheduled for that day, cancel or move it, then approve again. Or approve it again once that day has room, or reject it and ask the member to submit it for another day.",
     });
   });
 
@@ -149,7 +149,7 @@ describe("checkDailyPostLimit", () => {
   describe("an approval at the limit: whether the counted day is today", () => {
     // R57 pages-a L2: this count also holds posts still scheduled later today, so freeing one comes first.
     const TODAY_STEPS =
-      "Cancel or move another post still scheduled for today, then approve again. Or approve it again from 00:00 UTC on November 11, 2026, when it publishes at once, or reject it and ask the member to schedule it for another day.";
+      "If another post here is still scheduled for that day, cancel or move it, then approve again. Or approve it again from 00:00 UTC on November 11, 2026, when it publishes at once, or reject it and ask the member to schedule it for another day.";
 
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ["Date"] });
@@ -173,7 +173,7 @@ describe("checkDailyPostLimit", () => {
       });
     });
 
-    it("a future day: Cancel or move, as now", async () => {
+    it("a future day: the free-a-slot condition, then room", async () => {
       db.postJobCount.mockResolvedValue(20);
       const refusal = await checkDailyPostLimit({
         workspaceId: "ws-1",
@@ -182,7 +182,7 @@ describe("checkDailyPostLimit", () => {
         steps: "approval",
       });
       expect(refusal?.error).toBe(
-        "That day already has 20 posts, which is this workspace's daily limit. Cancel or move another post on that day, then approve again, or reject this one and ask the member to submit it for another day.",
+        "That day already has 20 posts, which is this workspace's daily limit. If another post here is still scheduled for that day, cancel or move it, then approve again. Or approve it again once that day has room, or reject it and ask the member to submit it for another day.",
       );
     });
 
