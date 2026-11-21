@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
  * YouTube in R64), each time because a plain cut split a #tag or @mention.
  * One rule, for every platform client (src/server/platforms/*Client.ts), the
  * composer's preview (src/lib/platformPreview.ts) and every module they reach
- * through imports: none of them may import a plain cut from lib/truncate.ts
+ * through imports: none of them may import or re-export a plain cut from lib/truncate.ts
  * (truncateGraphemes, truncateUnits, truncateKeepingLinks). They cut with the
  * AtWord functions, or with fitTitle, which ends at a whole word too. A
  * namespace import of lib/truncate.ts counts as a plain cut, since it can't
@@ -27,22 +27,43 @@ const PLAIN_CUTS = new Set(["truncateGraphemes", "truncateUnits", "truncateKeepi
  */
 const ALLOWED: Record<string, string> = {};
 
-/** The plain cuts `source` imports from lib/truncate.ts. */
+/**
+ * The plain cuts `source` takes from lib/truncate.ts: imported, re-exported
+ * (R64 fix review L1: by name, `export *` or `export * as`), or reached with
+ * `import()`, which counts as a namespace import since its use can't be told
+ * apart.
+ */
 function plainCutsIn(source: string, fileName: string): string[] {
   const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
   const found: string[] = [];
-  for (const statement of file.statements) {
-    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-    if (resolveImport(statement.moduleSpecifier.text, fileName) !== TRUNCATE) continue;
-    const bindings = statement.importClause?.namedBindings;
-    if (bindings && ts.isNamespaceImport(bindings)) found.push(`* as ${bindings.name.text}`);
-    if (bindings && ts.isNamedImports(bindings)) {
-      for (const element of bindings.elements) {
-        const name = (element.propertyName ?? element.name).text;
-        if (PLAIN_CUTS.has(name)) found.push(name);
-      }
+  const isTruncate = (specifier: ts.Node | undefined) =>
+    specifier !== undefined && ts.isStringLiteral(specifier) && resolveImport(specifier.text, fileName) === TRUNCATE;
+  const named = (elements: ts.NodeArray<ts.ImportSpecifier | ts.ExportSpecifier>) => {
+    for (const element of elements) {
+      const name = (element.propertyName ?? element.name).text;
+      if (PLAIN_CUTS.has(name)) found.push(name);
     }
-  }
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isImportDeclaration(node) && isTruncate(node.moduleSpecifier)) {
+      const bindings = node.importClause?.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) found.push(`* as ${bindings.name.text}`);
+      if (bindings && ts.isNamedImports(bindings)) named(bindings.elements);
+    } else if (ts.isExportDeclaration(node) && isTruncate(node.moduleSpecifier)) {
+      const clause = node.exportClause;
+      if (!clause) found.push("export *");
+      else if (ts.isNamespaceExport(clause)) found.push(`export * as ${clause.name.text}`);
+      else named(clause.elements);
+    } else if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      isTruncate(node.arguments[0])
+    ) {
+      found.push(`import(${node.arguments[0].getText(file)})`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
   return found;
 }
 
