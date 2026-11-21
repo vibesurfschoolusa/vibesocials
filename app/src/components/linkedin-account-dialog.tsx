@@ -43,7 +43,7 @@ function reconnectCopy(accountName: string | undefined): LinkedInAccountDialogCo
     title: "Reconnect LinkedIn",
     steps: [connect.steps[0], linkedInReconnectSignInStep(page)],
     shortcut: accountName?.trim()
-      ? `Already signed in to LinkedIn with an account that manages ${page}? Just click Continue.`
+      ? `Already signed in to LinkedIn with an account that is a Super admin of ${page}? Just click Continue.`
       : connect.shortcut,
   };
 }

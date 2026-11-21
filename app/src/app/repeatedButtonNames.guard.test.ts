@@ -8,9 +8,10 @@ import { describe, expect, it } from "vitest";
  * read "Delete, Delete, Delete". #282 named only the places its brief listed,
  * and the same fault came back elsewhere.
  *
- * This scan finds every <Button>, <ButtonLink>, <Link> and <ExternalLink>
- * written inside a `.map(` callback in src/app and src/components whose text
- * is static (no `{…}` in its children) and that has no aria-label or
+ * This scan finds every <Button>, <ButtonLink>, <Link>, <ExternalLink>,
+ * <button> and <a> written inside a `.map(` callback in src/app and
+ * src/components whose text is static (fixed words, even inside a wrapping
+ * element or a ternary of two string literals) and that has no aria-label or
  * aria-labelledby. Give it an aria-label that
  * starts with the visible text and names the item, as the Queue's cards do.
  *
@@ -76,6 +77,40 @@ function openingTagEnd(source: string, start: number): number {
 
 export type UnnamedButton = { index: number; text: string };
 
+const STRING_ONLY = /^\s*(?:"([^"]*)"|'([^']*)')\s*$/;
+// `cond ? "A" : "B"`: both words are fixed, so the text is as static as one.
+const FIXED_TERNARY = /^[^?]+\?\s*(?:"([^"]*)"|'([^']*)')\s*:\s*(?:"[^"]*"|'[^']*')\s*$/;
+
+/**
+ * The words a control's children always show, or null when any part of them
+ * comes from data. Tags are dropped (icons, a wrapping <span>); a `{…}` may be
+ * a comment, a string literal or a ternary of two string literals.
+ */
+export function staticText(children: string): string | null {
+  let text = "";
+  for (let i = 0; i < children.length; i++) {
+    const ch = children[i];
+    if (ch === "<") {
+      const end = openingTagEnd(children, i);
+      if (end < 0) return null;
+      i = end;
+      text += " ";
+    } else if (ch === "{") {
+      const close = closingIndex(children, i);
+      if (close < 0) return null;
+      const expression = children.slice(i + 1, close);
+      i = close;
+      if (/^\s*\/\*[\s\S]*\*\/\s*$/.test(expression)) continue;
+      const literal = STRING_ONLY.exec(expression) ?? FIXED_TERNARY.exec(expression);
+      if (!literal) return null;
+      text += literal[1] ?? literal[2];
+    } else {
+      text += ch;
+    }
+  }
+  return text.replace(/\s+/g, " ").trim();
+}
+
 /** Buttons and links inside a `.map(` callback with static text and no accessible name of their own. */
 export function unnamedRepeatedButtons(source: string): UnnamedButton[] {
   const found = new Map<number, UnnamedButton>();
@@ -84,7 +119,7 @@ export function unnamedRepeatedButtons(source: string): UnnamedButton[] {
     const close = closingIndex(source, open);
     if (close < 0) continue;
     const body = source.slice(open, close);
-    for (const button of body.matchAll(/<(Button|ButtonLink|Link|ExternalLink)(?=[\s>])/g)) {
+    for (const button of body.matchAll(/<(Button|ButtonLink|Link|ExternalLink|button|a)(?=[\s>])/g)) {
       const start = open + (button.index as number);
       if (found.has(start)) continue;
       const tagEnd = openingTagEnd(source, start);
@@ -93,10 +128,7 @@ export function unnamedRepeatedButtons(source: string): UnnamedButton[] {
       if (tag.endsWith("/>") || /\baria-label(ledby)?=/.test(tag)) continue;
       const childrenEnd = source.indexOf(`</${button[1]}>`, tagEnd);
       if (childrenEnd < 0) continue;
-      // Icons and other self-closing elements say nothing; what is left is the text.
-      const children = source.slice(tagEnd + 1, childrenEnd).replace(/<[A-Za-z][^<>]*\/>/g, "");
-      if (children.includes("{") || children.includes("<")) continue;
-      const text = children.replace(/\s+/g, " ").trim();
+      const text = staticText(source.slice(tagEnd + 1, childrenEnd));
       if (text) found.set(start, { index: start, text });
     }
   }

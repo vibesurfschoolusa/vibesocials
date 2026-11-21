@@ -154,7 +154,7 @@ export function sentenceForRecipient(
   if (exact) return exact;
   // linkedinClient's no-organization help is several lines; its reason is kept.
   if (message.startsWith("No LinkedIn company pages configured")) {
-    return "The connected LinkedIn account manages no company page. The workspace owner can reconnect with an account that manages one; then retry.";
+    return "The connected LinkedIn account is not a Super admin of any company page. The workspace owner can reconnect with an account that is a Super admin of one; then retry.";
   }
   const state = CONNECTION_STATE.exec(message);
   if (state) return `The ${state[1]} connection ${state[2]}. The workspace owner can reconnect ${state[1]}; then retry.`;
