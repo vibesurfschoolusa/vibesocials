@@ -75,8 +75,9 @@ function dispatchUnmarkedText(button: DispatchFailedButton, withoutResults: bool
   const done = button === "Approve" ? "approved" : "saved";
   // R61 publishing-flow-2 L1: Create's buttons (Publish post, Publish without a
   // photo, Publish now) and the Queue's Publish now aren't named "Post" or
-  // "Publish", so the sentence names no button; Approve is the card's own.
-  const again = button === "Approve" ? "Don't press Approve again." : "Don't publish it again.";
+  // "Publish", and after the 503 the Queue reloads and the claimed card drops
+  // out, so the sentence names no button for any caller.
+  const again = button === "Approve" ? "Don't approve it again." : "Don't publish it again.";
   if (withoutResults) {
     return `The post was ${done} but didn't start. ${RETRIED_ON_ITS_OWN_TEXT} ${again}`;
   }

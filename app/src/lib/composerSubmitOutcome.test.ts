@@ -261,7 +261,7 @@ describe("dispatchFailedText - no results and not marked", () => {
       "The post was saved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card. Don't publish it again.",
     );
     expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false, withoutResults: true }, "Approve")).toBe(
-      "The post was approved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card. Don't press Approve again.",
+      "The post was approved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card. Don't approve it again.",
     );
   });
 

@@ -652,7 +652,7 @@ describe("queueFailureText", () => {
       COMPOSER_DISPATCH_UNMARKED_MESSAGE,
     );
     expect(queueFailureText({ ...DISPATCH, resultsMarked: false }, "Couldn't approve this post.", "Approve")).toBe(
-      "The post was approved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press Approve again.",
+      "The post was approved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't approve it again.",
     );
   });
 
@@ -674,7 +674,7 @@ describe("queueFailureText", () => {
       "Approved, but publishing couldn't start — press Send again on its card in Activity.",
     );
     expect(queueFailureText({ ...bare, resultsMarked: false }, "Couldn't approve this post.", "Approve")).toBe(
-      "The post was approved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card. Don't press Approve again.",
+      "The post was approved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card. Don't approve it again.",
     );
     for (const text of [
       queueFailureText({ ...bare, resultsMarked: true }, "x", "Publish"),
