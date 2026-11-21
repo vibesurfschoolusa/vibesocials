@@ -401,6 +401,14 @@ export function BulkPostsForm({
     aiCaptionsRef.current = on;
     setAiCaptionsState(on);
     saveAiCaptionsChoice(() => window.localStorage, on);
+    if (on) return;
+    // R60 publishing-flow-2 L1: unticking lets go every running caption and
+    // description at once, as Create does. A caption's wait ends through its
+    // own let-go path (captionRow); a description's ends here.
+    for (const row of rowsRef.current) {
+      rowRequests.letGo(row.id, "caption");
+      if (rowRequests.letGo(row.id, "altText")) updateRow(row.id, { altTextWriting: false });
+    }
   }
 
   // The first day starts empty and is filled on mount: the server's clock and

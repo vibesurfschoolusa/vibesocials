@@ -247,7 +247,8 @@ describe("Add many: unticking AI captions lets go of the running caption and des
     await tick();
     await answerNext("caption", { caption: "An old answer" });
     expect(valueOf(captionBox())).toBe("");
-    expect(scheduleWaits()).toBe(false);
     expect(buttonNamed("Write again")).not.toBeNull();
+    // The switch is on again, so the photo's description is asked for, as after any caption step.
+    expect(countOf("describe")).toBe(1);
   });
 });
