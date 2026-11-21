@@ -344,7 +344,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // One half went out and the other had nothing to send: a success that says both.
   let partial: string | null = null;
   // R60 pages-a-3 L1: the member's email line for the half that was not sent.
-  let partialNote: string | undefined;
+  // R61 publishing-flow L1: with the half that went, for the outcome line.
+  let partialNote: { sent: "feed" | "story"; notSentNote: string } | undefined;
 
   // The time the post is now scheduled for — only when approval kept its slot.
   const scheduledForIso =
@@ -362,6 +363,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     startUnconfirmed = false,
     withoutResults = false,
     otherHalf?: { note?: string; mayHaveStarted?: boolean },
+    halfSent?: { sent: "feed" | "story"; notSentNote: string },
   ): Promise<AuthorEmail> => {
     try {
       // R7-client-journey L1: only a submitter who is still a member hears about
@@ -394,6 +396,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           ...(startUnconfirmed ? { startUnconfirmed: true, ...(withoutResults ? { withoutResults: true } : {}) } : {}),
           ...(otherHalf?.note ? { otherHalfNote: otherHalf.note } : {}),
           ...(otherHalf?.mayHaveStarted ? { otherHalfMayHaveStarted: true } : {}),
+          ...(halfSent ? { halfSent } : {}),
         });
         const sent = await sendEmail({ to: submitter.email, ...email }, { label: "approval-decision" });
         return sent ? "sent" : "failed";
@@ -435,7 +438,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       const [kind, id] = dispatch.notSent.has(pair.id)
         ? [pair.kind, pair.id]
         : [pair.kind === "story" ? ("feed" as const) : ("story" as const), postJobId];
-      partialNote = notSentNote(kind, "member", dispatch.connectionSteps.get(id));
+      partialNote = {
+        sent: kind === "story" ? "feed" : "story",
+        notSentNote: notSentNote(kind, "member", dispatch.connectionSteps.get(id)),
+      };
     }
     // Same contract as the publish route: if the events can't be handed to
     // Inngest, the pending results are failed (job → failed) rather than left
@@ -492,7 +498,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     }
   }
 
-  const authorEmail = await tellSubmitter(undefined, false, false, partialNote ? { note: partialNote } : undefined);
+  const authorEmail = await tellSubmitter(undefined, false, false, undefined, partialNote);
 
   return NextResponse.json(
     {

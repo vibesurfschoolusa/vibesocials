@@ -198,6 +198,13 @@ export function buildApprovalDecisionEmail(params: {
    * the subject then never says nothing was sent.
    */
   otherHalfMayHaveStarted?: boolean;
+  /**
+   * R61 publishing-flow L1: approved to publish now, one half of a Feed and
+   * Story post went and the other was not sent. `sent` is the half that went;
+   * `notSentNote` is the member's "Its <half> was not sent: …". Replaces
+   * "publishing now", which would also claim the half that wasn't sent.
+   */
+  halfSent?: { sent: "feed" | "story"; notSentNote: string };
 }): { subject: string; html: string } {
   const workspace = escapeHtml(params.workspaceName);
   const storyLine = decidedStoryLine(params.approved, params.alsoAsStory);
@@ -233,6 +240,10 @@ export function buildApprovalDecisionEmail(params: {
     ? `<p>It is approved and <strong>scheduled</strong> for ${escapeHtml(
         emailDateTime(new Date(params.scheduledFor), params.timeZone),
       )}.</p>`
+    : params.halfSent
+    ? `<p>It is approved. Its ${params.halfSent.sent === "story" ? "Story" : "feed post"} is being sent; ${escapeHtml(
+        params.halfSent.notSentNote.charAt(0).toLowerCase() + params.halfSent.notSentNote.slice(1),
+      )}</p>`
     : `<p>It is approved and <strong>publishing now</strong>.</p>`;
   const cta = base
     ? `<p><a href="${escapeHtml(workspaceLink(params.workspaceId, "/activity", base))}">Track it in Activity</a></p>`
