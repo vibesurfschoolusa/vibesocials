@@ -82,6 +82,7 @@ import {
   connectionsSectionIntro,
   noConnectionsMessage,
   nothingSentMessage,
+  retryConnectMessage,
   retryReconnectMessage,
 } from "@/lib/ownerStepAnswers";
 
@@ -91,6 +92,8 @@ type Role = "owner" | "member";
 const OWNER_STEPS: RegExp[] = [
   /\bConnect (it|one|at least one|Google Business Profile|a platform|your)\b/,
   /\bReconnect\b/,
+  // R58 pages-a-4 L1: Retry's answer for a platform with no connection ("Connect Instagram in Settings, then retry.").
+  /\bConnect [^.;]* in Settings\b/,
   /\bChoose (a plan|the Maps location|your Maps location)\b/,
   /\bSet your posting times\b/,
   /\bGo to (connections|Settings)\b/,
@@ -300,12 +303,17 @@ const SURFACES: Record<string, (role: Role) => string | Promise<string>> = {
     ),
   "Activity, a result that needs reconnecting": (role) =>
     render(createElement(ReconnectStep, { platform: "instagram", role })),
+  // R58 pages-a-4 L1: a platform with no connection is connected, not reconnected.
+  "Activity, a result with no connection": (role) =>
+    render(createElement(ReconnectStep, { platform: "instagram", role, step: "connect" })),
   // The server answers the pages show as is (R11-publishing L1, R10-client-journey L1).
   "Create, nothing connected (POST /api/posts NO_CONNECTIONS)": (role) => noConnectionsMessage("create", role),
   "Publish now, nothing connected (publish NO_CONNECTIONS)": (role) => noConnectionsMessage("publish", role),
   "Publish now, none of the post's platforms connected (publish 409)": (role) => nothingSentMessage(role),
   "Retry, the platform needs reconnecting (retry RECONNECT_REQUIRED)": (role) =>
     retryReconnectMessage(["instagram", "facebook_page"], role),
+  "Retry, the platform has no connection (retry RECONNECT_REQUIRED, reason connect)": (role) =>
+    retryConnectMessage(["instagram", "facebook_page"], role),
 };
 
 /** Each route words its answer with the helper and the role of its own workspace context. */
@@ -315,7 +323,10 @@ const ROUTES_USING_THE_HELPERS: Array<[string, string[]]> = [
     "api/posts/[postJobId]/publish/route.ts",
     ['noConnectionsMessage("publish", workspaceContext.role)', "nothingSentMessage(workspaceContext.role)"],
   ],
-  ["api/posts/[postJobId]/retry/route.ts", ["retryReconnectMessage(dead, workspaceContext.role)"]],
+  [
+    "api/posts/[postJobId]/retry/route.ts",
+    ["retryConnectMessage(dead, workspaceContext.role)", "retryReconnectMessage(dead, workspaceContext.role)"],
+  ],
 ];
 
 /**

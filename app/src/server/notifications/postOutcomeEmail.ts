@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
 import { isUnconfirmedResult } from "@/lib/postsDto";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
-import { failedRowStep, needsReconnecting } from "@/lib/retryAll";
+import { connectionStep, failedRowStep, type ConnectionStep } from "@/lib/retryAll";
 import { sentenceForRecipient } from "@/lib/publishFailureText";
 import { storyPlatformsOf } from "@/lib/storyPlacement";
 import { WORKSPACE_PAUSED_CODE } from "@/lib/workspaceStatus";
@@ -65,8 +65,11 @@ export interface PostOutcomeResultSummary {
   errorMessage?: string | null;
   /** A success's note (a chosen cover the platform did not take), shown after "Succeeded". */
   note?: string | null;
-  /** A stalled row's connection needs reconnecting (or is gone), read when the email is sent. */
-  needsReconnect?: boolean;
+  /**
+   * What a stalled row's connection needs, read when the email is sent:
+   * "connect" when it is gone, "reconnect" when it is flagged (R58 fix review).
+   */
+  connectionStep?: ConnectionStep | null;
   /** Sent as a Story: the row reads "Instagram Story" (R5-client-journey L3). */
   story?: boolean;
   /**
@@ -207,13 +210,15 @@ function renderResultRow(result: PostOutcomeResultSummary, recipientRole: "owner
   // R54: the card's own unconfirmed rule, so TikTok's pending answer counts too.
   const unconfirmed = isUnconfirmedResult({ status: result.status, errorCode: result.errorCode ?? null });
   if (unconfirmed || (result.status === "failed" && result.errorCode === PUBLISH_STALLED_FAILURE.errorCode)) {
-    const step = failedRowStep({ unconfirmed }, result.needsReconnect === true);
+    const step = failedRowStep({ unconfirmed }, result.connectionStep != null);
     if (step === "check_platform") return `<li>${label}: ${escapeHtml(PUBLISH_UNCONFIRMED_MESSAGE)}</li>`;
     const name = escapeHtml(platformLabel(result.platform));
     if (step === "retry") return `<li>${label}: ${stopped} Retry it in Activity.</li>`;
+    // No connection is connected, not reconnected: Settings shows only Connect for it.
+    const verb = result.connectionStep === "connect" ? "connect" : "reconnect";
     return recipientRole === "member"
-      ? `<li>${label}: ${stopped} The workspace owner can reconnect ${name}; then retry it in Activity.</li>`
-      : `<li>${label}: ${stopped} Reconnect ${name} in Settings, then retry it in Activity.</li>`;
+      ? `<li>${label}: ${stopped} The workspace owner can ${verb} ${name}; then retry it in Activity.</li>`
+      : `<li>${label}: ${stopped} ${verb === "connect" ? "Connect" : "Reconnect"} ${name} in Settings, then retry it in Activity.</li>`;
   }
   if (result.status === "success") {
     // R44 publishing L3: the note the Activity card shows, so a success that
@@ -698,7 +703,7 @@ export async function deliverPostOutcomeNotification({
     const rows = summaries.map((result) => ({
       ...result,
       errorMessage: sentenceForRecipient(result.errorMessage, result.platform, role),
-      needsReconnect: needsReconnecting(connections.find((connection) => connection.platform === result.platform)),
+      connectionStep: connectionStep(connections.find((connection) => connection.platform === result.platform)),
     }));
 
     // Pause (2026-11-10): a paused workspace's due posts are all failed with this

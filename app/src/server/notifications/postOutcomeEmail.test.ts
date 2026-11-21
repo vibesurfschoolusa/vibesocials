@@ -142,7 +142,7 @@ describe("buildPostOutcomeEmail", () => {
         status: "failed" as const,
         errorCode: "PUBLISH_STALLED",
         errorMessage: "Publish did not complete (stalled). You can retry this platform.",
-        needsReconnect: true,
+        connectionStep: "reconnect" as const,
       };
       const stopped = "<li>Instagram: Not sent — publishing stopped before it reached Instagram.";
       expect(buildPostOutcomeEmail({ results: [row], appBaseUrl: null, ...WS }).html).toContain(
@@ -151,6 +151,24 @@ describe("buildPostOutcomeEmail", () => {
       expect(buildPostOutcomeEmail({ results: [row], appBaseUrl: null, recipientRole: "member", ...WS }).html).toContain(
         `${stopped} The workspace owner can reconnect Instagram; then retry it in Activity.</li>`,
       );
+    });
+
+    // R58 fix review: no connection is connected, not reconnected (the card's rule, lib/retryAll.ts).
+    it("stalled with no connection: connect first (owner and member)", () => {
+      const row = {
+        platform: "instagram" as const,
+        status: "failed" as const,
+        errorCode: "PUBLISH_STALLED",
+        errorMessage: "Publish did not complete (stalled). You can retry this platform.",
+        connectionStep: "connect" as const,
+      };
+      const stopped = "<li>Instagram: Not sent — publishing stopped before it reached Instagram.";
+      const owner = buildPostOutcomeEmail({ results: [row], appBaseUrl: null, ...WS }).html;
+      expect(owner).toContain(`${stopped} Connect Instagram in Settings, then retry it in Activity.</li>`);
+      expect(owner).not.toContain("Reconnect");
+      const member = buildPostOutcomeEmail({ results: [row], appBaseUrl: null, recipientRole: "member", ...WS }).html;
+      expect(member).toContain(`${stopped} The workspace owner can connect Instagram; then retry it in Activity.</li>`);
+      expect(member).not.toContain("reconnect");
     });
 
     it("unconfirmed: the shared sentence, check the platform first", () => {
@@ -1547,12 +1565,25 @@ describe("deliverPostOutcomeNotification - stalled rows and their connection", (
   });
 
   it.each([
-    ["flagged", [{ platform: "instagram", needsReconnect: true }]],
-    ["gone", []],
-  ])("a connection that is %s: reconnect first", async (_label, connections) => {
-    findManyConnectionMock.mockResolvedValue(connections);
-    await deliverPostOutcomeNotification({ userId: "owner-1", postJobId: "job-1" });
-    expect(html()).toContain("Instagram. Reconnect Instagram in Settings, then retry it in Activity.</li>");
+    ["owner", "Instagram. Reconnect Instagram in Settings, then retry it in Activity.</li>"],
+    ["member", "Instagram. The workspace owner can reconnect Instagram; then retry it in Activity.</li>"],
+  ] as const)("a flagged connection: reconnect first (%s)", async (role, expected) => {
+    findManyConnectionMock.mockResolvedValue([{ platform: "instagram", needsReconnect: true }]);
+    findUniqueMemberMock.mockResolvedValue({ id: "m", role });
+    await deliverPostOutcomeNotification({ userId: `${role}-1`, postJobId: "job-1" });
+    expect(html()).toContain(expected);
+  });
+
+  // R58 fix review: a connection that is gone is connected, not reconnected.
+  it.each([
+    ["owner", "Instagram. Connect Instagram in Settings, then retry it in Activity.</li>"],
+    ["member", "Instagram. The workspace owner can connect Instagram; then retry it in Activity.</li>"],
+  ] as const)("no connection: connect first (%s)", async (role, expected) => {
+    findManyConnectionMock.mockResolvedValue([]);
+    findUniqueMemberMock.mockResolvedValue({ id: "m", role });
+    await deliverPostOutcomeNotification({ userId: `${role}-1`, postJobId: "job-1" });
+    expect(html()).toContain(expected);
+    expect(html()).not.toMatch(/[Rr]econnect Instagram/);
   });
 
   it("no stalled rows: no connection lookup", async () => {
