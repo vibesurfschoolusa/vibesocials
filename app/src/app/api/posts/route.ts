@@ -22,6 +22,7 @@ import {
   sentWorkspaceId,
 } from "@/lib/workspaceChanged";
 import { textPostsEnabled } from "@/lib/platformLimits";
+import { removeXMentions } from "@/lib/xMentions";
 import {
   assertPostTargetsValid,
   assertTextPostTargetsValid,
@@ -733,6 +734,11 @@ const FILE_FIELDS = ["blobUrl", "mediaItemId", "media", "filename", "mimeType", 
 
 const TEXT_POST_WITH_FILE_MESSAGE = "A post without a photo can't carry a file. Remove textOnly, or remove the file.";
 
+// R62 platform-clients L2: X's text goes out without @mentions (computeTweetText),
+// and X refuses an empty text on every Retry, so such a post is refused here.
+const X_TEXT_EMPTY_MESSAGE =
+  "X removes @mentions from posts sent through its API, so this post has no text left for X. Add some words, or leave X out.";
+
 /** 400 for a rejected platform choice; `code` + `platforms` let a client react without parsing `error`. */
 function postTargetingErrorResponse(error: PostTargetingError) {
   return NextResponse.json(
@@ -1157,6 +1163,14 @@ export async function POST(request: Request) {
   } catch (error: unknown) {
     if (error instanceof PostTargetingError) return postTargetingErrorResponse(error);
     throw error;
+  }
+  // A post with a file still sends the file to X, so only a text post is refused.
+  // An empty override falls back to the base caption, as at publish time.
+  if (textOnly && targetPlatforms?.includes("x")) {
+    const xCaption = perPlatformOverrides?.x ? perPlatformOverrides.x : baseCaptionRaw;
+    if (!removeXMentions(xCaption).trim()) {
+      return NextResponse.json({ error: X_TEXT_EMPTY_MESSAGE }, { status: 400 });
+    }
   }
 
   // Roadmap Phase 5 — resolve the intent. `draft: true` wins; otherwise a
