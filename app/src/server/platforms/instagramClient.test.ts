@@ -3016,7 +3016,7 @@ describe("instagramClient.publishVideo — hashtag and mention limits", () => {
     const result = await single(caption);
 
     const sent = new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("caption") ?? "";
-    expect(sent).not.toMatch(/#t31/);
+    expect(sent).not.toMatch(/#t31\b/);
     expect(result).toEqual({
       externalPostId: "media-1",
       note: "Instagram allows 30 hashtags in a post, so these were left out: #t31.",
