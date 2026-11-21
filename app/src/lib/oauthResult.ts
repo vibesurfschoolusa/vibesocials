@@ -159,10 +159,12 @@ const SIGN_IN_CAUSES: Record<string, { known: string; first?: { before: string; 
   facebook_page_no_pages: { known: "Facebook didn't return a Page.", platform: "facebook_page", name: "your Facebook Page" },
   instagram_no_instagram_account: {
     known: "Facebook didn't return a Page with a linked Instagram account.",
-    // R53 fix review L1: "first" only when the button step follows; alone, it
-    // says where (Facebook's Page settings call it Linked accounts).
+    // R53 fix review L1: "first" only when the button step follows. R54
+    // platform-clients L2: both say where (Facebook's Page settings call it
+    // Linked accounts); a first Connect, the case that needs it most, has a button.
     first: {
-      before: "If your Instagram professional account isn't linked to your Page yet, link it first.",
+      before:
+        "If your Instagram professional account isn't linked to your Page yet, link it in your Page's settings on Facebook, under Linked accounts, first.",
       alone: "If your Instagram professional account isn't linked to your Page yet, link it in your Page's settings on Facebook, under Linked accounts.",
     },
     platform: "instagram",

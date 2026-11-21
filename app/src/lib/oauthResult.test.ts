@@ -213,7 +213,7 @@ describe("describeOAuthResult — real callback-route codes", () => {
       variant: "danger",
       platform: "instagram",
       message:
-        "Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it first. Click Connect again, sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed).",
+        "Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it in your Page's settings on Facebook, under Linked accounts, first. Click Connect again, sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed).",
     });
     expect(describeOAuthResult({ error: "youtube_no_channel", success: null })).toMatchObject({
       variant: "danger",
@@ -237,7 +237,7 @@ describe("describeOAuthResult — real callback-route codes", () => {
     expect(
       describeOAuthResult({ error: "instagram_no_instagram_account", success: null }, { shown: () => "reconnect" })!.message,
     ).toBe(
-      "Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it first. Click Reconnect, sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed). Your existing connection is unchanged.",
+      "Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it in your Page's settings on Facebook, under Linked accounts, first. Click Reconnect, sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed). Your existing connection is unchanged.",
     );
   });
 
@@ -258,13 +258,30 @@ describe("describeOAuthResult — real callback-route codes", () => {
     const link = (shown: ShownControl) =>
       describeConnectLinkResult(new URLSearchParams({ error: "instagram_no_instagram_account" }), { shown: () => shown })!.message;
     for (const message of [settings("connect"), settings("reconnect"), link("connect"), link("reconnect")]) {
-      expect(message).toContain("isn't linked to your Page yet, link it first. ");
-      expect(message).toMatch(/link it first\. (Click|Press) (Connect again|Reconnect), sign in/);
+      expect(message).toContain("isn't linked to your Page yet, link it in your Page's settings on Facebook, under Linked accounts, first. ");
+      expect(message).toMatch(/under Linked accounts, first\. (Click|Press) (Connect again|Reconnect), sign in/);
+    }
+    for (const message of [settings("reconnect"), link("reconnect")]) {
+      expect(message).toMatch(/under Linked accounts, first\. (Click|Press) Reconnect, .*\. Your existing connection is unchanged\.$/);
     }
     for (const message of [settings("connected"), link("connected")]) {
       expect(message).toBe("Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it in your Page's settings on Facebook, under Linked accounts. Your existing connection is unchanged.");
       expect(message).not.toContain("first");
     }
+  });
+
+  // R54 platform-clients L2: only Instagram's sentence names where to link it.
+  it("Facebook Page's no_pages keeps its words with Connect, Reconnect and no button", () => {
+    const settings = (shown: ShownControl) =>
+      describeOAuthResult({ error: "facebook_page_no_pages", success: null }, { shown: () => shown })!.message;
+    expect(settings("connect")).toBe(
+      "Facebook didn't return a Page. Click Connect again, sign in with a Facebook account that manages your Facebook Page and tick it when Facebook lists the Pages.",
+    );
+    expect(settings("reconnect")).toBe(
+      "Facebook didn't return a Page. Click Reconnect, sign in with a Facebook account that manages your Facebook Page and tick it when Facebook lists the Pages. Your existing connection is unchanged.",
+    );
+    expect(settings("connected")).toBe("Facebook didn't return a Page. Your existing connection is unchanged.");
+    for (const shown of ["connect", "reconnect", "connected"] as const) expect(settings(shown)).not.toContain("Linked accounts");
   });
 
   it("the same two on the connect link page, with its press", () => {
@@ -273,7 +290,7 @@ describe("describeOAuthResult — real callback-route codes", () => {
       "Facebook didn't return a Page. Press Connect again, sign in with a Facebook account that manages your Facebook Page and tick it when Facebook lists the Pages.",
     );
     expect(link("instagram_no_instagram_account")).toBe(
-      "Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it first. Press Connect again, sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed).",
+      "Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it in your Page's settings on Facebook, under Linked accounts, first. Press Connect again, sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed).",
     );
     // Other causes keep their words.
     expect(link("linkedin_no_admin_pages")).toBe(
