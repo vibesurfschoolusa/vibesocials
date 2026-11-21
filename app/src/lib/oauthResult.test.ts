@@ -797,3 +797,31 @@ describe("differentAccountBanner", () => {
     expect(differentAccountBanner(undefined, () => "reconnect")).toBeNull();
   });
 });
+
+// R61 security-billing-2 L1: the X Connect start's limit codes, on Settings,
+// naming the button the row shows.
+describe("describeOAuthResult: the connect limit", () => {
+  const settings = (error: string, shown: ShownControl) => describeOAuthResult({ error, success: null }, { shown: () => shown });
+
+  it("x_too_many_tries names Connect for a new row and Reconnect for an existing one", () => {
+    expect(settings("x_too_many_tries", "connect")).toEqual({
+      variant: "danger",
+      message: "Too many tries to connect X in the last hour. Wait a few minutes, then try Connect again.",
+      platform: "x",
+    });
+    expect(settings("x_too_many_tries", "reconnect")?.message).toBe(
+      "Too many tries to connect X in the last hour. Wait a few minutes, then try Reconnect again.",
+    );
+  });
+
+  it("x_limit_unchecked names Connect for a new row and Reconnect for an existing one", () => {
+    expect(settings("x_limit_unchecked", "connect")).toEqual({
+      variant: "danger",
+      message: "We couldn't check the connect limit just now. Try Connect again in a minute.",
+      platform: "x",
+    });
+    expect(settings("x_limit_unchecked", "reconnect")?.message).toBe(
+      "We couldn't check the connect limit just now. Try Reconnect again in a minute.",
+    );
+  });
+});

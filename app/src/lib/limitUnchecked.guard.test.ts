@@ -31,6 +31,12 @@ const EXCEPTIONS: Record<string, { why: string; mustContain: string[] }> = {
     why: "back to /c, which says couldn't check",
     mustContain: [".unavailable", "CONNECT_LIMIT_CODES.unchecked"],
   },
+  // R61 security-billing-2 L1: a browser redirect, so it goes back to Settings with its
+  // own code; Settings words x_limit_unchecked as couldn't check (lib/oauthResult.ts, tested).
+  "app/api/auth/x/start/route.ts": {
+    why: "back to Settings, which says couldn't check",
+    mustContain: [".unavailable", '"limit_unchecked"'],
+  },
 };
 
 /** The result types a fail-closed limiter (or a wrapper of one) returns. */
