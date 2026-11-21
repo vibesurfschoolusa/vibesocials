@@ -149,7 +149,7 @@ describe("checkDailyPostLimit", () => {
   describe("an approval at the limit: whether the counted day is today", () => {
     // R57 pages-a L2: this count also holds posts still scheduled later today, so freeing one comes first.
     const TODAY_STEPS =
-      "Cancel or move another post still scheduled for today, then approve again. Or approve it again in 9 hours, when it publishes at once, or reject it and ask the member to schedule it for another day.";
+      "Cancel or move another post still scheduled for today, then approve again. Or approve it again from 00:00 UTC on November 11, 2026, when it publishes at once, or reject it and ask the member to schedule it for another day.";
 
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ["Date"] });
@@ -191,6 +191,27 @@ describe("checkDailyPostLimit", () => {
       expect(crossWorkspaceMock).toHaveBeenLastCalledWith(expect.objectContaining({ steps: "approval", dayIsToday: true }));
       await checkDailyPostLimit({ workspaceId: "ws-1", day: new Date("2026-11-11T09:00:00.000Z"), mode: "schedule", steps: "approval" });
       expect(crossWorkspaceMock.mock.lastCall?.[0]).not.toHaveProperty("dayIsToday");
+    });
+
+    // R57 publishing-flow L3: the approval route passes the reader's stored zone, so the reset is a fixed time.
+    it("the reader's time zone reaches the workspace sentence and the checks across workspaces", async () => {
+      db.postJobCount.mockResolvedValue(20);
+      const refusal = await checkDailyPostLimit({
+        workspaceId: "ws-1",
+        day: new Date("2026-11-10T21:00:00.000Z"),
+        mode: "schedule",
+        steps: "approval",
+        timeZone: "America/New_York",
+      });
+      expect(refusal?.error).toContain("Or approve it again from Tuesday, 7:00 PM EST (00:00 UTC), when it publishes at once");
+      db.postJobCount.mockResolvedValue(0);
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now", steps: "approval", timeZone: "America/New_York" });
+      expect(crossWorkspaceMock).toHaveBeenLastCalledWith(expect.objectContaining({ timeZone: "America/New_York" }));
+    });
+
+    it("without a zone the checks across workspaces get none", async () => {
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now", steps: "approval" });
+      expect(crossWorkspaceMock.mock.lastCall?.[0]).not.toHaveProperty("timeZone");
     });
 
     it("the default sentence is unchanged for a slot later today", async () => {

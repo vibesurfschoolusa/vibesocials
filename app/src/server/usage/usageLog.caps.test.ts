@@ -354,8 +354,26 @@ describe("new and unconfirmed accounts have a pool of their own", () => {
     expect(
       (await crossWorkspacePostRefusal({ workspaceId: "ws-fresh-3", workspace: {}, day: NOW, mode: "now", steps: "approval" }))?.error,
     ).toBe(
-      `Vibe Socials has reached today's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address. Approve it again in 9 hours, or reject it and ask the member to schedule it for another day. ${LEAVE_SMALL_POOL}`,
+      `Vibe Socials has reached today's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address. Approve it again from 00:00 UTC on November 15, 2026, or reject it and ask the member to schedule it for another day. ${LEAVE_SMALL_POOL}`,
     );
+  });
+
+  // R57 publishing-flow L3: the reader's stored zone, passed by the approval route, names a fixed reset.
+  it("steps: approval with the reader's time zone: the pool and per-person sentences name its time", async () => {
+    workspace("ws-fresh", {}, [fresh("fresh-1")]);
+    workspace("ws-fresh-3", {}, [fresh("fresh-3")]);
+    for (let p = 1; p <= 5; p += 1) await due("ws-fresh", `f-${p}`);
+    const zone = { steps: "approval" as const, timeZone: "America/New_York" };
+    expect(
+      (await crossWorkspacePostRefusal({ workspaceId: "ws-fresh-3", workspace: {}, day: NOW, mode: "now", ...zone }))?.error,
+    ).toContain("Approve it again from Saturday, 7:00 PM EST (00:00 UTC), or reject it");
+    workspace("ws-1", {}, [owner("owner-1")]);
+    for (let i = 0; i < 15; i += 1) {
+      store.posts.push({ id: `ws-1-z-${i}`, workspaceId: "ws-1", status: "scheduled", scheduledFor: NOW, createdAt: LONG_AGO });
+    }
+    expect(
+      (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now", ...zone }))?.error,
+    ).toContain("Approve it again from Saturday, 7:00 PM EST (00:00 UTC), or reject it");
   });
 
   // R56 publishing-flow L1: the pools count runs already gone out, so a full
@@ -377,7 +395,7 @@ describe("new and unconfirmed accounts have a pool of their own", () => {
         })
       )?.error,
     ).toBe(
-      `That day is full: Vibe Socials has reached the limit of 5 posts a day shared by accounts made today (UTC) or with an unconfirmed email address. Approve it again in 9 hours; it then publishes at once. Or reject it and ask the member to schedule it for another day. ${LEAVE_SMALL_POOL}`,
+      `That day is full: Vibe Socials has reached the limit of 5 posts a day shared by accounts made today (UTC) or with an unconfirmed email address. Approve it again from 00:00 UTC on November 15, 2026; it then publishes at once. Or reject it and ask the member to schedule it for another day. ${LEAVE_SMALL_POOL}`,
     );
   });
 
@@ -396,7 +414,7 @@ describe("new and unconfirmed accounts have a pool of their own", () => {
 
     expect(refused.ok).toBe(false);
     expect(refused.ok ? "" : refused.refusal.error).toBe(
-      `Vibe Socials has reached today's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address. Approve it again in 9 hours, or reject it and ask the member to schedule it for another day. ${LEAVE_SMALL_POOL}`,
+      `Vibe Socials has reached today's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address. Approve it again from 00:00 UTC on November 15, 2026, or reject it and ask the member to schedule it for another day. ${LEAVE_SMALL_POOL}`,
     );
   });
 
@@ -507,7 +525,7 @@ describe("the per-person number", () => {
     expect(
       (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now", steps: "approval" }))?.error,
     ).toBe(
-      "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. Approve it again in 9 hours, or reject it and ask the member to schedule it for another day.",
+      "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. Approve it again from 00:00 UTC on November 15, 2026, or reject it and ask the member to schedule it for another day.",
     );
   });
 
@@ -534,7 +552,7 @@ describe("the per-person number", () => {
         })
       )?.error,
     ).toBe(
-      "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Cancel or move another post still scheduled for today, then approve again. Or approve it again in 9 hours, when it publishes at once, or reject it and ask the member to schedule it for another day.",
+      "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Cancel or move another post still scheduled for today, then approve again. Or approve it again from 00:00 UTC on November 15, 2026, when it publishes at once, or reject it and ask the member to schedule it for another day.",
     );
   });
 

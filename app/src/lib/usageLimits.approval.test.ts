@@ -49,7 +49,8 @@ describe("the limit sentences other callers read are unchanged", () => {
   });
 });
 
-const RESET = "in 9 hours";
+// R57 publishing-flow L3: the approval sentence stays under the card, so its reset is a fixed time, never a countdown.
+const RESET = "from 00:00 UTC on November 21, 2026";
 const NOTE =
   "It stops applying from the day after the account was made (00:00 UTC), once the owner's email address is confirmed.";
 const approval = {
@@ -101,8 +102,8 @@ describe("each builder's approval form: the same facts, the approver's steps", (
   it("word counts, notes included: only the per-person and new-account sentences pass about 45", () => {
     const counts = Object.fromEntries(Object.entries(approval).map(([k, v]) => [k, v.split(/\s+/).length]));
     expect(counts).toEqual({
-      wsNow: 30, wsSched: 37, ownNow: 42, ownSched: 47, ownNamedNow: 45, ownNamedSched: 50,
-      svcNow: 32, svcSched: 38, poolNow: 60, poolSched: 68,
+      wsNow: 34, wsSched: 37, ownNow: 46, ownSched: 47, ownNamedNow: 49, ownNamedSched: 50,
+      svcNow: 36, svcSched: 38, poolNow: 64, poolSched: 68,
     });
   });
 });
@@ -175,5 +176,47 @@ describe("an approval for a slot later today: a slot to free where one can be fr
       expect(text.includes("Cancel or move another post still scheduled for today, then approve again.")).toBe(!pool);
       expect(text.includes("it then publishes at once")).toBe(pool);
     }
+  });
+});
+
+// R57 publishing-flow L3: the refusal stays under the card until the next press,
+// and the Queue does not reload on its own, so "in 9 hours" goes stale.
+describe("an approval sentence names its reset as a fixed time", () => {
+  const zoned = { now: time.now, timeZone: "America/New_York" };
+  it("with the reader's time zone: their time and 00:00 UTC", () => {
+    expect(dailyPostLimitMessage(20, "now", zoned, "approval")).toBe(
+      "This workspace has reached its limit of 20 posts for today. Approve it again from Friday, 7:00 PM EST (00:00 UTC), or reject it and ask the member to schedule it for another day.",
+    );
+    expect(serviceDailyPostLimitMessage("schedule", zoned, "approval", true)).toContain(
+      "Approve it again from Friday, 7:00 PM EST (00:00 UTC); it then publishes at once.",
+    );
+  });
+  it("without one: the UTC moment", () => {
+    expect(dailyPostLimitMessage(20, "now", time, "approval")).toBe(
+      "This workspace has reached its limit of 20 posts for today. Approve it again from 00:00 UTC on November 21, 2026, or reject it and ask the member to schedule it for another day.",
+    );
+    expect(ownerDailyPostLimitMessage(15, "schedule", null, null, {}, {}, "approval", true)).not.toMatch(/ in \d+ (hour|minute)/);
+  });
+  it("no approval sentence counts down, today or now, any builder", () => {
+    for (const t of [time, zoned]) {
+      for (const text of [
+        dailyPostLimitMessage(20, "now", t, "approval"),
+        dailyPostLimitMessage(20, "schedule", t, "approval", true),
+        ownerDailyPostLimitMessage(15, "now", null, holder, t, {}, "approval"),
+        ownerDailyPostLimitMessage(15, "schedule", null, holder, t, {}, "approval", true),
+        serviceDailyPostLimitMessage("now", t, "approval"),
+        serviceDailyPostLimitMessage("schedule", t, "approval", true),
+        newAccountPoolMessage("now", t, "approval"),
+        newAccountPoolMessage("schedule", t, "approval", true),
+      ]) {
+        expect(text).not.toMatch(/ in \d+ (hour|minute)/);
+      }
+    }
+  });
+  it("the default sentences keep their countdown without a zone, and their zoned form with one", () => {
+    expect(dailyPostLimitMessage(20, "now", time)).toBe(original.wsNow);
+    expect(dailyPostLimitMessage(20, "now", zoned)).toBe(
+      "This workspace has reached its limit of 20 posts for today. Schedule this post for another day, or try again from Friday, 7:00 PM EST (00:00 UTC).",
+    );
   });
 });

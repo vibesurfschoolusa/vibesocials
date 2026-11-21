@@ -374,6 +374,8 @@ export async function checkDailyPostLimit(args: {
   viewerUserId?: string;
   /** R55 pages-a-3 L1: whose steps the sentence ends with (the approver's, on an approval card); only the words change. */
   steps?: LimitSteps;
+  /** R57 publishing-flow L3: the reader's stored time zone, for the reset in the sentence; only the words change. */
+  timeZone?: string | null;
 }): Promise<LimitRefusal | null> {
   const { workspaceId, day, mode, excludePostJobId } = args;
   try {
@@ -395,6 +397,7 @@ export async function checkDailyPostLimit(args: {
         viewerUserId: args.viewerUserId,
         ...(args.steps ? { steps: args.steps } : {}),
         ...(dayIsToday ? { dayIsToday } : {}),
+        ...(args.timeZone ? { timeZone: args.timeZone } : {}),
       });
     }
 
@@ -411,7 +414,7 @@ export async function checkDailyPostLimit(args: {
       resetsAt: null,
       day,
     });
-    return { error: dailyPostLimitMessage(limits.postsPerDay, mode, {}, args.steps, dayIsToday), code: DAILY_POST_LIMIT_CODE };
+    return { error: dailyPostLimitMessage(limits.postsPerDay, mode, { timeZone: args.timeZone }, args.steps, dayIsToday), code: DAILY_POST_LIMIT_CODE };
   } catch (error) {
     logger.error("[usage] Daily post limit check failed; allowing", { error, workspaceId });
     return null;

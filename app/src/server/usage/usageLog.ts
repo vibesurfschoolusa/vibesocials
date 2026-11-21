@@ -761,6 +761,8 @@ type CrossWorkspaceCheck = {
   steps?: LimitSteps;
   /** R56 publishing-flow L1: `day` is today (UTC), from checkDailyPostLimit; only the words change. */
   dayIsToday?: boolean;
+  /** R57 publishing-flow L3: the reader's stored time zone, for the reset in the sentence; only the words change. */
+  timeZone?: string | null;
 };
 
 /**
@@ -832,7 +834,7 @@ async function refusalFor(
         const time =
           reduced && FIRST_DAY_REASONS.includes(reduced)
             ? { firstDayEnds: utcDayRange(owner.user.createdAt).end, timeZone: await viewerTimeZone(input.viewerUserId, db) }
-            : {};
+            : { timeZone: input.timeZone };
         return {
           error: ownerDailyPostLimitMessage(limit, mode, reduced, holder, time, process.env, input.steps, input.dayIsToday),
           code: OWNER_DAILY_POST_LIMIT_CODE,
@@ -848,14 +850,14 @@ async function refusalFor(
   const pool = await poolRefusal({ who, day, unit, size: sending, now, db });
   if (pool === "new") {
     return {
-      error: atSend ? newAccountPoolAtSendMessage(now) : newAccountPoolMessage(mode, {}, input.steps, input.dayIsToday),
+      error: atSend ? newAccountPoolAtSendMessage(now) : newAccountPoolMessage(mode, { timeZone: input.timeZone }, input.steps, input.dayIsToday),
       code: SERVICE_DAILY_POST_LIMIT_CODE,
       ceiling: false,
     };
   }
   if (pool === "main" || pool === "ceiling") {
     return {
-      error: atSend ? serviceDailyPostLimitAtSendMessage(now) : serviceDailyPostLimitMessage(mode, {}, input.steps, input.dayIsToday),
+      error: atSend ? serviceDailyPostLimitAtSendMessage(now) : serviceDailyPostLimitMessage(mode, { timeZone: input.timeZone }, input.steps, input.dayIsToday),
       code: SERVICE_DAILY_POST_LIMIT_CODE,
       ceiling: pool === "ceiling",
     };

@@ -247,6 +247,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       viewerUserId: workspaceContext.user.id,
       // The card has no Edit and no day picker: the default steps would send the approver nowhere.
       steps: "approval",
+      // R57 publishing-flow L3: the sentence stays under the card, so its reset
+      // is a fixed time in the approver's own zone where it is stored.
+      ...(workspaceContext.user.timeZone ? { timeZone: workspaceContext.user.timeZone } : {}),
     });
     if (refusal) {
       return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });

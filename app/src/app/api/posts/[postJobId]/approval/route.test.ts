@@ -975,6 +975,32 @@ describe("POST /api/posts/[postJobId]/approval — daily post limit (usage limit
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
+  // R57 publishing-flow L3: the refusal stays under the card, so its reset is
+  // written in the approver's own stored zone as a fixed time.
+  it("passes the approver's stored time zone to the limit check", async () => {
+    const context = makeWorkspaceContext({ role: "owner" });
+    (context.user as { timeZone: string | null }).timeZone = "America/New_York";
+    getWorkspaceContextMock.mockResolvedValue(context);
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+
+    await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(checkDailyPostLimitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ steps: "approval", timeZone: "America/New_York" }),
+    );
+  });
+
+  it("with no stored time zone, passes none", async () => {
+    const context = makeWorkspaceContext({ role: "owner" });
+    (context.user as { timeZone: string | null }).timeZone = null;
+    getWorkspaceContextMock.mockResolvedValue(context);
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+
+    await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(checkDailyPostLimitMock.mock.calls[0][0]).not.toHaveProperty("timeZone");
+  });
+
   it("rejecting is never checked", async () => {
     findFirstMock.mockResolvedValue(pendingJob());
 
