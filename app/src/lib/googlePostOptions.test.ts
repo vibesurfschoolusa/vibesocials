@@ -281,6 +281,33 @@ describe("defaultGoogleButtonUrl", () => {
     expect(defaultGoogleButtonUrl(" ")).toBe("");
     expect(defaultGoogleButtonUrl(null)).toBe("");
   });
+
+  // R56 pages-a-4 L2: parseGoogleButton refuses http, so a website saved as
+  // http must not fill a link the page then calls wrong.
+  it("turns a website saved as http:// into https://", () => {
+    expect(defaultGoogleButtonUrl("http://example.com")).toBe("https://example.com");
+    expect(defaultGoogleButtonUrl("HTTP://example.com/book")).toBe("https://example.com/book");
+  });
+
+  it("leaves an https:// website unchanged", () => {
+    expect(defaultGoogleButtonUrl("https://example.com")).toBe("https://example.com");
+  });
+
+  it("puts https:// before a bare domain, as before", () => {
+    expect(defaultGoogleButtonUrl("example.com")).toBe("https://example.com");
+  });
+
+  it("leaves an empty website empty, as before", () => {
+    expect(defaultGoogleButtonUrl("")).toBe("");
+    expect(defaultGoogleButtonUrl(undefined)).toBe("");
+  });
+
+  it("fills a link parseGoogleButton accepts from an http website", () => {
+    expect(parseGoogleButton({ type: "BOOK", url: defaultGoogleButtonUrl("http://example.com") })).toEqual({
+      ok: true,
+      value: { type: "BOOK", url: "https://example.com" },
+    });
+  });
 });
 
 // Review round: trying Offer and coming back must not silently lose the button.

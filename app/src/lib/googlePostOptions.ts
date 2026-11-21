@@ -282,5 +282,7 @@ export function googleQueueLabel(postType: string | null, buttonType: string | n
 export function defaultGoogleButtonUrl(companyWebsite: string | null | undefined): string {
   const site = companyWebsite?.trim() ?? "";
   if (!site) return "";
-  return /^https?:\/\//i.test(site) ? site : `https://${site}`;
+  // R56 pages-a-4 L2: parseGoogleButton refuses http, so an http website is filled as https.
+  if (/^http:\/\//i.test(site)) return `https://${site.slice("http://".length)}`;
+  return /^https:\/\//i.test(site) ? site : `https://${site}`;
 }
