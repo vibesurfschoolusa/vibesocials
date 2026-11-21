@@ -151,4 +151,19 @@ describe("Switch account dialog", () => {
       "Scheduled posts, and posts waiting for approval, that chose TikTok go to the new account",
     );
   });
+
+  // R63 client-journey L2: a Google account posts nowhere until a location is chosen.
+  it("Google Business Profile: the posts go to the new account once you sign in and choose its location", () => {
+    const sentence =
+      "Scheduled posts, and posts waiting for approval, that chose Google Business Profile go to the new account once you sign in and choose its location. If you stop before then, they fail on Google Business Profile until you connect an account again.";
+    expect(switchScheduledSentence("google_business_profile")).toBe(sentence);
+    expect(switchDescription("google_business_profile")).toContain(sentence);
+  });
+
+  it("another platform's dialog: unchanged, and says nothing about a location", () => {
+    expect(switchScheduledSentence("linkedin")).toBe(
+      "Scheduled posts, and posts waiting for approval, that chose LinkedIn go to the new account once you finish signing in. If you stop before then, they fail on LinkedIn until you connect an account again.",
+    );
+    expect(switchDescription("facebook")).not.toContain("location");
+  });
 });
