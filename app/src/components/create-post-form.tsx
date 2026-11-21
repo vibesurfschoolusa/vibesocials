@@ -1970,6 +1970,8 @@ function CreatePostFormInner({
       try {
         nextFile = await prepareUploadFile(pickedFile);
       } catch (prepareError) {
+        // R64 pages-b L3: the page was left: nothing to show, as the success path below.
+        if (!mountedRef.current) return;
         setPreparingPick((current) => nextPreparingPick(current, { type: "settled", selection }));
         setPickJudgment((current) => nextPickJudgment(current, { type: "settled", selection }));
         if (selection === fileSelectionRef.current) {
@@ -2017,7 +2019,8 @@ function CreatePostFormInner({
         });
       }
     } catch (err: unknown) {
-      if (err instanceof SingleUploadAbortedError) return;
+      // R64 pages-b L3: the toasts are app-wide, so a page that was left says nothing.
+      if (err instanceof SingleUploadAbortedError || !mountedRef.current) return;
       console.error(
         "Error uploading media for auto-caption:",
         err,
