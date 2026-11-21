@@ -254,8 +254,30 @@ describe("DELETE /api/media/[id]", () => {
       const body = (await response.json()) as { error?: string };
 
       expect(response.status).toBe(403);
+      // R59 pages-a-2 L1: names who can delete it, without "the" owner.
       expect(body).toEqual({
-        error: "Only the uploader or the workspace owner can delete this.",
+        error: "Only the person who uploaded this file or a workspace owner can delete it. Ask one of them.",
+      });
+      expect(transactionMock).not.toHaveBeenCalled();
+      expect(delMock).not.toHaveBeenCalled();
+    });
+
+    // R59 pages-a-2 L1: a client's file is saved under an owner, so the card's
+    // "From <name>" is not someone who can delete it.
+    it("a member CANNOT delete a file a client sent — 403 says only an owner can", async () => {
+      getWorkspaceContextMock.mockResolvedValue(
+        makeWorkspaceContext({ userId: "user-2", role: "member" }),
+      );
+      findFirstMock.mockResolvedValue(
+        makeItemRow({ userId: "user-1", metadata: { source: "upload_link", senderName: "Maria" } }),
+      );
+
+      const response = await DELETE(dummyRequest, ctx("media-1"));
+      const body = (await response.json()) as { error?: string };
+
+      expect(response.status).toBe(403);
+      expect(body).toEqual({
+        error: "Only a workspace owner can delete a file your client sent. Ask an owner to delete it.",
       });
       expect(transactionMock).not.toHaveBeenCalled();
       expect(delMock).not.toHaveBeenCalled();

@@ -140,8 +140,21 @@ export async function DELETE(request: NextRequest, context: MediaItemRouteContex
   const isUploader = item.userId === workspaceContext.user.id;
   const isOwner = workspaceContext.role === "owner";
   if (!isUploader && !isOwner) {
+    // R59 pages-a-2 L1: a client's file is saved under an owner, so the card's
+    // "From <name>" is no one the member can ask; and a workspace can have
+    // several owners.
+    const metadata = item.metadata;
+    const fromClient =
+      typeof metadata === "object" &&
+      metadata !== null &&
+      !Array.isArray(metadata) &&
+      (metadata as Record<string, unknown>).source === "upload_link";
     return NextResponse.json(
-      { error: "Only the uploader or the workspace owner can delete this." },
+      {
+        error: fromClient
+          ? "Only a workspace owner can delete a file your client sent. Ask an owner to delete it."
+          : "Only the person who uploaded this file or a workspace owner can delete it. Ask one of them.",
+      },
       { status: 403 },
     );
   }
