@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { saveSocialConnection } from "@/server/connections/saveConnection";
 import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
@@ -199,10 +199,12 @@ export const GET = withConnectLink("tiktok", handleCallback);
  * The TikTok account's display name from /v2/user/info (scope user.info.basic),
  * or null when TikTok doesn't answer in time or the field is missing.
  * https://developers.tiktok.com/doc/tiktok-api-v2-get-user-info
+ * R60 platform-clients-2 L1: the 10 s limit covers the body too, so a body
+ * that never ends is null (the stored name is kept), not a hung callback.
  */
 async function fetchTikTokDisplayName(accessToken: string): Promise<string | null> {
   try {
-    const response = await fetchWithTimeout(
+    const response = await fetchWithinLimit(
       "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name",
       { headers: { Authorization: `Bearer ${accessToken}` } },
       10_000,
