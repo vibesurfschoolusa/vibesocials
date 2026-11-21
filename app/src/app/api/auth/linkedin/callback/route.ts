@@ -9,7 +9,9 @@ import { isWorkspaceOwner } from "@/lib/workspace";
 import {
   findAdministeredOrganizations,
   lookupOrganization,
-  lookupOrganizationByVanityName,
+  lookupOrganizationByVanityNameOutcome,
+  lookupOrganizationOutcome,
+  type OrganizationLookup,
 } from "@/server/connections/linkedinOrganizations";
 import { createPendingConnection } from "@/server/connections/pendingConnection";
 import {
@@ -217,7 +219,9 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
     }
 
     // Strategy 3: Check if organization was provided in the state
-    let hintNotFound = false;
+    // R54 platform-clients L1: why the hint found no page, so a LinkedIn that
+    // refused or didn't answer isn't reported as a wrong address.
+    let hintLookup: OrganizationLookup["outcome"] | null = null;
     if (organizations.length === 0) {
       console.log("[LinkedIn OAuth] Checking for organization in state/session");
       
@@ -234,8 +238,10 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
         if (isNumericId) {
           // Strategy 3a: Direct lookup by numeric organization ID
           console.log("[LinkedIn OAuth] Attempting to lookup organization by ID:", vanityName);
-          const org = await lookupOrganization(tokenData.access_token, vanityName);
-          if (org) {
+          const lookup = await lookupOrganizationOutcome(tokenData.access_token, vanityName);
+          hintLookup = lookup.outcome;
+          if (lookup.outcome === "found") {
+            const org = lookup.organization;
             organizations = [{
               id: org.id,
               name: org.name,
@@ -246,8 +252,10 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
         } else {
           // Strategy 3b: Lookup by vanity name
           console.log("[LinkedIn OAuth] Attempting to lookup organization by vanity name:", vanityName);
-          const org = await lookupOrganizationByVanityName(tokenData.access_token, vanityName);
-          if (org) {
+          const lookup = await lookupOrganizationByVanityNameOutcome(tokenData.access_token, vanityName);
+          hintLookup = lookup.outcome;
+          if (lookup.outcome === "found") {
+            const org = lookup.organization;
             organizations = [{
               id: org.id,
               name: org.name,
@@ -256,17 +264,18 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
             console.log("[LinkedIn OAuth] Organization found by vanity name!", organizations[0]);
           }
         }
-        hintNotFound = organizations.length === 0;
       }
     }
 
     // If still no organization, redirect to setup page. After the dialog's
     // page address found nothing, the dialog says so; reopened as on a first
-    // try, it looped with nothing saying why (R53 new-customer L1).
+    // try, it looped with nothing saying why (R53 new-customer L1). A lookup
+    // LinkedIn refused or didn't answer says so instead (R54 platform-clients L1).
     if (organizations.length === 0) {
-      console.warn("[LinkedIn OAuth] No organizations found - redirecting to setup", { hintNotFound });
+      const setup = hintLookup === "not_found" ? "not_found" : hintLookup === "failed" ? "lookup_failed" : "true";
+      console.warn("[LinkedIn OAuth] No organizations found - redirecting to setup", { setup });
       return NextResponse.redirect(
-        new URL(`/settings?linkedin_setup=${hintNotFound ? "not_found" : "true"}`, process.env.NEXTAUTH_URL!)
+        new URL(`/settings?linkedin_setup=${setup}`, process.env.NEXTAUTH_URL!)
       );
     }
 

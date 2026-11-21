@@ -1187,14 +1187,56 @@ describe("choosing which account to connect", () => {
 
       // R53 new-customer L1: the dialog came back with the same empty text
       // after an address LinkedIn couldn't find, so every try looped unexplained.
-      it("organizationAcls refused and the dialog's page hint found nothing: the return says not_found", async () => {
-        useProvider(linkedinProvider([], { acl: () => json({ status: 403, message: "Not enough permissions" }, 403) }));
+      // R54 platform-clients L1: only LinkedIn's own "no such page" is not_found.
+      const aclRefused = () => json({ status: 403, message: "Not enough permissions" }, 403);
+      const setupAfter = async (hint: string, lookup: (url: string) => Response | null) => {
+        useProvider(linkedinProvider([], { acl: aclRefused, extra: lookup }));
+        const res = await linkedinGET(callbackRequest("linkedin", vanityState(hint)));
+        expect(location(res).pathname).toBe("/settings");
+        return location(res).searchParams.get("linkedin_setup");
+      };
+      const vanityLookup = "https://api.linkedin.com/rest/organizations?q=vanityName&vanityName=acme-surff";
+      const idLookup = "https://api.linkedin.com/rest/organizations/777";
+      const timedOut = () => {
+        throw Object.assign(new Error("Request timed out after 15000ms"), { code: "FETCH_TIMEOUT" });
+      };
 
-        for (const state of [vanityState("acme-surff"), vanityState("777")]) {
-          const res = await linkedinGET(callbackRequest("linkedin", state));
-          expect(location(res).pathname).toBe("/settings");
-          expect(location(res).searchParams.get("linkedin_setup")).toBe("not_found");
-        }
+      it("organizationAcls refused and the vanity name found nothing (a 200 with no elements): not_found", async () => {
+        expect(
+          await setupAfter("acme-surff", (url) => (url === vanityLookup ? json({ elements: [] }) : null)),
+        ).toBe("not_found");
+        expectNoConnectionWrites();
+      });
+
+      it("organizationAcls refused and the numeric id is a 404: not_found", async () => {
+        expect(
+          await setupAfter("777", (url) => (url === idLookup ? json({ message: "Not found" }, 404) : null)),
+        ).toBe("not_found");
+        expectNoConnectionWrites();
+      });
+
+      it.each([
+        ["a 403", () => json({ message: "Not enough permissions" }, 403)],
+        ["a 429", () => json({ message: "Too many requests" }, 429)],
+        ["a 500", () => json({ message: "Internal error" }, 500)],
+        ["a timeout", timedOut],
+      ])("organizationAcls refused and the vanity name lookup got %s: lookup_failed", async (_kind, answer) => {
+        expect(await setupAfter("acme-surff", (url) => (url === vanityLookup ? answer() : null))).toBe("lookup_failed");
+        expectNoConnectionWrites();
+      });
+
+      it.each([
+        ["a 403", () => json({ message: "Not enough permissions" }, 403)],
+        ["a 500", () => json({ message: "Internal error" }, 500)],
+      ])("organizationAcls refused and the numeric id lookup got %s: lookup_failed", async (_kind, answer) => {
+        expect(await setupAfter("777", (url) => (url === idLookup ? answer() : null))).toBe("lookup_failed");
+        expectNoConnectionWrites();
+      });
+
+      it("organizationAcls refused and no page hint: the dialog opens as a first try", async () => {
+        useProvider(linkedinProvider([], { acl: aclRefused }));
+        const res = await linkedinGET(callbackRequest("linkedin", signedState()));
+        expect(location(res).searchParams.get("linkedin_setup")).toBe("true");
         expectNoConnectionWrites();
       });
 
