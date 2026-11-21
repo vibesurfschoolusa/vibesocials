@@ -291,6 +291,8 @@ interface QueueCardProps {
   onDecide: (job: QueueCardPost, decision: "approve" | "reject", pressed: HTMLElement | null) => void;
   /** Approval workflow — the decision in flight for this job, if any. */
   deciding: "approve" | "reject" | null;
+  /** R56 pages-a L5: why the last Approve on this card was refused, until the next press on it. */
+  approveRefusal: string | null;
 }
 
 function QueueCard({
@@ -304,6 +306,7 @@ function QueueCard({
   onDelete,
   onDecide,
   deciding,
+  approveRefusal,
 }: QueueCardProps) {
   const awaitingApproval = job.approvalState === "pending";
   const actions = getQueueCardActions(job, viewer);
@@ -440,6 +443,13 @@ function QueueCard({
               Waiting for an owner to approve. It won&apos;t publish until then.
             </span>
           )}
+          {/* R56 pages-a L5: a limit refusal runs to 68 words; the toast closes
+              after 8 s, so the card keeps the sentence. */}
+          {actions.decide && approveRefusal ? (
+            <p role="alert" className="basis-full text-sm text-destructive">
+              {approveRefusal}
+            </p>
+          ) : null}
         </div>
       ) : (
       <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -1224,6 +1234,8 @@ export function QueueView({
   // passed, and kept out of render so the component stays pure.
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [deciding, setDeciding] = useState<{ id: string; decision: "approve" | "reject" } | null>(null);
+  // R56 pages-a L5: per card, the sentence of its last refused Approve.
+  const [approveRefusals, setApproveRefusals] = useState<Record<string, string>>({});
   // Activity pagination (Task C2) — the Queue fetches independently (its own
   // ?status= filter), so it tracks the cursor locally rather than via
   // usePostJobs. nextCursor is the next (older) page's ?cursor= token from the
@@ -1302,6 +1314,7 @@ export function QueueView({
     (refusal: PostActionRefusal) => {
       toast.error(refusal.text);
       if (refusal.reload) void load({ silent: true });
+      return refusal;
     },
     [load, toast],
   );
@@ -1387,6 +1400,12 @@ export function QueueView({
     async (job: QueueCardPost, decision: "approve" | "reject", pressed: HTMLElement | null) => {
       if (deciding) return;
       setDeciding({ id: job.id, decision });
+      setApproveRefusals((current) => {
+        if (!(job.id in current)) return current;
+        const rest = { ...current };
+        delete rest[job.id];
+        return rest;
+      });
       try {
         const answer = await sendActionRequest(
           `/api/posts/${job.id}/approval`,
@@ -1409,7 +1428,7 @@ export function QueueView({
         if (!response.ok) {
           // Stale card (already decided, changed since review, publish couldn't
           // start, gone): re-sync so no dead Approve/Reject buttons remain.
-          showRefusal(
+          const refusal = showRefusal(
             postActionRefusal(
               response.status,
               data,
@@ -1417,6 +1436,7 @@ export function QueueView({
               "Approve",
             ),
           );
+          if (decision === "approve") setApproveRefusals((current) => ({ ...current, [job.id]: refusal.text }));
           return;
         }
         const outcome = decisionOutcome(decision, data);
@@ -1666,6 +1686,7 @@ export function QueueView({
                     onDelete={setDeleteTarget}
                     onDecide={handleDecide}
                     deciding={deciding?.id === card.id ? deciding.decision : null}
+                    approveRefusal={approveRefusals[card.id] ?? null}
                   />
                 ))}
               </div>
