@@ -441,3 +441,33 @@ describe("Add many row: buttons name their file", () => {
     expect(html).toContain('aria-label="Retry surf.jpg"');
   });
 });
+
+// R56 pages-b L1: the rows repeat these buttons, so each one's accessible name starts
+// with its visible text and names the file (as Remove and Retry already do).
+describe("Add many row: per-row buttons name their file", () => {
+  const button = (html: string, text: string) =>
+    html.match(new RegExp("<button[^>]*>(?:(?!</button>).)*" + text + "</button>"))![0];
+
+  it("Write again, Improve caption and Write it for me", () => {
+    const html = render(row({ mediaItemId: "m1" }));
+    expect(button(html, "Write again")).toContain('aria-label="Write again a.jpg"');
+    expect(button(html, "Improve caption")).toContain('aria-label="Improve caption a.jpg"');
+    expect(button(html, "Write it for me")).toContain('aria-label="Write it for me a.jpg"');
+  });
+
+  it("Improve names the file while it reads Improving", () => {
+    expect(button(render(row({ improving: true })), "Improving...")).toContain('aria-label="Improving... a.jpg"');
+  });
+
+  it("Change cover and Done", () => {
+    const video = row({ fileName: "clip.mp4", mimeType: "video/mp4" });
+    expect(button(render(video), "Change cover")).toContain('aria-label="Change cover clip.mp4"');
+    expect(button(render(video, { coverOpen: true }), "Done")).toContain('aria-label="Done clip.mp4"');
+  });
+
+  it("It is in the Queue and Send again", () => {
+    const html = render(row({ uncertain: true }));
+    expect(button(html, "It is in the Queue")).toContain('aria-label="It is in the Queue a.jpg"');
+    expect(button(html, "Send again")).toContain('aria-label="Send again a.jpg"');
+  });
+});

@@ -296,6 +296,7 @@ export function BulkPostRow({
                   variant="outline"
                   size="md"
                   disabled={row.improving}
+                  aria-label={`Write again ${row.fileName}`}
                   onClick={(event) => {
                     focusAfterPress(event.currentTarget, () => captionRef.current);
                     onWriteAgain();
@@ -305,7 +306,14 @@ export function BulkPostRow({
                 </Button>
               ) : null}
               {row.caption.trim() ? (
-                <Button variant="outline" size="md" loading={row.improving} aria-busy={row.improving} onClick={onImprove}>
+                <Button
+                  variant="outline"
+                  size="md"
+                  loading={row.improving}
+                  aria-busy={row.improving}
+                  aria-label={`${row.improving ? "Improving..." : "Improve caption"} ${row.fileName}`}
+                  onClick={onImprove}
+                >
                   {row.improving ? "Improving..." : "Improve caption"}
                 </Button>
               ) : null}
@@ -339,7 +347,13 @@ export function BulkPostRow({
                 captions with AI" off, nothing goes to the AI, so no button. */}
             {row.mediaItemId && editable && aiCaptions ? (
               <div>
-                <Button variant="outline" size="md" loading={row.altTextWriting} onClick={onWriteDescription}>
+                <Button
+                  variant="outline"
+                  size="md"
+                  loading={row.altTextWriting}
+                  aria-label={`Write it for me ${row.fileName}`}
+                  onClick={onWriteDescription}
+                >
                   Write it for me
                 </Button>
               </div>
@@ -357,7 +371,12 @@ export function BulkPostRow({
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-sm text-foreground">{coverSummary(row.cover)}</p>
               {editable ? (
-                <Button variant="outline" size="md" onClick={() => onCoverOpenChange(!coverOpen)}>
+                <Button
+                  variant="outline"
+                  size="md"
+                  aria-label={`${coverOpen ? "Done" : "Change cover"} ${row.fileName}`}
+                  onClick={() => onCoverOpenChange(!coverOpen)}
+                >
                   {coverOpen ? "Done" : "Change cover"}
                 </Button>
               ) : null}
@@ -420,10 +439,10 @@ export function BulkPostRow({
           <Alert variant="warning">
             <p>{BULK_MAYBE_CREATED_MESSAGE}</p>
             <div className="mt-2 flex flex-wrap gap-2">
-              <Button size="md" disabled={locked} onClick={onConfirmInQueue}>
+              <Button size="md" disabled={locked} aria-label={`It is in the Queue ${row.fileName}`} onClick={onConfirmInQueue}>
                 It is in the Queue
               </Button>
-              <Button variant="outline" size="md" disabled={locked} onClick={onSendAgain}>
+              <Button variant="outline" size="md" disabled={locked} aria-label={`Send again ${row.fileName}`} onClick={onSendAgain}>
                 Send again
               </Button>
             </div>
