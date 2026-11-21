@@ -33,15 +33,17 @@ export interface LinkedInAccountDialogCopy {
 }
 
 export function linkedInAccountDialogCopy(mode: LinkedInAccountDialogMode): LinkedInAccountDialogCopy {
+  // R58 pages-b L1: the steps name the forward button by its own label, so the two can't drift.
+  const continueLabel = mode === "switch" ? "Disconnect & continue" : "Continue";
   return {
     title: mode === "switch" ? "Switch LinkedIn account" : "Connect LinkedIn",
     description:
       "LinkedIn connects whichever LinkedIn account is signed in to this browser, without asking. To choose the account:",
     steps: [
       "Click “Open LinkedIn sign-out” and sign out in the new tab. If that tab shows a sign-in page instead, you’re already signed out: close it.",
-      "Come back here and click Continue. LinkedIn asks you to sign in: use an account that is a Super admin of your company page.",
+      `Come back here and click ${continueLabel}. LinkedIn asks you to sign in: use an account that is a Super admin of your company page.`,
     ],
-    shortcut: "Already signed in to LinkedIn with the right account? Just click Continue.",
-    continueLabel: mode === "switch" ? "Disconnect & continue" : "Continue",
+    shortcut: `Already signed in to LinkedIn with the right account? Just click ${continueLabel}.`,
+    continueLabel,
   };
 }

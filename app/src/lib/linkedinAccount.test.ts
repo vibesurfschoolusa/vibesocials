@@ -24,4 +24,22 @@ describe("linkedinAccount", () => {
       expect(copy.steps[1]).toMatch(/use an account that is a Super admin of your company page./);
     }
   });
+
+  // R58 pages-b L1: the steps name the button the dialog shows, from the same continueLabel.
+  it("switch mode's steps name Disconnect & continue, the dialog's forward button", () => {
+    const switching = linkedInAccountDialogCopy("switch");
+    expect(switching.steps[1]).toBe(
+      "Come back here and click Disconnect & continue. LinkedIn asks you to sign in: use an account that is a Super admin of your company page.",
+    );
+    expect(switching.shortcut).toBe("Already signed in to LinkedIn with the right account? Just click Disconnect & continue.");
+    expect(switching.steps.join(" ") + switching.shortcut).not.toMatch(/click Continue/);
+  });
+
+  it("connect mode's steps name its own Continue button, as before", () => {
+    const connect = linkedInAccountDialogCopy("connect");
+    expect(connect.steps[1]).toBe(
+      "Come back here and click Continue. LinkedIn asks you to sign in: use an account that is a Super admin of your company page.",
+    );
+    expect(connect.shortcut).toBe("Already signed in to LinkedIn with the right account? Just click Continue.");
+  });
 });
