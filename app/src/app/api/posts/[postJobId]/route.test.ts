@@ -1239,8 +1239,9 @@ describe("PATCH and DELETE /api/posts/[postJobId] - a Feed and Story card", () =
 // R62 review low 2: an edit can no more leave X an empty text than the post
 // could be created so (lib/xTextRefusal.ts, shared with POST /api/posts).
 describe("PATCH /api/posts/[postJobId]: an X text post edited down to mentions", () => {
+  // R63 pages-a L1: the Edit dialog can't leave X out, so PATCH says what it can do.
   const X_EMPTY =
-    "X removes @mentions from posts sent through its API, so this post has no text left for X. Add some words, or leave X out.";
+    "X removes @mentions from posts sent through its API, so this post would have no text for X. Add some words to the caption or to X's own caption. To post without X, cancel this post and create it again without X.";
   const textPost = {
     status: "scheduled",
     scheduledFor: new Date("2099-01-01T09:00:00.000Z"),
@@ -1254,7 +1255,7 @@ describe("PATCH /api/posts/[postJobId]: an X text post edited down to mentions",
     clientApprovedAt: null,
   };
 
-  it("refuses \"@surfshop @wavecafe\" with the POST sentence and writes nothing", async () => {
+  it("refuses \"@surfshop @wavecafe\" with PATCH's own sentence and writes nothing", async () => {
     findFirstMock.mockResolvedValue(textPost);
     const res = await PATCH(req({ baseCaption: "@surfshop @wavecafe" }), ctx("job-1"));
     expect(res.status).toBe(400);
@@ -1275,6 +1276,40 @@ describe("PATCH /api/posts/[postJobId]: an X text post edited down to mentions",
     const res = await PATCH(req({ baseCaption: "Thanks @surfshop for the boards" }), ctx("job-1"));
     expect(res.status).toBe(200);
     expect(updateManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  // R63 pages-a L1: a mentions-only post saved before the check, rescheduled from
+  // Edit (which sends the caption on every save), is not refused.
+  it("accepts a time-only edit of a stored mentions-only post, which sends the same caption", async () => {
+    findFirstMock.mockResolvedValue({ ...textPost, baseCaption: "@surfshop @wavecafe" });
+    updateManyMock.mockResolvedValue({ count: 1 });
+    const res = await PATCH(
+      req({ baseCaption: "@surfshop @wavecafe", scheduledFor: "2099-01-02T09:00:00.000Z" }),
+      ctx("job-1"),
+    );
+    expect(res.status).toBe(200);
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a time-only edit with no caption sent", async () => {
+    findFirstMock.mockResolvedValue({ ...textPost, baseCaption: "@surfshop @wavecafe" });
+    updateManyMock.mockResolvedValue({ count: 1 });
+    const res = await PATCH(req({ scheduledFor: "2099-01-02T09:00:00.000Z" }), ctx("job-1"));
+    expect(res.status).toBe(200);
+  });
+
+  it("accepts a caption change that leaves X's own stored text in place", async () => {
+    findFirstMock.mockResolvedValue({ ...textPost, baseCaption: "@surfshop", perPlatformOverrides: { x: "@surfshop" } });
+    updateManyMock.mockResolvedValue({ count: 1 });
+    const res = await PATCH(req({ baseCaption: "@surfshop @wavecafe" }), ctx("job-1"));
+    expect(res.status).toBe(200);
+  });
+
+  it("refuses a stored mentions-only post whose caption is changed to other mentions", async () => {
+    findFirstMock.mockResolvedValue({ ...textPost, baseCaption: "@surfshop" });
+    const res = await PATCH(req({ baseCaption: "@wavecafe" }), ctx("job-1"));
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: X_EMPTY });
   });
 
   it("accepts mentions only when the post does not go to X", async () => {
