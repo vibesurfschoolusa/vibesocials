@@ -1263,6 +1263,18 @@ describe("PATCH /api/posts/[postJobId]: an X text post edited down to mentions",
     expect(updateManyMock).not.toHaveBeenCalled();
   });
 
+  // R64 pages-a L1: a draft has Delete, not Cancel, so its step names Delete.
+  it("refuses a draft edited down to mentions with the draft's own step", async () => {
+    findFirstMock.mockResolvedValue({ ...textPost, status: "draft", scheduledFor: null });
+    const res = await PATCH(req({ baseCaption: "@surfshop @wavecafe" }), ctx("job-1"));
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      error:
+        "X removes @mentions from posts sent through its API, so this post would have no text for X. Add some words to the caption or to X's own caption. To post without X, delete this draft and create it again without X.",
+    });
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
   it("refuses an X override cut to mentions only", async () => {
     findFirstMock.mockResolvedValue(textPost);
     const res = await PATCH(req({ perPlatformOverrides: { x: "@surfshop" } }), ctx("job-1"));
