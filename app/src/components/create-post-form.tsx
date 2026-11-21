@@ -2682,7 +2682,19 @@ function CreatePostFormInner({
       setSingleAltText("");
       singlePhotoRef.current = null;
       changePhotoSet(() => []);
+      // R64 pages-b L2: the attachment ends as a cleared pick ends it (attachPickedFile(null)).
+      // A file picked while the post saved is now stale, its upload and any photo
+      // uploads stop, and no caption is written for it into the next post.
+      ++fileSelectionRef.current;
+      setPreparingPick((current) => nextPreparingPick(current, { type: "clear" }));
+      setPickJudgment((current) => nextPickJudgment(current, { type: "clear" }));
+      const leftOver = activeUploadRef.current;
       activeUploadRef.current = null;
+      abortPhotoUploads();
+      // The upload this post was sent with has finished; only another is stopped.
+      if (leftOver && leftOver.file !== uploadFile) leftOver.abort.abort("removed");
+      settleDroppedUpload("removed");
+      captionBusy.stop();
       // Clear the finished upload's bar and remount the file input, so the old
       // filename is gone and choosing the same file again fires a change event.
       setUploadProgress(null);
