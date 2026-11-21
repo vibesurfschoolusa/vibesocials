@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
 import { cancelData } from "@/lib/approval";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { tooManyTriesResponse } from "@/lib/tooManyTries";
-import { POST_GONE_TEXT, postMovedOnText } from "@/lib/postMovedOn";
+import { lostRaceAnswer, POST_GONE_TEXT, postMovedOnText } from "@/lib/postMovedOn";
 import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
 import { finishPostJob } from "@/server/jobs/failPendingResults";
 import { signedOutResponse } from "@/lib/signedOutResponse";
@@ -63,10 +63,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
 
   // R31 publishing L1: what happened to this post (postMovedOnText), and that
   // the later posts of the series were not touched, so nobody thinks they went.
+  const LEFT_ALONE = "The later posts in this series were left as they are: cancel them on their own cards.";
   const notCancelable = (status: PostJobStatus | null | undefined) =>
     NextResponse.json(
       {
-        error: `${postMovedOnText(status, "cancelled") ?? "This post can no longer be cancelled."} The later posts in this series were left as they are: cancel them on their own cards.`,
+        error: `${postMovedOnText(status, "cancelled") ?? "This post can no longer be cancelled."} ${LEFT_ALONE}`,
         code: "NOT_CANCELABLE",
       },
       { status: 409 },
@@ -126,18 +127,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   });
   const cancelled = posts.length - missed.length;
   if (cancelled === 0) {
-    // Lost every race: read this post again, for the sentence only.
+    // Lost every race (R59 publishing-flow L4: the writes are pinned to the
+    // approval fields, so a member's edit sending the post back for approval
+    // makes them miss too). This post read again decides (lostRaceAnswer).
     const now = await prisma.postJob.findFirst({ where: { id: postJobId, workspaceId }, select: { status: true } });
-    // R59 publishing-flow L4, Cancel's rule: the writes are pinned to the
-    // approval fields, so they also miss when a member's edit sent the post
-    // back for approval meanwhile, and it is still cancellable.
-    if (now && MUTABLE_POST_JOB_STATUSES.includes(now.status)) {
-      return NextResponse.json(
-        { error: "This post changed in the meantime. Try again.", code: "NOT_CANCELABLE" },
-        { status: 409 },
-      );
-    }
-    return notCancelable(now?.status);
+    return NextResponse.json(lostRaceAnswer(now, "cancelled", { code: "NOT_CANCELABLE", after: LEFT_ALONE }), { status: 409 });
   }
 
   // R59 publishing-flow L4: a missed post still draft or scheduled changed in

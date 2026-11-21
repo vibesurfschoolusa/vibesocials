@@ -195,7 +195,7 @@ describe("POST /api/posts/[postJobId]/cancel-series", () => {
     const res = await POST(req, ctx("job-2"));
 
     expect(res.status).toBe(409);
-    await expect(res.json()).resolves.toEqual({ error: "This post changed in the meantime. Try again.", code: "NOT_CANCELABLE" });
+    await expect(res.json()).resolves.toEqual({ error: "This post changed in the meantime. Try again.", code: "POST_CHANGED" });
   });
 
   // Review round 3: like the single cancel, through finishPostJob, so the
@@ -215,6 +215,7 @@ describe("POST /api/posts/[postJobId]/cancel-series", () => {
   });
 
   it("409s when nothing could be cancelled", async () => {
+    findFirstMock.mockResolvedValueOnce(row("job-2")).mockResolvedValueOnce({ status: "in_progress" });
     findManyMock.mockResolvedValue([row("job-2")]);
     updateManyMock.mockResolvedValue({ count: 0 });
 

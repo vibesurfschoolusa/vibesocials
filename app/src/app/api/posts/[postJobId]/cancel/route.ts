@@ -7,7 +7,7 @@ import { cancelData } from "@/lib/approval";
 import { readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { tooManyTriesResponse } from "@/lib/tooManyTries";
-import { POST_GONE_TEXT, postMovedOnText } from "@/lib/postMovedOn";
+import { lostRaceAnswer, POST_GONE_TEXT, postMovedOnText } from "@/lib/postMovedOn";
 import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
 import { finishPostJob } from "@/server/jobs/failPendingResults";
 
@@ -122,17 +122,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   });
 
   if (!result.ok) {
-    // Lost the race (the scanner claimed it): read the status again, for the sentence only.
+    // Lost the race (the scanner claimed it, or, R58 pages-a-3 L2, an owner
+    // approved meanwhile: the write is pinned to the approval fields). The post
+    // read again decides the answer (lostRaceAnswer).
     const now = await prisma.postJob.findFirst({ where: { id: postJobId, workspaceId }, select: { status: true } });
-    // R58 pages-a-3 L2: the write is pinned to the approval fields, so it also
-    // misses when an owner approved meanwhile and the post is still cancellable.
-    if (now && MUTABLE_POST_JOB_STATUSES.includes(now.status)) {
-      return NextResponse.json(
-        { error: "This post changed in the meantime. Try again.", code: "NOT_CANCELABLE" },
-        { status: 409 },
-      );
-    }
-    return notCancelable(now?.status);
+    return NextResponse.json(lostRaceAnswer(now, "cancelled", { code: "NOT_CANCELABLE" }), { status: 409 });
   }
 
   return NextResponse.json(

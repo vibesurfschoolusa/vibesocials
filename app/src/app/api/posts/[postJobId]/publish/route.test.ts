@@ -971,26 +971,27 @@ describe("POST /api/posts/[postJobId]/publish — approval enforcement (2026-11-
   });
 
   // R32 publishing L2: a lost "Submit for approval" claim reads the post again
-  // and says what happened; the old sentence stays only for a post still a draft or scheduled.
+  // and says what happened. R60 publishing-flow L2: a post still a draft or
+  // scheduled changed in the meantime, by the one rule (lostRaceAnswer).
   it.each([
-    ["in_progress", "This post has started publishing, so it can't be sent for approval. Check Activity to see how it goes."],
-    ["completed", "This post has already gone out, so it can't be sent for approval. Check Activity to see it."],
-    ["cancelled", "This post was cancelled, so it can't be sent for approval."],
-    [null, "This post no longer exists."],
-    ["draft", "This post changed in the meantime. Refresh and try again."],
-    ["scheduled", "This post changed in the meantime. Refresh and try again."],
-  ])("a member's submit that lost its claim, now %s: the post's own sentence", async (status, error) => {
+    ["in_progress", "This post has started publishing, so it can't be sent for approval. Check Activity to see how it goes.", "NOT_PUBLISHABLE"],
+    ["completed", "This post has already gone out, so it can't be sent for approval. Check Activity to see it.", "NOT_PUBLISHABLE"],
+    ["cancelled", "This post was cancelled, so it can't be sent for approval.", "NOT_PUBLISHABLE"],
+    [null, "This post no longer exists.", "NOT_PUBLISHABLE"],
+    ["draft", "This post changed in the meantime. Try again.", "POST_CHANGED"],
+    ["scheduled", "This post changed in the meantime. Try again.", "POST_CHANGED"],
+  ])("a member's submit that lost its claim, now %s: the post's own sentence", async (status, error, code) => {
     findFirstMock.mockResolvedValueOnce(jobRow()).mockResolvedValueOnce(status === null ? null : { status });
     updateManyMock.mockResolvedValue({ count: 0 });
 
     const res = await POST(req({}), ctx("job-1"));
 
     expect(res.status).toBe(409);
-    await expect(res.json()).resolves.toEqual({ error, code: "NOT_PUBLISHABLE" });
+    await expect(res.json()).resolves.toEqual({ error, code });
     expect(notifyOwnersMock).not.toHaveBeenCalled();
   });
 
-  it("a concurrent edit re-hold in the read→claim window makes the claim match nothing: 409 NOT_PUBLISHABLE, nothing published", async () => {
+  it("a concurrent edit re-hold in the read→claim window makes the claim match nothing: 409 POST_CHANGED, nothing published", async () => {
     // Read: approved + scheduled. Meanwhile a PATCH re-held it (draft,
     // approvedAt null, new text, new updatedAt) — the pinned claim misses.
     findFirstMock.mockResolvedValue(
@@ -1001,7 +1002,7 @@ describe("POST /api/posts/[postJobId]/publish — approval enforcement (2026-11-
     const res = await POST(req({}), ctx("job-1"));
 
     expect(res.status).toBe(409);
-    expect((await res.json()).code).toBe("NOT_PUBLISHABLE");
+    expect((await res.json()).code).toBe("POST_CHANGED");
     expect(prepareDispatchMock).not.toHaveBeenCalled();
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
@@ -1171,14 +1172,14 @@ describe("POST /api/posts/[postJobId]/publish — held posts (ruling R10)", () =
     });
   });
 
-  it("409s NOT_A_DRAFT when the pinned schedule claim misses (changed in the meantime)", async () => {
+  it("409s POST_CHANGED when the pinned schedule claim misses on a post still a draft (changed in the meantime)", async () => {
     findFirstMock.mockResolvedValue(jobRow());
     updateManyMock.mockResolvedValue({ count: 0 });
 
     const res = await POST(req({ scheduledFor: FUTURE }), ctx("job-1"));
 
     expect(res.status).toBe(409);
-    expect((await res.json()).code).toBe("NOT_A_DRAFT");
+    expect((await res.json()).code).toBe("POST_CHANGED");
   });
 });
 
@@ -1969,5 +1970,76 @@ describe("POST /api/posts/[postJobId]/publish: a post that moved on", () => {
     findFirstMock.mockResolvedValue({ status: "scheduled" });
     const res = await POST(req({ scheduledFor: FUTURE }), ctx("job-1"));
     await expect(res.json()).resolves.toEqual({ error: "This post is scheduled now (someone else scheduled it), so the new time wasn't saved.", code: "NOT_A_DRAFT" });
+  });
+});
+
+// R60 publishing-flow L2: Publish now and Schedule lost their pinned claim on a
+// post that can still be published (a client's Approve on /v moved updatedAt),
+// and said it was no longer available. The post read again decides
+// (lostRaceAnswer): still a draft or scheduled, it changed in the meantime.
+describe("POST /api/posts/[postJobId]/publish: a lost race", () => {
+  const CHANGED = { error: "This post changed in the meantime. Try again.", code: "POST_CHANGED" };
+
+  it.each(["draft", "scheduled"])("publish now lost its claim, the post still %s: changed in the meantime", async (status) => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ status })).mockResolvedValueOnce({ status });
+    updateManyMock.mockResolvedValue({ count: 0 });
+    const res = await POST(req({}), ctx("job-1"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual(CHANGED);
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    // Nothing was claimed, so the reserved run goes back.
+    expect(releaseMock).toHaveBeenCalled();
+  });
+
+  it("publish now lost its claim, the post gone: as now", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ status: "scheduled" })).mockResolvedValueOnce(null);
+    updateManyMock.mockResolvedValue({ count: 0 });
+    const res = await POST(req({}), ctx("job-1"));
+    await expect(res.json()).resolves.toEqual({ error: "This post no longer exists.", code: "NOT_PUBLISHABLE" });
+  });
+
+  it("publish now lost its claim, the post already out: as now", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ status: "scheduled" })).mockResolvedValueOnce({ status: "completed" });
+    updateManyMock.mockResolvedValue({ count: 0 });
+    const res = await POST(req({}), ctx("job-1"));
+    await expect(res.json()).resolves.toEqual({
+      error: "This post has already gone out, so it can't be published. Check Activity to see it.",
+      code: "NOT_PUBLISHABLE",
+    });
+  });
+
+  it("schedule lost its claim, the post still a draft: changed in the meantime", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow()).mockResolvedValueOnce({ status: "draft" });
+    updateManyMock.mockResolvedValue({ count: 0 });
+    const res = await POST(req({ scheduledFor: FUTURE }), ctx("job-1"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual(CHANGED);
+  });
+
+  it("schedule lost its claim, a teammate scheduled it: as now", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow()).mockResolvedValueOnce({ status: "scheduled" });
+    updateManyMock.mockResolvedValue({ count: 0 });
+    const res = await POST(req({ scheduledFor: FUTURE }), ctx("job-1"));
+    await expect(res.json()).resolves.toEqual({
+      error: "This post is scheduled now (someone else scheduled it), so the new time wasn't saved.",
+      code: "NOT_A_DRAFT",
+    });
+  });
+
+  it("schedule lost its claim, the post cancelled: as now", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow()).mockResolvedValueOnce({ status: "cancelled" });
+    updateManyMock.mockResolvedValue({ count: 0 });
+    const res = await POST(req({ scheduledFor: FUTURE }), ctx("job-1"));
+    await expect(res.json()).resolves.toEqual({ error: "This post was cancelled, so it can't be scheduled.", code: "NOT_A_DRAFT" });
+  });
+
+  it("a member's submit lost its claim, the post still a draft: changed in the meantime", async () => {
+    getWorkspaceContextMock.mockResolvedValue(memberInApprovalWorkspace());
+    findFirstMock.mockResolvedValueOnce(jobRow()).mockResolvedValueOnce({ status: "draft" });
+    updateManyMock.mockResolvedValue({ count: 0 });
+    const res = await POST(req({}), ctx("job-1"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual(CHANGED);
+    expect(notifyOwnersMock).not.toHaveBeenCalled();
   });
 });

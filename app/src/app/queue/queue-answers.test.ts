@@ -80,7 +80,8 @@ describe("Queue: a lost answer may have gone through", () => {
   });
 
   it("the Edit dialog's requests go through fetchOrNoAnswer", () => {
-    expect(view).toMatch(/pairAwareFetch\(job, \(url, init\) => fetchOrNoAnswer\(url, init\)\)/);
+    // R60: through keepingLastCode, which keeps the last answer's code for the moved-on line.
+    expect(view).toMatch(/const answers = keepingLastCode\(\(url, init\) => fetchOrNoAnswer\(url, init\)\);\s+const pairFetch = pairAwareFetch\(job, answers\.fetchFn\);/);
   });
 
   // Lead review 3: scheduleDraft words a lost answer itself; its catch is an unexpected failure, which may follow a save.
@@ -136,7 +137,7 @@ describe("Queue: a refused post action, one rule", () => {
   it("Edit, a scheduled post: the dialog stays open with the route's sentence, Save off, and a reload when the rule says so", () => {
     const failed = between("const errorData = (await response.json()", "const outcome = editOutcome(data);");
     expect(failed).toMatch(
-      /const refusal = postActionRefusal\(response\.status, errorData, "Couldn't save your changes\."\);\s+if \(refusal\.movedOn\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(editMovedOnText\(refusal\.text\)\);\s+if \(refusal\.reload\) onStale\(\);\s+return;\s+\}\s+toast\.error\(refusal\.text\);/,
+      /const refusal = postActionRefusal\(response\.status, errorData, "Couldn't save your changes\."\);\s+if \(refusal\.movedOn\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(answerCode\(errorData\) === POST_CHANGED_CODE \? editChangedText\(false\) : editMovedOnText\(refusal\.text\)\);\s+if \(refusal\.reload\) onStale\(\);\s+return;\s+\}\s+toast\.error\(refusal\.text\);/,
     );
     expect(failed).not.toContain("onClose()");
     expect(view).toMatch(/<Button ref=\{saveRef\} onClick=\{handleSave\} loading=\{saving\} disabled=\{captionOver \|\| movedOn !== null\}>/);
@@ -148,7 +149,7 @@ describe("Queue: a refused post action, one rule", () => {
   it("Edit, a draft given a time: the same, keeping the dialog and what was typed", () => {
     const failed = between('if (result.kind === "failed") {', "toast.success(withPairNote(result.message");
     expect(failed).toMatch(
-      /if \(result\.movedOn\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(result\.captionSaved \? result\.error : editMovedOnText\(result\.error\)\);\s+if \(result\.movedOn\.reload\) onStale\(\);\s+setSaving\(false\);\s+return;\s+\}/,
+      /if \(result\.movedOn\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(\s+answers\.lastCode\(\) === POST_CHANGED_CODE\s+\? editChangedText\(result\.captionSaved\)\s+: result\.captionSaved\s+\? result\.error\s+: editMovedOnText\(result\.error\),?\s+\);\s+if \(result\.movedOn\.reload\) onStale\(\);\s+setSaving\(false\);\s+return;\s+\}/,
     );
     expect(failed).not.toContain("onClose()");
   });

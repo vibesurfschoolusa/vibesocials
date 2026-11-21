@@ -35,7 +35,7 @@ import {
 } from "./pairRule";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
-import { POST_GONE_TEXT, POST_NOW_DRAFT_TEXT, postMovedOnText } from "@/lib/postMovedOn";
+import { lostRaceAnswer, POST_GONE_TEXT, POST_NOW_DRAFT_TEXT, postMovedOnText } from "@/lib/postMovedOn";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -389,20 +389,11 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   });
 
   if (!result.ok) {
-    // Lost the race (the scanner claimed it): read the status again, for the sentence only.
+    // Lost the race (the scanner claimed it, or, R59 publishing-flow L4, an
+    // owner scheduled the draft meanwhile: the write is pinned to the status).
+    // The post read again decides the answer (lostRaceAnswer).
     const now = await prisma.postJob.findFirst({ where: { id: postJobId, workspaceId }, select: { status: true } });
-    // R59 publishing-flow L4: the write is pinned to the status, so it also
-    // misses when an owner scheduled the draft meanwhile; it can still be edited.
-    if (now && MUTABLE_POST_JOB_STATUSES.includes(now.status)) {
-      return NextResponse.json(
-        { error: "This post changed in the meantime. Try again.", code: "NOT_EDITABLE" },
-        { status: 409 },
-      );
-    }
-    return NextResponse.json(
-      { error: postMovedOnText(now?.status, "edited") ?? "This post can no longer be edited.", code: "NOT_EDITABLE" },
-      { status: 409 },
-    );
+    return NextResponse.json(lostRaceAnswer(now, "edited", { code: "NOT_EDITABLE" }), { status: 409 });
   }
   const pairAnswer = result.pair ? { otherHalf: result.pair } : {};
   // R56 client-journey-2 L1: the write withdrew the client's approval (dataFor)

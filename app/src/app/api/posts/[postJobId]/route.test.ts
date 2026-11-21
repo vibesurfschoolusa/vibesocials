@@ -382,7 +382,7 @@ describe("PATCH /api/posts/[postJobId]", () => {
       updateManyMock.mockResolvedValue({ count: 0 });
       const res = await PATCH(req({ baseCaption: "x" }), ctx("job-1"));
       expect(res.status).toBe(409);
-      expect(await res.json()).toEqual({ error: "This post changed in the meantime. Try again.", code: "NOT_EDITABLE" });
+      expect(await res.json()).toEqual({ error: "This post changed in the meantime. Try again.", code: "POST_CHANGED" });
     }
   });
 

@@ -21,6 +21,30 @@ export const POST_GONE_TEXT = "This post no longer exists.";
  */
 export const POST_NOW_DRAFT_TEXT = "This post is now a draft (a change was asked for, or it is waiting for approval).";
 
+/** R60: a pinned write missed a post the action still fits; a page words it for where it is shown. */
+export const POST_CHANGED_CODE = "POST_CHANGED";
+export const POST_CHANGED_TEXT = "This post changed in the meantime. Try again.";
+
+/**
+ * R60 publishing-flow L1, L2 and pages-a L1: the one rule for a pinned write
+ * that matched nothing (a lost race), decided from the post read again. If the
+ * action still fits it (a draft or scheduled post the press could still act
+ * on), something else changed it in the meantime: POST_CHANGED, so the press
+ * can be tried again. Otherwise the post moved on: its moved-on sentence, with
+ * the route's own code and, after it, the route's `after` line. Every route
+ * whose write is pinned answers its lost race here (lostRace.guard.test.ts),
+ * so the wording is not patched route by route again.
+ */
+export function lostRaceAnswer(
+  reRead: { status: PostJobStatus } | null | undefined,
+  verb: MovedOnVerb,
+  movedOn: { code: string; after?: string },
+): { error: string; code: string } {
+  const said = postMovedOnText(reRead?.status ?? null, verb);
+  if (said === null) return { error: POST_CHANGED_TEXT, code: POST_CHANGED_CODE };
+  return { error: movedOn.after ? `${said} ${movedOn.after}` : said, code: movedOn.code };
+}
+
 /**
  * R30 publishing L1, R31 publishing L1-L6: the one rule for what a post action
  * says when the post moved on since the page was drawn: started publishing,

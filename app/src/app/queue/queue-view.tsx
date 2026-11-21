@@ -97,6 +97,7 @@ import {
   type QueueViewer,
 } from "@/lib/queueActions";
 import { scheduleDraft } from "@/lib/scheduleDraft";
+import { POST_CHANGED_CODE } from "@/lib/postMovedOn";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 import { readWorkspaceRefusalText, withWorkspaceId } from "@/lib/workspaceChanged";
 import {
@@ -519,6 +520,50 @@ export function editMovedOnText(refusal: string | undefined): string {
 }
 
 /**
+ * R60 publishing-flow L1 = pages-a L1: a lost race (POST_CHANGED) can be tried
+ * again, but not from this dialog, whose Save is off: Cancel and open Edit
+ * again, which reads the post as it is now. Once the caption is saved there is
+ * nothing to copy.
+ */
+export function editChangedText(captionSaved: boolean): string {
+  return captionSaved
+    ? "This post changed in the meantime. Your caption changes were saved. Press Cancel, then open Edit again."
+    : "This post changed in the meantime. Copy your text, press Cancel, then open Edit again.";
+}
+
+/** The `code` of a route's answer, or null. */
+function answerCode(data: unknown): unknown {
+  return data !== null && typeof data === "object" ? (data as { code?: unknown }).code ?? null : null;
+}
+
+type DialogFetch = (url: string, init: { method: string; headers: Record<string, string>; body: string }) => Promise<{
+  ok: boolean;
+  status: number;
+  json(): Promise<unknown>;
+}>;
+
+/**
+ * The Edit dialog's fetch for lib/scheduleDraft.ts, keeping the code of the
+ * last answer read, so the dialog words a lost race by its code.
+ */
+function keepingLastCode(fetchImpl: DialogFetch): { fetchFn: DialogFetch; lastCode: () => unknown } {
+  let last: unknown = null;
+  const fetchFn: DialogFetch = async (url, init) => {
+    const response = await fetchImpl(url, init);
+    return {
+      ok: response.ok,
+      status: response.status,
+      json: async () => {
+        const data = await response.json();
+        last = answerCode(data);
+        return data;
+      },
+    };
+  };
+  return { fetchFn, lastCode: () => last };
+}
+
+/**
  * Edit dialog for a scheduled/draft post. Remounted per target (keyed by job
  * id) so its local caption/time state always initializes from the current job.
  * A scheduled job edits its caption + `scheduledFor` in one PATCH. A draft edits
@@ -696,7 +741,7 @@ function QueueEditDialog({
             // The dialog stays open with the route's sentence and Save off, so what was typed
             // can be copied; the list reloads behind it when the rule says so.
             focusAfterPress(saveRef.current, () => movedOnRef.current);
-            setMovedOn(editMovedOnText(refusal.text));
+            setMovedOn(answerCode(errorData) === POST_CHANGED_CODE ? editChangedText(false) : editMovedOnText(refusal.text));
             if (refusal.reload) onStale();
             return;
           }
@@ -725,7 +770,8 @@ function QueueEditDialog({
         setSaving(false);
         return;
       }
-      const pairFetch = pairAwareFetch(job, (url, init) => fetchOrNoAnswer(url, init));
+      const answers = keepingLastCode((url, init) => fetchOrNoAnswer(url, init));
+      const pairFetch = pairAwareFetch(job, answers.fetchFn);
       const result = await scheduleDraft({
         fetchFn: pairFetch.fetchFn,
         jobId: job.id,
@@ -754,7 +800,13 @@ function QueueEditDialog({
           // R31 publishing L3: the same rule as a scheduled post's save, above. Once the
           // caption is saved there is nothing to copy (lead review).
           focusAfterPress(saveRef.current, () => movedOnRef.current);
-          setMovedOn(result.captionSaved ? result.error : editMovedOnText(result.error));
+          setMovedOn(
+            answers.lastCode() === POST_CHANGED_CODE
+              ? editChangedText(result.captionSaved)
+              : result.captionSaved
+                ? result.error
+                : editMovedOnText(result.error),
+          );
           if (result.movedOn.reload) onStale();
           setSaving(false);
           return;

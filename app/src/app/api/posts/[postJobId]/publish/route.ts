@@ -41,7 +41,7 @@ import {
   type PairHalf,
 } from "../pairRule";
 import { signedOutResponse } from "@/lib/signedOutResponse";
-import { POST_GONE_TEXT, postMovedOnText } from "@/lib/postMovedOn";
+import { lostRaceAnswer, POST_GONE_TEXT, postMovedOnText } from "@/lib/postMovedOn";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 interface PostJobRouteContext {
@@ -175,9 +175,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     code: string,
   ) =>
     NextResponse.json({ error: postMovedOnText(status, verb) ?? fallback, code }, { status: 409 });
-  // After a lost claim: the post read again, for the sentence only.
-  const statusNow = async () =>
-    (await prisma.postJob.findFirst({ where: { id: postJobId, workspaceId }, select: { status: true } }))?.status;
+  // R60 publishing-flow L2: after a lost claim, the post read again decides the
+  // answer (lostRaceAnswer): changed in the meantime while the press still fits it.
+  const readAgain = () => prisma.postJob.findFirst({ where: { id: postJobId, workspaceId }, select: { status: true } });
 
   const approvalActionOf = (row: Parameters<typeof publishApprovalAction>[0]["job"]) =>
     publishApprovalAction({
@@ -254,10 +254,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     });
 
     if (!result.ok) {
-      // R32 publishing L2: lost to the scanner, an edit or another submit: the
-      // post read again says what happened; the old sentence only for a post
-      // still a draft or scheduled.
-      return movedOn(await statusNow(), "sent for approval", "This post changed in the meantime. Refresh and try again.", "NOT_PUBLISHABLE");
+      // R32 publishing L2: lost to the scanner, an edit or another submit.
+      return NextResponse.json(lostRaceAnswer(await readAgain(), "sent for approval", { code: "NOT_PUBLISHABLE" }), { status: 409 });
     }
 
     // R4 lows, item 3: submitted from a Story, the email describes its feed post.
@@ -345,7 +343,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     });
 
     if (!result.ok) {
-      return movedOn(await statusNow(), "scheduled", "This draft is no longer available to schedule.", "NOT_A_DRAFT");
+      return NextResponse.json(lostRaceAnswer(await readAgain(), "scheduled", { code: "NOT_A_DRAFT" }), { status: 409 });
     }
 
     return NextResponse.json(
@@ -494,7 +492,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   if (!result.ok) {
     // Nothing was claimed: the reservation goes.
     await releaseReservation(reservation.reserved);
-    return movedOn(await statusNow(), "published", "This post is no longer available to publish.", "NOT_PUBLISHABLE");
+    return NextResponse.json(lostRaceAnswer(await readAgain(), "published", { code: "NOT_PUBLISHABLE" }), { status: 409 });
   }
 
   // Materialize results from current connections + hand the publish events

@@ -168,6 +168,7 @@ describe("POST /api/posts/[postJobId]/cancel", () => {
   });
 
   it("409s when the atomic update loses a race (e.g. the cron claimed it, count 0)", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow()).mockResolvedValueOnce(jobRow({ status: "in_progress" }));
     updateManyMock.mockResolvedValue({ count: 0 });
 
     const res = await POST(req, ctx("job-1"));
@@ -212,7 +213,7 @@ describe("POST /api/posts/[postJobId]/cancel", () => {
     const res = await POST(req, ctx("job-1"));
 
     expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ code: "NOT_CANCELABLE", error: "This post changed in the meantime. Try again." });
+    expect(await res.json()).toEqual({ code: "POST_CHANGED", error: "This post changed in the meantime. Try again." });
   });
 
   it("a lost race whose re-read is no longer cancellable keeps its own sentence", async () => {

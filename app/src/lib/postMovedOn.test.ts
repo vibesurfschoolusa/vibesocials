@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { POST_GONE_TEXT, POST_NOW_DRAFT_TEXT, postMovedOnText } from "./postMovedOn";
+import {
+  lostRaceAnswer,
+  POST_CHANGED_CODE,
+  POST_CHANGED_TEXT,
+  POST_GONE_TEXT,
+  POST_NOW_DRAFT_TEXT,
+  postMovedOnText,
+} from "./postMovedOn";
 
 // R30 publishing L1: a Cancel or Edit on a card that has moved on said "Only
 // scheduled or draft posts can be ..."; it now says what happened and where to look.
@@ -82,5 +89,55 @@ describe("postMovedOnText", () => {
   // Lead review: Edit on a draft a teammate scheduled said "Only a draft can be scheduled here."
   it("a draft that is scheduled now, given a time: says someone else scheduled it", () => {
     expect(postMovedOnText("scheduled", "scheduled")).toBe("This post is scheduled now (someone else scheduled it), so the new time wasn't saved.");
+  });
+});
+
+// R60 publishing-flow L1, L2, pages-a L1: a pinned write that matched nothing is
+// worded here alone. A post the action still fits changed in the meantime (its
+// own code, so a page can word it for where it is shown); one that moved on
+// keeps its moved-on sentence and the route's code.
+describe("lostRaceAnswer", () => {
+  it("the code and the sentence", () => {
+    expect(POST_CHANGED_CODE).toBe("POST_CHANGED");
+    expect(POST_CHANGED_TEXT).toBe("This post changed in the meantime. Try again.");
+  });
+
+  it.each([
+    ["draft", "published"],
+    ["scheduled", "published"],
+    ["draft", "scheduled"],
+    ["draft", "sent for approval"],
+    ["scheduled", "sent for approval"],
+    ["draft", "edited"],
+    ["scheduled", "edited"],
+    ["draft", "cancelled"],
+    ["scheduled", "cancelled"],
+  ] as const)("still %s, the action (%s) can go ahead: changed in the meantime", (status, verb) => {
+    expect(lostRaceAnswer({ status }, verb, { code: "NOT_X" })).toEqual({ error: POST_CHANGED_TEXT, code: POST_CHANGED_CODE });
+  });
+
+  it.each([
+    [{ status: "in_progress" as const }, "published", "This post has started publishing, so it can't be published. Check Activity to see how it goes."],
+    [{ status: "completed" as const }, "edited", "This post has already gone out, so it can't be edited. Check Activity to see it."],
+    [{ status: "failed" as const }, "sent for approval", "This post failed, so it can't be sent for approval. Check Activity for what to do next."],
+    [{ status: "cancelled" as const }, "cancelled", "This post was already cancelled."],
+    [null, "cancelled", "This post no longer exists."],
+    [undefined, "published", "This post no longer exists."],
+    // A draft a teammate scheduled meanwhile: Schedule no longer fits it.
+    [{ status: "scheduled" as const }, "scheduled", "This post is scheduled now (someone else scheduled it), so the new time wasn't saved."],
+  ] as const)("moved on (%o, %s): the moved-on sentence and the route's code", (reRead, verb, error) => {
+    expect(lostRaceAnswer(reRead, verb, { code: "NOT_X" })).toEqual({ error, code: "NOT_X" });
+  });
+
+  it("a route's line after a moved-on sentence, never after the changed one", () => {
+    const after = "The later posts in this series were left as they are: cancel them on their own cards.";
+    expect(lostRaceAnswer({ status: "in_progress" }, "cancelled", { code: "NOT_CANCELABLE", after })).toEqual({
+      error: `This post has started publishing, so it can't be cancelled. Check Activity to see how it goes. ${after}`,
+      code: "NOT_CANCELABLE",
+    });
+    expect(lostRaceAnswer({ status: "draft" }, "cancelled", { code: "NOT_CANCELABLE", after })).toEqual({
+      error: POST_CHANGED_TEXT,
+      code: POST_CHANGED_CODE,
+    });
   });
 });
