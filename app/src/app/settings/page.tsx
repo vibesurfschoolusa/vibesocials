@@ -146,6 +146,12 @@ export default async function SettingsPage({
     { error: params.error ?? null, success: params.success ?? null },
     { shown: rowShown },
   );
+  // R61 new-customer L1: Disconnect only refreshes the page, so ?success=
+  // outlives the connection. As on /c, "<Platform> connected." is told only
+  // while that platform's row exists and works.
+  if (oauthResult?.variant === "success" && oauthResult.platform && rowShown(oauthResult.platform) !== "connected") {
+    oauthResult = null;
+  }
 
   // R6 review low 1: a reconnect came back with another account and nothing
   // changed; the sentence names only the connected one, from this workspace

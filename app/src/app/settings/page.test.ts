@@ -993,3 +993,45 @@ describe("SettingsPage — a missing Google permission", () => {
     expect(html).not.toContain("Sign in to Google again from the Google Business Profile card");
   });
 });
+
+// R61 new-customer L1: Disconnect (and TikTok's Switch account) only refreshes
+// the page, so ?success= stays in the address. The success is told only while
+// that platform's row exists and works, as /c does.
+describe("SettingsPage — the connected banner follows the platform's row", () => {
+  afterEach(() => {
+    findConnectionsMock.mockReset();
+    findConnectionsMock.mockResolvedValue([]);
+  });
+
+  const DAY = 24 * 60 * 60 * 1000;
+  const row = (platform: string, needsReconnect = false) => ({
+    platform,
+    accountIdentifier: "acct-1",
+    metadata: { username: "Surf Co" },
+    needsReconnect,
+    expiresAt: new Date(Date.now() + 60 * DAY),
+    refreshToken: null,
+  });
+  async function renderWith(rows: unknown[], success: string): Promise<string> {
+    findConnectionsMock.mockResolvedValue(rows);
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+    return renderToStaticMarkup((await SettingsPage({ searchParams: Promise.resolve({ success }) })) as ReactElement);
+  }
+
+  it("?success=tiktok_connected with a working row: the banner", async () => {
+    expect(await renderWith([row("tiktok")], "tiktok_connected")).toContain("TikTok connected.");
+  });
+
+  it("?success=tiktok_connected with no row: no banner", async () => {
+    expect(await renderWith([], "tiktok_connected")).not.toContain("TikTok connected.");
+  });
+
+  it("?success=tiktok_connected over a row that needs a reconnect: no success banner", async () => {
+    expect(await renderWith([row("tiktok", true)], "tiktok_connected")).not.toContain("TikTok connected.");
+  });
+
+  it("other platforms: a working row still shows its banner, and another platform's row doesn't stand in", async () => {
+    expect(await renderWith([row("instagram")], "instagram_connected")).toContain("Instagram connected.");
+    expect(await renderWith([row("tiktok")], "instagram_connected")).not.toContain("Instagram connected.");
+  });
+});
