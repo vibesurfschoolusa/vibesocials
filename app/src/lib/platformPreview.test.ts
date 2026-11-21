@@ -494,7 +494,8 @@ describe("buildPlatformPreview on other platforms, unchanged by YouTube's byte l
 
   it.each([
     ["x", footer(tagged("x")), 198, 280, [280, 3749, true]],
-    ["instagram", footer("vibesurfschool.com"), 189, 2200, [2200, 3749, true]],
+    // R62 platform-clients L1: Instagram cuts at the last whole word, before "waves".
+    ["instagram", footer("vibesurfschool.com"), 189, 2200, [2196, 3749, true]],
     ["linkedin", footer(tagged("linkedin")), 253, 3000, [3000, 3749, true]],
     ["facebook_page", footer(tagged("facebook")), 253, null, [3867, 3867, false]],
     ["google_business_profile", footer(tagged("google")), 251, 1500, [1500, 3749, true]],

@@ -89,6 +89,37 @@ export function truncateGraphemes(
   return graphemes.slice(0, budget).join("") + ellipsis;
 }
 
+const WHITESPACE = /^\s+$/u;
+
+/**
+ * `truncateGraphemes` cut at the last whole word that fits (R62
+ * platform-clients L1, Instagram): a word, so a #tag or @mention, is never
+ * sent in part. Counted in graphemes, with room kept for the ellipsis as
+ * `truncateGraphemes` keeps it. Text with no space before the limit keeps the
+ * plain grapheme cut. Text that fits comes back unchanged.
+ */
+export function truncateGraphemesAtWord(text: string, maxGraphemes: number, opts?: TruncateOptions): string {
+  const max = Math.max(0, Math.floor(maxGraphemes));
+  const graphemes = toGraphemes(text);
+  if (graphemes.length <= max) return text;
+
+  const ellipsis = opts?.ellipsis ?? "";
+  const budget = max - toGraphemes(ellipsis).length;
+  if (budget <= 0) return truncateGraphemes(text, max, opts);
+
+  // The limit falls on a space: the cut already ends a word.
+  let end = budget;
+  if (!WHITESPACE.test(graphemes[budget])) {
+    let space = budget - 1;
+    while (space > 0 && !WHITESPACE.test(graphemes[space])) space -= 1;
+    if (space > 0) end = space;
+  }
+  while (end > 0 && WHITESPACE.test(graphemes[end - 1])) end -= 1;
+  // Only spaces before the limit: nothing whole to keep, so the plain cut.
+  if (end === 0) return truncateGraphemes(text, max, opts);
+  return graphemes.slice(0, end).join("") + ellipsis;
+}
+
 const sentenceSegmenter = new Intl.Segmenter(undefined, { granularity: "sentence" });
 
 /**

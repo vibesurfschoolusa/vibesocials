@@ -4,7 +4,7 @@ import type { SocialConnection } from "@prisma/client";
 import { altTextOf } from "@/lib/altText";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
-import { truncateGraphemes } from "@/lib/truncate";
+import { truncateGraphemesAtWord } from "@/lib/truncate";
 import type { UploadStateStore } from "@/server/jobs/uploadState";
 import {
   connectionTokenChangedError,
@@ -162,13 +162,16 @@ export function ensureFreshInstagramToken(connection: SocialConnection): SocialC
  * does, reading the number from the shared `platformLimits.ts` map. Instagram
  * rejects a longer caption outright, so without this an over-long caption
  * failed the whole publish (2026-11-01 audit). Extracted as a pure, exported
- * function so it can be asserted without mocking the Graph API.
+ * function so it can be asserted without mocking the Graph API. R62
+ * platform-clients L1: cut at the last whole word, so a #tag or @mention is
+ * never sent in part (and fitInstagramTags never names a piece of one); the
+ * preview cuts with the same function.
  */
 export function computeInstagramCaption(caption: string): string {
   const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS.instagram;
   // instagram's charLimit is always a number (see platformLimits.ts); the null
   // check only exists to satisfy the shared `Record<Platform, ...>` type.
-  return charLimit === null ? caption : truncateGraphemes(caption, charLimit, { ellipsis });
+  return charLimit === null ? caption : truncateGraphemesAtWord(caption, charLimit, { ellipsis });
 }
 
 /**

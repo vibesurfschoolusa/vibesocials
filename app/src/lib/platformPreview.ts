@@ -3,7 +3,7 @@ import type { Platform } from "@prisma/client";
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
 import { fitPinterestDescription, pinterestCountHint, pinterestDescriptionLength } from "@/lib/pinterestApi";
 import { type CaptionUnit, PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
-import { truncateGraphemes, truncateKeepingLinks } from "@/lib/truncate";
+import { truncateGraphemes, truncateGraphemesAtWord, truncateKeepingLinks } from "@/lib/truncate";
 import { removeXMentions } from "@/lib/xMentions";
 import { truncateXWeighted, xWeightedLength } from "@/lib/xWeightedLength";
 import { fitYouTubeDescription, youtubeCountHint, youtubeDescriptionLength } from "@/lib/youtubeDescription";
@@ -178,6 +178,8 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
     if (input.platform === "x") rendered = truncateXWeighted(fullCaption, charLimit, ellipsis);
     else if (input.platform === "linkedin") rendered = truncateKeepingLinks(fullCaption, charLimit, ellipsis);
     else if (input.platform === "pinterest") rendered = fitPinterestDescription(fullCaption);
+    // R62 platform-clients L1: at the last whole word, as computeInstagramCaption cuts.
+    else if (input.platform === "instagram") rendered = truncateGraphemesAtWord(fullCaption, charLimit, { ellipsis });
     else rendered = truncateGraphemes(fullCaption, charLimit, { ellipsis });
   }
   const countHint = input.platform === "pinterest" ? pinterestCountHint(fullCaption) : null;
