@@ -543,3 +543,12 @@ describe("queueCardTime", () => {
     expect(queueSource).toContain("{time.label}{\" \"}");
   });
 });
+
+// R59 publishing-flow L4: the Cancel series toast is worded by seriesCancelToast.
+describe("Cancel series toast", () => {
+  it("comes from seriesCancelToast", () => {
+    const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+    expect(queueSource).toContain("toast.success(seriesCancelToast(data));");
+    expect(queueSource).not.toContain("had already started publishing");
+  });
+});

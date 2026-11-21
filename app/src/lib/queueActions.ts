@@ -498,3 +498,23 @@ export function editTimeToSend(input: {
   const check = checkScheduleTime(input.field, input.nowMs, input.bufferMs);
   return check.ok ? { ok: true, iso: check.iso } : check;
 }
+
+/**
+ * Cancel series' success toast. `notCancelled` counts posts that had started
+ * publishing; R59 publishing-flow L4: `changed` counts posts that changed in
+ * the meantime and are still cancellable, so they can be tried again. A server
+ * from before `changed` leaves it out, and the toast reads as it did.
+ */
+export function seriesCancelToast(data: unknown): string {
+  const r = asRecord(data);
+  const count = (value: unknown) => (typeof value === "number" && value > 0 ? value : 0);
+  const cancelled = count(r.cancelled);
+  const started = count(r.notCancelled);
+  const changed = count(r.changed);
+  const them = (n: number) => (n === 1 ? "it was" : "they were");
+  return (
+    `${cancelled} ${cancelled === 1 ? "post" : "posts"} cancelled.` +
+    (started > 0 ? ` ${started} had already started publishing, so ${them(started)} not cancelled.` : "") +
+    (changed > 0 ? ` ${changed} changed in the meantime, so ${them(changed)} not cancelled. Try again.` : "")
+  );
+}

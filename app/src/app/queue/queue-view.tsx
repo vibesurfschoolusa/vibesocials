@@ -91,6 +91,7 @@ import {
   queueMayHaveGoneThroughText,
   queueNotSentText,
   sendActionRequest,
+  seriesCancelToast,
   type JobPatch,
   type PostActionRefusal,
   type QueueViewer,
@@ -1494,7 +1495,7 @@ export function QueueView({
     }
     const { response } = answer;
     const data = (await response.json().catch(() => null)) as
-      | { error?: string; cancelled?: number; notCancelled?: number }
+      | { error?: string; cancelled?: number; notCancelled?: number; changed?: number }
       | null;
     if (!response.ok) {
       const refusal = postActionRefusal(response.status, data, "Couldn't cancel this post.");
@@ -1510,12 +1511,7 @@ export function QueueView({
     }
     // Several cards went; read the Queue again rather than guess which.
     void load({ silent: true });
-    const cancelled = data?.cancelled ?? 0;
-    const left = data?.notCancelled ?? 0;
-    toast.success(
-      `${cancelled} ${cancelled === 1 ? "post" : "posts"} cancelled.` +
-        (left > 0 ? ` ${left} had already started publishing, so ${left === 1 ? "it was" : "they were"} not cancelled.` : ""),
-    );
+    toast.success(seriesCancelToast(data));
   }, [applyAnswer, cancelScope, cancelTarget, load, showRefusal, toast, workspaceId]);
 
   const confirmDelete = useCallback(async () => {

@@ -22,6 +22,7 @@ import {
   queueMayHaveGoneThroughText,
   queueNotSentText,
   sendActionRequest,
+  seriesCancelToast,
   queueStatusBadge,
   postActionRefusal,
   type QueueViewer,
@@ -856,5 +857,36 @@ describe("decisionOutcome and publishOutcome: a client approval the schedule wit
     ]) {
       expect(otherHalfPatch(patchOf(outcome))).toHaveProperty("clientApprovedAt", null);
     }
+  });
+});
+
+// R59 publishing-flow L4: Cancel series counts posts that changed in the meantime
+// (still cancellable) apart from ones that started publishing.
+describe("seriesCancelToast", () => {
+  it("neither: only the count cancelled, as before", () => {
+    expect(seriesCancelToast({ cancelled: 3, notCancelled: 0 })).toBe("3 posts cancelled.");
+    expect(seriesCancelToast({ cancelled: 1 })).toBe("1 post cancelled.");
+  });
+  it("notCancelled only: the already-started part, as before", () => {
+    expect(seriesCancelToast({ cancelled: 2, notCancelled: 1 })).toBe(
+      "2 posts cancelled. 1 had already started publishing, so it was not cancelled.",
+    );
+  });
+  it("changed only: they changed in the meantime, try again", () => {
+    expect(seriesCancelToast({ cancelled: 2, notCancelled: 0, changed: 1 })).toBe(
+      "2 posts cancelled. 1 changed in the meantime, so it was not cancelled. Try again.",
+    );
+    expect(seriesCancelToast({ cancelled: 1, notCancelled: 0, changed: 2 })).toBe(
+      "1 post cancelled. 2 changed in the meantime, so they were not cancelled. Try again.",
+    );
+  });
+  it("both: the already-started part, then the changed part", () => {
+    expect(seriesCancelToast({ cancelled: 1, notCancelled: 2, changed: 1 })).toBe(
+      "1 post cancelled. 2 had already started publishing, so they were not cancelled. 1 changed in the meantime, so it was not cancelled. Try again.",
+    );
+  });
+  it("an answer without numbers says none cancelled", () => {
+    expect(seriesCancelToast(null)).toBe("0 posts cancelled.");
+    expect(seriesCancelToast({ cancelled: "2", changed: "x" })).toBe("0 posts cancelled.");
   });
 });

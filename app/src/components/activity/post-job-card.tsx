@@ -686,6 +686,13 @@ export function PostJobCard({
           return;
         }
 
+        // R59 publishing-flow L2: a lost Retry all race names what it left out for its
+        // connection, and the message says to connect it, so its Retry goes too.
+        if (target === "all" && Array.isArray(body.leftOut)) {
+          const dead = refusedSteps("all", body);
+          if (dead.length > 0) setReconnect((prev) => new Map([...prev, ...dead]));
+        }
+
         // R31 publishing L3, pages L2: the shared rule. A post that moved on
         // (already retried, gone) is read again; another workspace's is not.
         const refusal = postActionRefusal(response.status, body, `Couldn't retry ${label}. Please try again.`);

@@ -138,3 +138,50 @@ describe("PostJobCard - a Retry refused for the connection shows the route's ste
     expect(retryButton()).toBeNull();
   }, 5_000);
 });
+
+// R59 publishing-flow L2: a teammate's Retry all won the race. The 409 names what was
+// left out for its connection, so the card stops offering Retry for it.
+describe("PostJobCard - a lost Retry all race", () => {
+  const twoFailed: PostJobDTO = {
+    ...failedJob,
+    results: [
+      failedJob.results[0],
+      { ...failedJob.results[0], platform: "facebook_page", errorMessage: "Facebook Page refused the post." },
+    ],
+  };
+  const button = (start: string) =>
+    find(container, (n) => n.nodeName === "BUTTON" && String(n.attributes?.["aria-label"] ?? "").startsWith(start));
+
+  async function retryAllRefusedWith(body: Record<string, unknown>) {
+    await act(async () => {
+      root.render(
+        createElement(ToastProvider, null, createElement(PostJobCard, { job: twoFailed, workspaceId: "ws-1", onRetryAccepted: () => {} })),
+      );
+    });
+    const all = button("Retry all failed");
+    expect(all).not.toBeNull();
+    fetchMock.mockResolvedValue(Response.json(body, { status: 409 }));
+    await act(async () => {
+      void props(all!).onClick?.();
+    });
+    await settle();
+  }
+
+  it("with leftOut: the left-out platform shows its step instead of Retry", async () => {
+    await retryAllRefusedWith({
+      error: "Instagram is already being retried or has gone out. Activity now shows where it stands. Facebook Page left out: connect it in Settings.",
+      code: "NOTHING_TO_RETRY",
+      leftOut: [{ platform: "facebook_page", reason: "connect" }],
+    });
+    expect(stepText()).toBe("Connect Facebook Page in Settings");
+    expect(button("Retry Facebook Page")).toBeNull();
+    expect(button("Retry Instagram")).not.toBeNull();
+  }, 5_000);
+
+  it("without leftOut (an older server): every Retry stays", async () => {
+    await retryAllRefusedWith({ error: "Nothing failed to retry.", code: "NOTHING_TO_RETRY" });
+    expect(settingsLink()).toBeNull();
+    expect(button("Retry Facebook Page")).not.toBeNull();
+    expect(button("Retry Instagram")).not.toBeNull();
+  }, 5_000);
+});
