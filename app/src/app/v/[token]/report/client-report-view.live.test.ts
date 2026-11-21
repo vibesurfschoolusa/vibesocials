@@ -17,6 +17,12 @@ vi.mock("@/components/reports/monthly-report", async () => {
   };
 });
 
+// R60 pages-a-2 L2: a stand-in for the print button, to see when the view draws it.
+vi.mock("@/components/reports/print-button", async () => {
+  const { createElement: make } = await import("react");
+  return { PrintReportButton: () => make("button", { type: "button" }, "Print or save as PDF") };
+});
+
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { makeFocusable, type FocusDoc } from "@/lib/focusDom.testkit";
 import { installKeeperOnFakePage } from "@/lib/focusKeeperDom.testkit";
@@ -219,5 +225,39 @@ describe("/v report: why the first load failed", () => {
     await firstLoad(async () => Response.json(REPORT));
     expect(container.textContent).toContain("Report 2026-10");
     expect(find(container, (n) => n.attributes?.role === "alert")).toBeNull();
+  });
+});
+
+// R60 pages-a-2 L2: Print is offered only once there is a report to print, as /reports does.
+describe("/v report: the print button", () => {
+  const hasPrint = () => find(container, (n) => n.nodeName === "BUTTON" && (n.textContent as string) === "Print or save as PDF") !== null;
+
+  it("loading: no print button", async () => {
+    fetchMock.mockReturnValueOnce(deferred().promise);
+    await mount();
+    expect(container.textContent).toContain("Loading the report…");
+    expect(hasPrint()).toBe(false);
+  });
+
+  it("failed: no print button", async () => {
+    fetchMock.mockReturnValueOnce(Promise.resolve(Response.json({ error: UNCHECKED }, { status: 503 })));
+    await mount();
+    expect(container.textContent).toContain(UNCHECKED);
+    expect(hasPrint()).toBe(false);
+  });
+
+  it("the 429: no print button", async () => {
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve(Response.json({ error: "Too many requests.", retryAfterSeconds: 300 }, { status: 429 })),
+    );
+    await mount();
+    expect(hasPrint()).toBe(false);
+  });
+
+  it("loaded: the print button", async () => {
+    fetchMock.mockReturnValueOnce(Promise.resolve(Response.json(REPORT)));
+    await mount();
+    expect(container.textContent).toContain("Report 2026-10");
+    expect(hasPrint()).toBe(true);
   });
 });

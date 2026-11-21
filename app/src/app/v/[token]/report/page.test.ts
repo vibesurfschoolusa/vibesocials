@@ -78,13 +78,14 @@ describe("the client's report page", () => {
     expect(viewPropsMock).not.toHaveBeenCalled();
   });
 
-  it("hands the report view only the token and the month, and shows the month list and print", async () => {
+  it("hands the report view only the token and the month, and shows the month list", async () => {
     const html = await render(TOKEN, { month: "2026-09", workspaceId: "ws-2" });
 
     expect(findActiveReviewLinkMock).toHaveBeenCalledWith(TOKEN);
     expect(viewPropsMock).toHaveBeenCalledWith({ token: TOKEN, month: "2026-09" });
     expect(html).toContain('name="month"');
-    expect(html).toContain("Print or save as PDF");
+    // R60 pages-a-2 L2: the view draws Print once the report has loaded, never the page.
+    expect(html).not.toContain("Print or save as PDF");
     expect(html).toContain("Sent with Vibe Socials");
     expect(html).toContain(`href="/v/${TOKEN}"`);
     expect(html).not.toContain("ws-1");
