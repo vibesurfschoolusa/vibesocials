@@ -93,7 +93,8 @@ describe("computeTweetText", () => {
   });
 
   it("removes @-mentions before counting", () => {
-    expect(computeTweetText(`@ana_surf ${"a".repeat(280)}`)).toBe("a".repeat(280));
+    // R59: a mentions-only line goes whole; in running text only the "@" goes.
+    expect(computeTweetText(`${"a".repeat(280)}\n\n@ana_surf`)).toBe("a".repeat(280));
   });
 
   it("empty caption stays empty (no crash, no spurious ellipsis)", () => {

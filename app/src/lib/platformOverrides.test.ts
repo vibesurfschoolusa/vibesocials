@@ -137,8 +137,11 @@ describe("platformCaptionCounter", () => {
   });
 
   it("leaves @-mentions out of the X count", () => {
-    const counter = platformCaptionCounter(`@ana_surf ${"a".repeat(280)}`, "x", {});
+    // R59: a mentions-only line goes whole on X, so it takes no room.
+    const counter = platformCaptionCounter(`${"a".repeat(280)}\n\n@ana_surf`, "x", {});
     expect(counter).toEqual({ length: 280, max: 280, over: false, label: "280 / 280" });
+    // In running text only the "@" goes, so the name counts.
+    expect(platformCaptionCounter(`Surf with @ana_surf ${"a".repeat(262)}`, "x", {}).length).toBe(281);
   });
 
   it("counts LinkedIn against 3,000 with the footer dropped first", () => {

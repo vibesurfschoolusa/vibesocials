@@ -176,7 +176,8 @@ describe("buildCaptionWithFooter tracking tags only when they fit", () => {
   });
 
   it("on X counts the text without @-mentions, as the X client does", () => {
-    const caption = `@ana_surf ${"a".repeat(280 - 52)}`;
+    // R59: a mentions-only line goes whole; in running text only the "@" would go.
+    const caption = `${"a".repeat(280 - 52)}\n\n@ana_surf`;
     expect(buildCaptionWithFooter(caption, on, "x")).toBe(tagged(caption, "x"));
   });
 
@@ -224,7 +225,8 @@ describe("buildCaptionWithFooter drops the footer before the caption is cut", ()
   });
 
   it("on X counts without @-mentions", () => {
-    const caption = `@ana_surf ${"a".repeat(220)}`; // 220 + 45 + 13 = 278 once the mention is gone
+    // 220 + 45 + 13 = 278 once the mentions-only line is gone (R59).
+    const caption = `${"a".repeat(220)}\n\n@ana_surf`;
     expect(buildCaptionWithFooter(caption, footer, "x")).toBe(`${caption}\n\n${website}\n\n#surf #miami`);
   });
 

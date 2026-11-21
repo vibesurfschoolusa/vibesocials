@@ -301,7 +301,8 @@ describe("buildPlatformPreview with tracking tags", () => {
   it("on X decides on the text without @-mentions, as the X client counts it", () => {
     const room = 280 - taggedFooter("x").length;
     // With the mention the tagged text is over 280; without it, it fits exactly.
-    const caption = `@ana_surf ${"a".repeat(room)}`;
+    // R59: on a line of its own the mention goes whole, blank line and all.
+    const caption = `${"a".repeat(room)}\n\n@ana_surf`;
     const preview = buildPlatformPreview({ platform: "x", caption, user: on });
     expect(preview.rendered).toBe(`${"a".repeat(room)}${taggedFooter("x")}`);
     expect(preview.rendered).toBe(computeTweetText(buildCaptionWithFooter(caption, on, "x")));
