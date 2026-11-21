@@ -1622,7 +1622,7 @@ describe("publishToAllPlatforms - a result whose connection was removed after di
   // R63 publishing-flow-2 L1: a connection the post does not go to has no row,
   // and that is not an error; only a platform the post targets is.
   describe("a connection with no result row", () => {
-    const noRowErrors = (errorLog: ReturnType<typeof vi.spyOn>) =>
+    const noRowErrors = (errorLog: { mock: { calls: unknown[][] } }) =>
       errorLog.mock.calls
         .filter((call) => call[0] === "[Inngest] No result record for platform")
         .map((call) => (call[1] as { platform: Platform }).platform);

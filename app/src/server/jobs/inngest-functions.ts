@@ -6,6 +6,7 @@ import { getPlatformClient } from "@/server/platforms";
 import { MIN_REQUEST_WINDOW_MS, publishDeadline, remainingMs } from "@/server/platforms/publishBudget";
 import { withTransientRetries } from "@/server/platforms/transientRetry";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
+import { platformAcceptsMedia, platformAcceptsTextOnly } from "@/lib/platformLimits";
 import {
   RETENTION_MAX_BATCHES_PER_RUN,
   sweepExpiredMediaBatch,
@@ -1174,6 +1175,11 @@ export const publishToAllPlatforms = inngest.createFunction(
         select: { id: true, platform: true, socialConnectionId: true },
       });
 
+      // R63 publishing-flow-2 L1: the platforms the post was made for, so the
+      // plan tells a skipped connection from a missing row. Only when there is
+      // a list, so a post without one memoizes what it did before.
+      const targetPlatforms = (postJob.publishMetadata as { targetPlatforms?: Platform[] } | null)?.targetPlatforms;
+
       return {
         user,
         workspace,
@@ -1181,6 +1187,7 @@ export const publishToAllPlatforms = inngest.createFunction(
         mediaItems: mediaItemsForStepOutput(mediaItems),
         socialConnections: socialConnections as ConnectionRef[],
         resultRecords,
+        ...(targetPlatforms?.length ? { targetPlatforms } : {}),
         // V1: only when the post has a cover, so a post without one memoizes what it did before.
         ...withCover(postJob),
       };
@@ -1242,10 +1249,26 @@ export const publishToAllPlatforms = inngest.createFunction(
     // connections' order (as before), then results without one, in result order.
     const plans: PlatformStepPlan[] = [];
 
+    // R63 publishing-flow-2 L1: rows exist only for the post's own platforms, so
+    // a connection it skips (an unticked platform, a Story's other platforms,
+    // YouTube on a photo) has none and is not an error. No list (none chosen,
+    // or a run memoized before the list was) means every connection that takes
+    // this kind of post, as the fan-out decides (posting.ts deferredFanOutRows).
+    const targetList = "targetPlatforms" in setupData ? setupData.targetPlatforms : undefined;
+    const postMedia = setupData.mediaItem as { mimeType?: string } | null;
+    const isTarget = (platform: Platform) =>
+      targetList?.length
+        ? targetList.includes(platform)
+        : postMedia
+          ? platformAcceptsMedia(platform, postMedia.mimeType)
+          : platformAcceptsTextOnly(platform);
+
     for (const connection of setupData.socialConnections) {
       const resultRecord = setupData.resultRecords.find(r => r.platform === connection.platform);
       if (!resultRecord) {
-        logger.error("[Inngest] No result record for platform", { postJobId, platform: connection.platform });
+        if (isTarget(connection.platform)) {
+          logger.error("[Inngest] No result record for platform", { postJobId, platform: connection.platform });
+        }
         continue;
       }
 
