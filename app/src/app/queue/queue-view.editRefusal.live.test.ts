@@ -189,7 +189,43 @@ const X_REFUSAL =
   "X removes @mentions from posts sent through its API, so this post would have no text for X. Add some words to the caption or to X's own caption. To post without X, delete this draft and create it again without X.";
 const REFUSED: Answer = () => Response.json({ error: X_REFUSAL }, { status: 400 });
 
+/** The toasts on screen (ToastProvider's live region). */
+function toasts(): string[] {
+  const region = findAll(container, (n) => n.attributes?.["aria-live"] === "polite" && n.attributes?.["aria-atomic"] === "false")[0];
+  return region ? findAll(region, (n) => n.attributes?.role === "alert" || n.attributes?.role === "status").map((n) => String(n.textContent)) : [];
+}
+
 describe("Queue: the Edit dialog keeps a PATCH 400 on screen", () => {
+  // R64 fix review L2: only a 400 moves to the line; other refusals stay toasts.
+  it("a 429 on save shows a toast and no line", async () => {
+    await mount();
+    await openEdit();
+    patchAnswers.push(() => Response.json({ error: "Too many requests. Try again in a minute." }, { status: 429 }));
+    await click(dialogButton("Save changes"));
+    expect(line()).toBeNull();
+    expect(toasts().some((text) => text.includes("Too many requests. Try again in a minute."))).toBe(true);
+  }, 10_000);
+
+  it("a 400 on save shows no toast, only the line", async () => {
+    await mount();
+    await openEdit();
+    patchAnswers.push(REFUSED);
+    await click(dialogButton("Save changes"));
+    expect(line()).toBe(X_REFUSAL);
+    expect(toasts()).toEqual([]);
+  }, 10_000);
+
+  it("a 400 on scheduling a draft shows no toast, only the line", async () => {
+    await mount();
+    await openEdit();
+    await change(findAll(dialog(), (n) => n.attributes?.id === "queue-edit-caption")[0]!, "@friend");
+    await change(findAll(dialog(), (n) => n.attributes?.id === "queue-edit-time")[0]!, "2099-01-01T10:00");
+    patchAnswers.push(REFUSED);
+    await click(dialogButton("Save and schedule"));
+    expect(line()).toBe(X_REFUSAL);
+    expect(toasts()).toEqual([]);
+  }, 10_000);
+
   it("the X refusal on a plain save shows in the dialog, with Save still on", async () => {
     await mount();
     await openEdit();
