@@ -3,7 +3,6 @@ import Link from "next/link";
 
 import { ClientPageShell } from "@/components/client-page-header";
 import { ReportMonthPicker } from "@/components/reports/monthly-report";
-import { PrintReportButton } from "@/components/reports/print-button";
 import { findClientPageLogo } from "@/lib/clientPageLogo";
 import { prisma } from "@/lib/db";
 import { parseReportMonth, reportMonths } from "@/lib/monthlyReport";
@@ -66,9 +65,9 @@ export default async function ClientReportPage({ params, searchParams }: ClientR
           <Link href={`/v/${token}`} className="inline-flex min-h-10 items-center text-sm underline">
             Back to upcoming posts
           </Link>
+          {/* R60 pages-a-2 L2: the view offers Print once the report has loaded. */}
           <div className="flex flex-wrap items-end justify-between gap-3">
             <ReportMonthPicker months={months} selected={parsed.ok ? parsed.month : months[1]} />
-            {parsed.ok ? <PrintReportButton /> : null}
           </div>
         </div>
         {parsed.ok ? (

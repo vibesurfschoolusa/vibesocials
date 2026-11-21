@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import { MonthlyReportView } from "@/components/reports/monthly-report";
+import { PrintReportButton } from "@/components/reports/print-button";
 import { Button } from "@/components/ui/button";
 import { limitReachedSentence, limitWaitSeconds } from "@/lib/clientLinkLimit";
 import type { PublicMonthlyReport } from "@/lib/monthlyReport";
@@ -120,10 +121,16 @@ export function ClientReportView({ token, month }: { token: string; month: strin
           </p>
         </div>
       ) : (
-        // display: contents keeps the report's layout and print as they were.
-        <div ref={reportRef} className="contents">
-          <MonthlyReportView report={report} logoPrintOnly />
-        </div>
+        <>
+          {/* R60 pages-a-2 L2: Print only once there is a report to print, as /reports does. */}
+          <div data-report-noprint className="flex justify-end">
+            <PrintReportButton />
+          </div>
+          {/* display: contents keeps the report's layout and print as they were. */}
+          <div ref={reportRef} className="contents">
+            <MonthlyReportView report={report} logoPrintOnly />
+          </div>
+        </>
       )}
     </>
   );
