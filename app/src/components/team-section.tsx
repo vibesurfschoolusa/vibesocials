@@ -1068,6 +1068,9 @@ function OwnerView({
     // removed member can't rejoin with the link they hold): drop the link we're
     // displaying — it's dead — and tell the owner to create a fresh one.
     const outcome = memberRemovalOutcome(await response.json().catch(() => null));
+    // R60 pages-b L1: no invite link is active after a removal, so an unread
+    // one no longer "may be active".
+    setInviteReadFailure(null);
     if (outcome.clearInvite) {
       setInvite(null);
       setFreshUrl(null);
@@ -1141,6 +1144,8 @@ function OwnerView({
     if (revoked.clearInvite) {
       setInvite(null);
       setFreshUrl(null);
+      // R60 pages-b L1: the one active link was turned off, so it is no longer unknown.
+      setInviteReadFailure(null);
     }
     // R32 client-journey L5: a connect link they made stopped with their role;
     // the connect link card reads its link only when mounted, so it is told.
