@@ -368,6 +368,22 @@ describe("listReviewPosts - the text that will be published", () => {
 
     const [post] = await cards();
 
+    // R59 new-customer-2 L2: in running text only the "@" goes.
+    expect(post.platformCaptions).toEqual([{ label: "X", text: `Thanks ana_surf for the lesson${FOOTER}` }]);
+  });
+
+  it("removes a mention on its own line whole from the X caption", async () => {
+    postFindManyMock
+      .mockResolvedValueOnce([
+        postRow({
+          publishMetadata: { targetPlatforms: ["x"] },
+          perPlatformOverrides: { x: "Thanks for the lesson\n\n@ana_surf" },
+        }),
+      ])
+      .mockResolvedValueOnce([]);
+
+    const [post] = await cards();
+
     expect(post.platformCaptions).toEqual([{ label: "X", text: `Thanks for the lesson${FOOTER}` }]);
   });
 
