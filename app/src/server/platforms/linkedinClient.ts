@@ -545,6 +545,9 @@ export const LINKEDIN_COVER_REFUSED_NOTE =
   "Cover not set: LinkedIn did not accept the chosen cover, so the video uses its own.";
 export const LINKEDIN_COVER_FRAME_ONLY_NOTE =
   "Cover not set: LinkedIn needs the cover as an image, and the chosen frame could not be saved as one.";
+/** R60 platform-clients-2 L2: the multipart path (a video over 50 MiB) sends no cover. */
+export const LINKEDIN_COVER_LARGE_VIDEO_NOTE =
+  "Cover not set: a video over 50 MB is sent to LinkedIn in parts, without the chosen cover, so the video uses its own.";
 export const LINKEDIN_COVER_UNREADABLE_NOTE =
   "Cover not set: the cover image could not be read from storage, so the video uses its own.";
 
@@ -1788,9 +1791,9 @@ async function publishMultipart(args: {
     const postId = await createPost(accessToken, authorUrn, caption, connection, current.data.video, true, deadline);
     console.log("[LinkedIn] Publish successful", { postId });
     // R60 platform-clients-2 L2: this path asks for no thumbnail, so a chosen
-    // cover is never set; the post says so, with the whole-file path's notes.
+    // cover is never set; the post says so (a frame keeps the frame-only note).
     if (ctx.cover) {
-      return { externalPostId: postId, note: ctx.cover.imageUrl ? LINKEDIN_COVER_REFUSED_NOTE : LINKEDIN_COVER_FRAME_ONLY_NOTE };
+      return { externalPostId: postId, note: ctx.cover.imageUrl ? LINKEDIN_COVER_LARGE_VIDEO_NOTE : LINKEDIN_COVER_FRAME_ONLY_NOTE };
     }
     return { externalPostId: postId };
   } catch (error) {
