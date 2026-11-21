@@ -1287,9 +1287,10 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
 
       expect(res.status).toBe(200);
       const text = htmlToPlainText(sendEmailMock.mock.calls[0][0].html as string);
-      expect(text).toContain("It is approved and publishing now.");
+      // R61 publishing-flow L1: the outcome line says what went.
+      expect(text).toContain(`It is approved. Its feed post is being sent; ${MEMBER_STORY_NOT_SENT.replace(/^I/, "i")}`);
+      expect(text).not.toMatch(/publishing now/);
       expect(text).toContain("Its Story on Instagram was approved too.");
-      expect(text).toContain(MEMBER_STORY_NOT_SENT);
     });
 
     it("the feed post not sent: the email says the feed post was not sent", async () => {
@@ -1301,7 +1302,9 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
 
       expect(res.status).toBe(200);
       const text = htmlToPlainText(sendEmailMock.mock.calls[0][0].html as string);
-      expect(text).toContain(MEMBER_FEED_NOT_SENT);
+      // R61 publishing-flow L1: "publishing now" never names the feed post that wasn't sent.
+      expect(text).toContain(`It is approved. Its Story is being sent; ${MEMBER_FEED_NOT_SENT.replace(/^I/, "i")}`);
+      expect(text).not.toMatch(/publishing now/);
     });
 
     it("both halves sent: no not-sent line, as now", async () => {
@@ -1312,6 +1315,7 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
 
       const text = htmlToPlainText(sendEmailMock.mock.calls[0][0].html as string);
       expect(text).toContain("Its Story on Instagram was approved too.");
+      expect(text).toContain("It is approved and publishing now.");
       expect(text).not.toMatch(/was not sent/);
     });
   });

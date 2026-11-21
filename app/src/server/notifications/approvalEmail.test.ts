@@ -516,3 +516,44 @@ describe("approved, nothing sent for this post, the other half may have started"
     expect(buildApprovalDecisionEmail(base).subject).toBe("Your post in Acme was approved, but nothing was sent");
   });
 });
+
+// R61 publishing-flow L1: approved to publish now, one half of a Feed and Story
+// post went and the other was not sent. The outcome line says what went, as
+// partialSendMessage does; "publishing now" never names a half that wasn't sent.
+describe("approved to publish now, one half not sent", () => {
+  const base = {
+    approved: true,
+    workspaceId: "ws_1",
+    workspaceName: "Acme",
+    timeZone: null,
+    caption: "x",
+    scheduledFor: null,
+    appBaseUrl: "https://vibesocials.wtf",
+    alsoAsStory: ["INSTAGRAM"],
+  } as const;
+  const WHY = "each of its platforms is either not connected or needs reconnecting.";
+
+  it("the feed post not sent: the Story is being sent, the feed post was not", () => {
+    const text = htmlToPlainText(
+      buildApprovalDecisionEmail({ ...base, halfSent: { sent: "story", notSentNote: `Its feed post was not sent: ${WHY}` } }).html,
+    );
+    expect(text).toContain(`It is approved. Its Story is being sent; its feed post was not sent: ${WHY}`);
+    expect(text).not.toMatch(/publishing now/);
+    expect(text.match(/was not sent/g)).toHaveLength(1);
+  });
+
+  it("the Story not sent: the feed post is being sent, the Story was not", () => {
+    const text = htmlToPlainText(
+      buildApprovalDecisionEmail({ ...base, halfSent: { sent: "feed", notSentNote: `Its Story was not sent: ${WHY}` } }).html,
+    );
+    expect(text).toContain(`It is approved. Its feed post is being sent; its Story was not sent: ${WHY}`);
+    expect(text).not.toMatch(/publishing now/);
+    expect(text.match(/was not sent/g)).toHaveLength(1);
+  });
+
+  it("a full approval: publishing now, as before", () => {
+    const text = htmlToPlainText(buildApprovalDecisionEmail(base).html);
+    expect(text).toContain("It is approved and publishing now.");
+    expect(text).not.toMatch(/being sent|was not sent/);
+  });
+});
