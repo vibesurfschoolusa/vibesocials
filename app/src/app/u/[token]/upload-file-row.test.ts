@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -24,8 +27,9 @@ function render(
   previewUrl: string | null = null,
   onRemove?: () => void,
   failureKind?: ClientFileFailureKind,
+  position = 1,
 ): string {
-  return renderToStaticMarkup(createElement(UploadFileRow, { item: picked, previewUrl, onRemove, failureKind }));
+  return renderToStaticMarkup(createElement(UploadFileRow, { item: picked, previewUrl, onRemove, failureKind, position }));
 }
 
 describe("UploadFileRow", () => {
@@ -65,7 +69,7 @@ describe("UploadFileRow", () => {
   it("offers Remove only when asked to, with a 40px tap target and the file's name", () => {
     expect(render(item())).not.toContain("Remove");
     const html = render(item(), null, () => {});
-    expect(html).toContain('aria-label="Remove wave.jpg"');
+    expect(html).toContain('aria-label="Remove 1. wave.jpg"');
     expect(html).toContain("min-h-10");
   });
 });
@@ -101,6 +105,24 @@ describe("UploadFileRow: a failed file, by kind", () => {
     const { fileURLToPath } = await import("node:url");
     const source = readFileSync(fileURLToPath(new URL("./upload-link-form.tsx", import.meta.url)), "utf8");
     expect(source).toMatch(/failureKind=\{failureKinds\[item\.key\]\}/);
-    expect(source).toMatch(/<UploadFileRow item=\{item\} previewUrl=\{previewUrl\} onRemove=\{onRemove\} failureKind=\{failureKind\} \/>/);
+    expect(source).toMatch(/<UploadFileRow item=\{item\} previewUrl=\{previewUrl\} onRemove=\{onRemove\} failureKind=\{failureKind\} position=\{position\} \/>/);
+  });
+});
+
+// R58 pages-a-2 L1: two phones give files the same name, so a row's controls
+// name it by its position in the list, as Add many's rows do.
+describe("UploadFileRow: same-named files", () => {
+  it("two files with the same name have different names, by their position", () => {
+    const first = render(item({ name: "IMG_0001.JPG" }), null, () => {}, undefined, 1);
+    const second = render(item({ name: "IMG_0001.JPG" }), null, () => {}, undefined, 2);
+    expect(first).toContain('aria-label="Remove 1. IMG_0001.JPG"');
+    expect(second).toContain('aria-label="Remove 2. IMG_0001.JPG"');
+    expect(first).toContain('aria-label="1. IMG_0001.JPG progress"');
+    expect(second).toContain('aria-label="2. IMG_0001.JPG progress"');
+  });
+
+  it("the form gives each row its position in the list", () => {
+    const form = readFileSync(fileURLToPath(new URL("./upload-link-form.tsx", import.meta.url)), "utf8");
+    expect(form).toMatch(/files\.map\(\(item, index\) => \(\s*<FileRow[^>]*position=\{index \+ 1\}/);
   });
 });

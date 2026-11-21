@@ -56,9 +56,15 @@ export function UploadFileRow({
   previewUrl,
   onRemove,
   failureKind,
+  position,
 }: {
   item: PickedFile;
   previewUrl: string | null;
+  /**
+   * The row's place in the list, from 1. R58 pages-a-2 L1: two phones give
+   * files the same name, so the controls name the row by it, as Add many does.
+   */
+  position: number;
   /** Given only before sending: the file can still be taken off the list. */
   onRemove?: () => void;
   /**
@@ -68,6 +74,7 @@ export function UploadFileRow({
    */
   failureKind?: ClientFileFailureKind;
 }) {
+  const rowName = `${position}. ${item.file.name}`;
   const kind = fileKind(item.file);
   const progress = item.status === "failed" ? 100 : item.progress;
   const failed = item.status === "failed";
@@ -96,7 +103,7 @@ export function UploadFileRow({
           <button
             type="button"
             onClick={onRemove}
-            aria-label={`Remove ${item.file.name}`}
+            aria-label={`Remove ${rowName}`}
             className="inline-flex min-h-10 min-w-10 shrink-0 items-center justify-center rounded-[var(--radius)] text-lg text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           >
             <span aria-hidden>×</span>
@@ -105,7 +112,7 @@ export function UploadFileRow({
       </div>
       <div
         role="progressbar"
-        aria-label={`${item.file.name} progress`}
+        aria-label={`${rowName} progress`}
         aria-valuenow={Math.round(progress)}
         aria-valuemin={0}
         aria-valuemax={100}
