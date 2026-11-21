@@ -144,15 +144,17 @@ describe("truncateXWeighted", () => {
 
   it("never cuts inside a link: a link that does not fit goes whole", () => {
     const caption = "a".repeat(260) + " https://vibesurfschool.com/lessons and more";
-    expect(truncateXWeighted(caption, 280, "...")).toBe("a".repeat(260) + " ...");
+    // R64 platform-clients L1: at the word before it, with no space before the "...".
+    expect(truncateXWeighted(caption, 280, "...")).toBe("a".repeat(260) + "...");
   });
 
   it("keeps a long link that fits, counted as 23", () => {
     const url = "https://vibesurfschool.com/lessons/fort-lauderdale/private-surf-lessons";
     const caption = "a".repeat(250) + " " + url + " " + "b".repeat(20);
     const cut = truncateXWeighted(caption, 280, "...");
-    expect(cut).toBe("a".repeat(250) + " " + url + " bb...");
-    expect(xWeightedLength(cut)).toBe(280);
+    // R64 platform-clients L1: the cut falls inside the b's, so it ends after the link.
+    expect(cut).toBe("a".repeat(250) + " " + url + "...");
+    expect(xWeightedLength(cut)).toBe(277);
   });
 
   it("stays within the limit for mixed text", () => {

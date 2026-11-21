@@ -2437,7 +2437,8 @@ describe("buildYouTubeVideoResource — text YouTube accepts", () => {
 
   it("never cuts inside a link", () => {
     const caption = "a".repeat(4980) + " https://vibesurfschool.com/lessons";
-    expect(resourceFor({ caption }).snippet.description).toBe("a".repeat(4980) + " …");
+    // R64 platform-clients L1: at the word before it, with no space before the "…".
+    expect(resourceFor({ caption }).snippet.description).toBe("a".repeat(4980) + "…");
   });
 
   it("counts the bytes after the angle quotes replace < and >", () => {

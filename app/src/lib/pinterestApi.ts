@@ -1,5 +1,5 @@
 import { PINTEREST_SCOPES } from "@/lib/oauthScopes";
-import { fitTitle, graphemeCount, truncateGraphemes } from "@/lib/truncate";
+import { fitTitle, graphemeCount, truncateGraphemesAtWord } from "@/lib/truncate";
 
 /**
  * Pinterest API v5: the endpoints, limits and small pure helpers the connect
@@ -91,19 +91,20 @@ export function fitPinterestTitle(text: string): string {
 
 /**
  * The Pin's description: the caption, cut to Pinterest's 800 characters with
- * "..." when it is longer. Cut on whole graphemes (like every other client and
- * the composer preview, lib/platformLimits.ts), then shortened further if that
- * is still over 800 code points: one emoji can be several, and Pinterest
+ * "..." when it is longer. Cut on whole graphemes at a whole word (like every
+ * other client and the composer preview, R64 platform-clients L1), then
+ * shortened further if that is still over 800 code points: one emoji can be
+ * several, and Pinterest
  * refuses the whole Pin for a description over the limit.
  */
 export function fitPinterestDescription(text: string): string {
   let graphemes = PINTEREST_DESCRIPTION_MAX;
-  let fitted = truncateGraphemes(text, graphemes, { ellipsis: "..." });
+  let fitted = truncateGraphemesAtWord(text, graphemes, { ellipsis: "..." });
   while (graphemes > 0 && codePointLength(fitted) > PINTEREST_DESCRIPTION_MAX) {
     // Every grapheme is at least one code point, so dropping the excess (and at
     // least one) always gets closer.
     graphemes -= Math.max(1, Math.ceil((codePointLength(fitted) - PINTEREST_DESCRIPTION_MAX) / 8));
-    fitted = truncateGraphemes(text, graphemes, { ellipsis: "..." });
+    fitted = truncateGraphemesAtWord(text, graphemes, { ellipsis: "..." });
   }
   return fitted;
 }

@@ -513,7 +513,8 @@ describe("buildPlatformPreview on other platforms, unchanged by YouTube's byte l
   const footer = (link: string) => `\n\nFor more info visit ${link}\n\n#surf #waves`;
 
   it.each([
-    ["x", footer(tagged("x")), 198, 280, [280, 3749, true]],
+    // R64 platform-clients L1: X cuts at the last whole word, after "Glassy".
+    ["x", footer(tagged("x")), 198, 280, [279, 3749, true]],
     // R62 platform-clients L1: Instagram cuts at the last whole word, before "waves".
     ["instagram", footer("vibesurfschool.com"), 189, 2200, [2196, 3749, true]],
     ["linkedin", footer(tagged("linkedin")), 253, 3000, [3000, 3749, true]],

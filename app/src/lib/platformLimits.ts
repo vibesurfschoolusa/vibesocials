@@ -8,8 +8,9 @@ import { MULTI_PHOTO_MIME_TYPES, X_MAX_PHOTOS } from "./postMedia";
  *
  * `charLimit: number` means the corresponding client in `server/platforms/`
  * truncates the caption to that many of the entry's `unit` (mostly extended
- * grapheme clusters, via `truncateGraphemes`, see `lib/truncate.ts`) before
- * posting. `charLimit: null`
+ * grapheme clusters), at a whole word, with an AtWord function of
+ * `lib/truncate.ts` (R64 platform-clients L1; wordSafeCut.guard.test.ts
+ * refuses a plain cut), before posting. `charLimit: null`
  * means that client does NOT truncate today — whatever caption is built is
  * sent as-is (the platform's own API may enforce its own limit server-side,
  * but nothing in this codebase does it client-side).
@@ -22,7 +23,7 @@ import { MULTI_PHOTO_MIME_TYPES, X_MAX_PHOTOS } from "./postMedia";
  * change what gets posted — it would only change what the preview *predicts*,
  * making the preview show a truncation that never actually happens. Adding
  * real truncation for a platform that doesn't have it today is a deliberate,
- * separate posting-behavior change: it requires adding a `truncateGraphemes`
+ * separate posting-behavior change: it requires adding a `truncateGraphemesAtWord`
  * call to that platform's client (see xClient.ts / tiktokClient.ts for the
  * pattern) in the SAME change that edits this map — never edit this map alone.
  */
@@ -61,18 +62,18 @@ export const PLATFORM_CAPTION_LIMITS: Record<Platform, PlatformCaptionLimit> = {
   // X counts by weight, not graphemes (fix round 1, M5): an emoji 2, a link 23
   // (lib/xWeightedLength.ts). xClient.ts cuts with truncateXWeighted.
   x: { charLimit: 280, unit: "xWeight", ellipsis: "..." },
-  // Matches the truncateGraphemes call in server/platforms/tiktokClient.ts.
+  // Matches the truncateGraphemesAtWord call in server/platforms/tiktokClient.ts.
   tiktok: { charLimit: 2200, unit: "grapheme" },
   // youtubeClient.ts fits the VIDEO TITLE (a separate field, 100 chars) and
   // cuts the description, footer included, to YouTube's 5,000 BYTES with
   // fitYouTubeDescription (lib/youtubeDescription.ts), which reads this entry.
   youtube: { charLimit: null, unit: "utf8Byte", utf8ByteLimit: 5000, ellipsis: "…" },
-  // Matches the truncateGraphemes call in server/platforms/instagramClient.ts
+  // Matches the truncateGraphemesAtWord call in server/platforms/instagramClient.ts
   // (computeInstagramCaption). Instagram rejects a caption over 2,200
   // characters, so before the 2026-11-01 audit an over-long caption failed the
   // whole publish; the composer preview now warns and the client truncates.
   instagram: { charLimit: 2200, unit: "grapheme" },
-  // Matches the truncateKeepingLinks call in server/platforms/linkedinClient.ts
+  // Matches the truncateKeepingLinksAtWord call in server/platforms/linkedinClient.ts
   // (computeLinkedInCommentary): LinkedIn refuses commentary over 3,000
   // characters (fix round 1, M6). The footer goes first (lib/captionFooter.ts).
   linkedin: { charLimit: 3000, unit: "grapheme", ellipsis: "..." },

@@ -1,5 +1,5 @@
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
-import { truncateUnits } from "@/lib/truncate";
+import { truncateUnitsAtWord } from "@/lib/truncate";
 
 /**
  * YouTube's video description rule, in one client-safe place (R52
@@ -34,10 +34,11 @@ export function youtubeDescriptionLength(caption: string): number {
 
 /**
  * The description: the caption with safe angle quotes, cut to YouTube's 5,000
- * bytes with "…" when it is longer, never inside a character or a link.
+ * bytes with "…" when it is longer, never inside a character or a link, and at
+ * a whole word (R64 platform-clients L1).
  */
 export function fitYouTubeDescription(caption: string): string {
-  return truncateUnits(
+  return truncateUnitsAtWord(
     youtubeSafeText(caption),
     YOUTUBE_DESCRIPTION_MAX_BYTES,
     (unit) => utf8Length(unit.text),

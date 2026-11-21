@@ -9,7 +9,6 @@ vi.mock("./connectionHealth", async (importOriginal) => ({
 
 import { publishErrorMessage, sentenceForRecipient } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
-import { truncateGraphemes } from "@/lib/truncate";
 import type { UploadStateStore } from "@/server/jobs/uploadState";
 
 import { LARGE_UPLOAD_CHUNK_WINDOW_MS, LARGE_VIDEO_THRESHOLD_BYTES } from "./largeUpload";
@@ -39,19 +38,11 @@ import {
 const X_PROCESSING_FAILED_TEXT =
   "X could not process this video, so nothing was posted. X takes a video from 0.5 seconds to 20 minutes long (longer with X Premium), at most 60 frames per second, with an aspect ratio between 1:3 and 3:1, in H.264 with AAC-LC audio. Export it within those limits, then retry. If the video is long, try a shorter version.";
 
-// Roadmap Phase 7 (spec §7.1) — this locks computeTweetText (extracted from
-// publishVideo when it was refactored to read its limit/ellipsis from
-// lib/platformLimits.ts instead of inline `280` / `"..."` literals) to the
-// EXACT same output as the pre-refactor inline block:
-//
-//   let tweetText = caption;
-//   if (tweetText.length > 280) {
-//     const truncated = truncateGraphemes(tweetText, 280, { ellipsis: "..." });
-//     if (truncated !== tweetText) tweetText = truncated;
-//   }
-//
-// If this ever fails, either the refactor broke posting behavior or someone
-// edited PLATFORM_CAPTION_LIMITS.x without meaning to change what X posts.
+// Roadmap Phase 7 (spec §7.1) — this locks computeTweetText, which reads its
+// limit and ellipsis from lib/platformLimits.ts. It cuts by X's weight (fix
+// round 1, M5) and at a whole word (R64 platform-clients L1). If this ever
+// fails, either posting behavior broke or someone edited
+// PLATFORM_CAPTION_LIMITS.x without meaning to change what X posts.
 describe("computeTweetText", () => {
   it("returns a caption under 280 graphemes unchanged", () => {
     const caption = "Just a short caption";
@@ -70,12 +61,12 @@ describe("computeTweetText", () => {
     expect(result).toBe("a".repeat(277) + "...");
   });
 
-  it("matches the pre-refactor inline call byte-for-byte for a realistic long caption", () => {
+  // R64 platform-clients L1: the 280th character falls inside "quick", so the
+  // cut ends after "The".
+  it("cuts a realistic long caption at the last whole word", () => {
     const caption = "The quick brown fox jumps over the lazy dog. ".repeat(10);
     expect(caption.length).toBeGreaterThan(280);
-    expect(computeTweetText(caption)).toBe(
-      truncateGraphemes(caption, 280, { ellipsis: "..." }),
-    );
+    expect(computeTweetText(caption)).toBe(caption.slice(0, 273) + "...");
   });
 
   // Fix round 1 (M5): X weighs each emoji 2 and each link 23 (lib/xWeightedLength.ts).
@@ -89,7 +80,7 @@ describe("computeTweetText", () => {
     const fits = "a".repeat(250) + " " + url;
     expect(computeTweetText(fits)).toBe(fits);
     const over = "a".repeat(260) + " " + url;
-    expect(computeTweetText(over)).toBe("a".repeat(260) + " ...");
+    expect(computeTweetText(over)).toBe("a".repeat(260) + "...");
   });
 
   it("removes @-mentions before counting", () => {

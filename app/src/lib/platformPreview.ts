@@ -3,7 +3,7 @@ import type { Platform } from "@prisma/client";
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
 import { fitPinterestDescription, pinterestCountHint, pinterestDescriptionLength } from "@/lib/pinterestApi";
 import { type CaptionUnit, PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
-import { truncateGraphemes, truncateGraphemesAtWord, truncateKeepingLinksAtWord } from "@/lib/truncate";
+import { truncateGraphemesAtWord, truncateKeepingLinksAtWord } from "@/lib/truncate";
 import { removeXMentions } from "@/lib/xMentions";
 import { truncateXWeighted, xWeightedLength } from "@/lib/xWeightedLength";
 import { fitYouTubeDescription, youtubeCountHint, youtubeDescriptionLength } from "@/lib/youtubeDescription";
@@ -51,7 +51,7 @@ export interface PlatformPreviewResult {
   /**
    * The exact text that will be POSTED to this platform: caption + footer,
    * override applied, and — for a platform whose client truncates (see
-   * platformLimits.ts) — cut with `truncateGraphemes` the SAME way that
+   * platformLimits.ts) — cut at a whole word the SAME way that
    * client does. This is the preview-vs-reality contract: render this
    * string, not a re-derived approximation.
    */
@@ -91,8 +91,8 @@ export interface PlatformPreviewResult {
   /**
    * True when `limit` is set and `charCount` exceeds it (on YouTube, when
    * `byteCount` exceeds `byteLimit`). Equal to `truncated`
-   * by construction (`truncateGraphemes` only changes text that's over
-   * budget) — exposed separately so callers can key off either field without
+   * by construction (every cut returns text that fits unchanged and changes
+   * only text that's over budget) — exposed separately so callers can key off either field without
    * re-deriving one from the other.
    */
   willTruncate: boolean;
@@ -119,7 +119,7 @@ export function unitCountText(preview: PlatformPreviewResult): string | null {
  * Phase 7, spec §7.1). Mirrors EXACTLY what `server/jobs/inngest-functions.ts`
  * does before handing `caption` to a `PlatformClient.publishVideo`:
  * override-or-base -> `buildCaptionWithFooter` -> (platform-specific,
- * possible) `truncateGraphemes` via the shared `platformLimits.ts` map.
+ * possible) whole-word cut via the shared `platformLimits.ts` map.
  *
  * Zero React/DOM dependency, so it is unit-testable without a browser or
  * mocked network calls — see platformPreview.test.ts. The composer's preview
@@ -178,11 +178,9 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
     if (input.platform === "x") rendered = truncateXWeighted(fullCaption, charLimit, ellipsis);
     else if (input.platform === "linkedin") rendered = truncateKeepingLinksAtWord(fullCaption, charLimit, ellipsis);
     else if (input.platform === "pinterest") rendered = fitPinterestDescription(fullCaption);
-    // R62 platform-clients L1 (R63 for TikTok): at the last whole word, as
-    // computeInstagramCaption and computeTikTokCaption cut.
-    else if (input.platform === "instagram" || input.platform === "tiktok")
-      rendered = truncateGraphemesAtWord(fullCaption, charLimit, { ellipsis });
-    else rendered = truncateGraphemes(fullCaption, charLimit, { ellipsis });
+    // At the last whole word, as every client cuts (R62 Instagram, R63 TikTok,
+    // R64 Google Business Profile, computeGbpPostSummary).
+    else rendered = truncateGraphemesAtWord(fullCaption, charLimit, { ellipsis });
   }
   const countHint = input.platform === "pinterest" ? pinterestCountHint(fullCaption) : null;
   // Pinterest's card shows its counter's label (unitCountText): the footer is

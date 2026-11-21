@@ -29,8 +29,8 @@ function composeCaption(base: string, website: string | undefined, hashtags: str
 /**
  * This text's length the way the platform's client counts it before its cut:
  * on X by X's weight without @-mentions (xClient.ts removes them first), on
- * LinkedIn in graphemes (linkedinClient.ts cuts with truncateGraphemes). Other
- * platforms count code points: every grapheme is at least one code point, so
+ * LinkedIn in graphemes (linkedinClient.ts cuts with
+ * truncateKeepingLinksAtWord). Other platforms count code points: every grapheme is at least one code point, so
  * text that passes here is cut by no client (Pinterest cuts on code points,
  * lib/pinterestApi.ts).
  */

@@ -1,4 +1,4 @@
-import { textUnits, truncateUnits, type TextLink, type TextUnit } from "@/lib/truncate";
+import { textUnits, truncateUnitsAtWord, type TextLink, type TextUnit } from "@/lib/truncate";
 
 /**
  * X's own count of a post's length (fix round 1, M5), as its twitter-text
@@ -128,8 +128,9 @@ export function xWeightedLength(text: string): number {
 
 /**
  * Cut `text` to at most `max` by X's weight, with `ellipsis` when it is cut.
- * Never splits an emoji, any other character, or a link.
+ * Never splits an emoji, any other character, or a link, and ends at a whole
+ * word (R64 platform-clients L1), so a #tag or @mention is never sent in part.
  */
 export function truncateXWeighted(text: string, max: number, ellipsis = ""): string {
-  return truncateUnits(text, max, unitWeight, ellipsis);
+  return truncateUnitsAtWord(text, max, unitWeight, ellipsis);
 }

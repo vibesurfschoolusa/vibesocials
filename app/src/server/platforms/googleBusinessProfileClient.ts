@@ -8,7 +8,7 @@ import { resolveGooglePostMetadata } from "@/lib/googlePostOptions";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { trackedGoogleButtonUrl } from "@/lib/trackingTags";
-import { truncateGraphemes } from "@/lib/truncate";
+import { truncateGraphemesAtWord } from "@/lib/truncate";
 
 import { connectionTokenChangedError, flagRejectedToken } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
@@ -341,8 +341,9 @@ export const googleBusinessProfileClient: PlatformClient = {
 
 /**
  * The text of a Business Profile post: the caption (with the workspace footer),
- * cut to Google's 1,500 characters the same way the composer preview shows it
- * (platformLimits.ts). Empty when there is no caption.
+ * cut to Google's 1,500 characters at a whole word (R64 platform-clients L1),
+ * the same way the composer preview shows it (platformLimits.ts). Empty when
+ * there is no caption.
  */
 export function computeGbpPostSummary(caption: string): string {
   const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS.google_business_profile;
@@ -350,7 +351,7 @@ export function computeGbpPostSummary(caption: string): string {
   if (charLimit === null || text.length <= charLimit) {
     return text;
   }
-  return truncateGraphemes(text, charLimit, { ellipsis });
+  return truncateGraphemesAtWord(text, charLimit, { ellipsis });
 }
 
 /**
