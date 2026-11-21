@@ -24,17 +24,34 @@ describe("connectionsSectionIntro", () => {
 // R52 pages-a L4: Publish now's NO_CONNECTIONS also covers a platform that is
 // connected but flagged needsReconnect (posting.ts gives it a failed
 // RECONNECT_REQUIRED row, so no row is pending). Settings shows that one as
-// connected, with Reconnect, so the sentence names both cases.
+// connected, with Reconnect, so the sentence names both cases. R59 pages-a L1:
+// the step is worded from the failed rows' codes; a platform with no
+// connection is connected, not reconnected.
 describe("nothingSentMessage", () => {
-  it("the owner: not connected or needs reconnecting, then Activity's step", () => {
-    expect(nothingSentMessage("owner")).toBe(
-      "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what to reconnect.",
+  const LEAD = "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting.";
+
+  it("all flagged: Activity's reconnect step, as before", () => {
+    expect(nothingSentMessage("owner", ["reconnect", "reconnect"])).toBe(`${LEAD} Activity shows what to reconnect.`);
+    expect(nothingSentMessage("member", ["reconnect"])).toBe(
+      `${LEAD} Activity shows what didn't go out; the workspace owner can reconnect it.`,
     );
   });
 
-  it("a member: the same reason, and the owner reconnects", () => {
+  it("all gone: connect", () => {
+    expect(nothingSentMessage("owner", ["connect"])).toBe(`${LEAD} Activity shows what to connect.`);
+    expect(nothingSentMessage("member", ["connect", "connect"])).toBe(
+      `${LEAD} Activity shows what didn't go out; the workspace owner can connect it.`,
+    );
+  });
+
+  it("mixed, or the codes not known: connect or reconnect", () => {
+    expect(nothingSentMessage("owner", ["connect", "reconnect"])).toBe(`${LEAD} Activity shows what to connect or reconnect.`);
+    expect(nothingSentMessage("owner")).toBe(`${LEAD} Activity shows what to connect or reconnect.`);
+    expect(nothingSentMessage("member", ["reconnect", "connect"])).toBe(
+      `${LEAD} Activity shows what didn't go out; the workspace owner can connect or reconnect it.`,
+    );
     expect(nothingSentMessage("member")).toBe(
-      "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it.",
+      `${LEAD} Activity shows what didn't go out; the workspace owner can connect or reconnect it.`,
     );
   });
 

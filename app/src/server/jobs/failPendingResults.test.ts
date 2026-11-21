@@ -47,7 +47,7 @@ const finishDb = {
 };
 
 import {
-  CONNECTION_GONE_FAILURE,
+  connectionGoneFailure,
   PUBLISH_STALLED_FAILURE,
   DISPATCH_FAILURE,
   PUBLISH_UNCONFIRMED,
@@ -97,23 +97,41 @@ describe("DISPATCH_FAILURE", () => {
   });
 });
 
-describe("CONNECTION_GONE_FAILURE", () => {
-  it("is the code + message publishToPlatform already writes for a removed connection", () => {
-    expect(CONNECTION_GONE_FAILURE).toEqual({
+// R59 publishing-flow L1: a removed connection is connected again, not
+// reconnected (Settings shows only Connect), so its row says Connect, in the
+// words prepare's CONNECTION_GONE row has (publishFailureText connectionGoneMessage).
+describe("connectionGoneFailure", () => {
+  it("is CONNECTION_GONE with the platform's Connect sentence", () => {
+    expect(connectionGoneFailure("x")).toEqual({
       errorCode: "CONNECTION_GONE",
-      errorMessage: "This platform connection was removed. Reconnect and retry.",
+      errorMessage: "X is no longer connected. Connect it in Settings, then retry.",
     });
   });
 
-  it("fails unclaimed pending results with it, and a claimed one stays PUBLISH_UNCONFIRMED", async () => {
-    await failPendingPostJobResults("job-1", CONNECTION_GONE_FAILURE);
+  it("fails each platform's unclaimed pending results with its own sentence, and a claimed one stays PUBLISH_UNCONFIRMED", async () => {
+    resultFindManyMock.mockResolvedValueOnce([{ platform: "x" }, { platform: "instagram" }]);
 
-    expect(resultUpdateManyMock).toHaveBeenCalledWith({
+    await failPendingPostJobResults("job-1", connectionGoneFailure);
+
+    expect(resultFindManyMock).toHaveBeenNthCalledWith(1, {
       where: { postJobId: "job-1", status: "pending", claimRunId: null },
+      select: { platform: true },
+      distinct: ["platform"],
+    });
+    expect(resultUpdateManyMock).toHaveBeenCalledWith({
+      where: { postJobId: "job-1", status: "pending", claimRunId: null, platform: "x" },
       data: {
         status: "failed",
         errorCode: "CONNECTION_GONE",
-        errorMessage: "This platform connection was removed. Reconnect and retry.",
+        errorMessage: "X is no longer connected. Connect it in Settings, then retry.",
+      },
+    });
+    expect(resultUpdateManyMock).toHaveBeenCalledWith({
+      where: { postJobId: "job-1", status: "pending", claimRunId: null, platform: "instagram" },
+      data: {
+        status: "failed",
+        errorCode: "CONNECTION_GONE",
+        errorMessage: "Instagram is no longer connected. Connect it in Settings, then retry.",
       },
     });
     expect(resultUpdateManyMock).toHaveBeenCalledWith({
@@ -124,6 +142,16 @@ describe("CONNECTION_GONE_FAILURE", () => {
         errorMessage: PUBLISH_UNCONFIRMED_MESSAGE,
       },
     });
+    expect(resultUpdateManyMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("counts the failed rows across the platforms", async () => {
+    resultFindManyMock.mockResolvedValueOnce([{ platform: "x" }, { platform: "instagram" }]);
+    resultUpdateManyMock.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 1 });
+
+    const outcome = await failPendingPostJobResults("job-1", connectionGoneFailure);
+
+    expect(outcome).toMatchObject({ unconfirmedCount: 0, failedCount: 2 });
   });
 });
 

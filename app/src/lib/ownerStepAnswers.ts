@@ -1,6 +1,6 @@
 import type { Platform } from "@prisma/client";
 
-import { platformLabel } from "./platforms";
+import { connectionStepSentence, type ConnectionStep } from "./connectionSteps";
 
 /**
  * The route answers that name a step only an owner can take (R10-client-journey
@@ -10,29 +10,20 @@ import { platformLabel } from "./platforms";
  */
 export type AnswerReader = "owner" | "member";
 
-/** "X", "X and YouTube", "X, YouTube and Instagram". */
-function platformList(platforms: readonly Platform[]): string {
-  const labels = platforms.map(platformLabel);
-  return labels.length <= 1 ? labels.join("") : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
-}
-
 /** POST /api/posts and Publish now with nothing connected (NO_CONNECTIONS). */
 export function noConnectionsMessage(action: "create" | "publish", role: AnswerReader): string {
-  if (role === "member") return "The workspace owner can connect a platform for this workspace.";
-  return action === "create"
-    ? "Connect at least one platform before creating a post."
-    : "Connect at least one platform before publishing.";
+  return connectionStepSentence({ form: "noneConnected", action }, role);
 }
 
 /**
  * Publish now when none of the post's chosen platforms can take it (409):
  * prepare's NO_CONNECTIONS covers a platform with no connection and one that is
  * connected but needs reconnecting (R52 pages-a L4), so the sentence names both.
+ * R59 pages-a L1: the step comes from the failed rows' codes (`steps`, from
+ * dispatchNow); none known reads "connect or reconnect".
  */
-export function nothingSentMessage(role: AnswerReader): string {
-  return role === "member"
-    ? "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it."
-    : "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what to reconnect.";
+export function nothingSentMessage(role: AnswerReader, steps: readonly ConnectionStep[] = []): string {
+  return `Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. ${connectionStepSentence({ form: "activity", steps }, role)}`;
 }
 
 /**
@@ -40,16 +31,12 @@ export function nothingSentMessage(role: AnswerReader): string {
  * reason "connect"): Settings offers Connect for it, not Reconnect (R58 pages-a-4 L1).
  */
 export function retryConnectMessage(platforms: readonly Platform[], role: AnswerReader): string {
-  return role === "member"
-    ? `The workspace owner can connect ${platformList(platforms)}; then retry.`
-    : `Connect ${platformList(platforms)} in Settings, then retry.`;
+  return connectionStepSentence({ form: "retry", platforms, step: "connect" }, role);
 }
 
 /** Retry refused because the platform's connection needs reconnecting first (RECONNECT_REQUIRED). */
 export function retryReconnectMessage(platforms: readonly Platform[], role: AnswerReader): string {
-  return role === "member"
-    ? `The workspace owner can reconnect ${platformList(platforms)}; then retry.`
-    : `Reconnect ${platformList(platforms)} in Settings before retrying.`;
+  return connectionStepSentence({ form: "retry", platforms, step: "reconnect" }, role);
 }
 
 /**

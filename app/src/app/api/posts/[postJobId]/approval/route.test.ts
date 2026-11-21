@@ -26,7 +26,9 @@ const {
   reserveSendNowMock,
   releaseMock,
   resultCountMock,
+  resultFindManyMock,
 } = vi.hoisted(() => ({
+  resultFindManyMock: vi.fn(),
   reserveSendNowMock: vi.fn(),
   releaseMock: vi.fn(),
   resultCountMock: vi.fn(),
@@ -58,7 +60,7 @@ vi.mock("@/lib/db", () => ({
     // Second review, item 1: a reject ends the post through finishPostJob, which
     // stamps its media (read the post's media, then write lastUsedAt).
     mediaItem: { updateMany: mediaUpdateManyMock },
-    postJobResult: { findFirst: resultFindFirstMock, count: resultCountMock },
+    postJobResult: { findFirst: resultFindFirstMock, count: resultCountMock, findMany: resultFindManyMock },
     $transaction: transactionMock,
   },
 }));
@@ -149,6 +151,9 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  // The failed rows of a post that sent nothing (their codes word the step); none by default.
+  resultFindManyMock.mockReset();
+  resultFindManyMock.mockResolvedValue([]);
   getWorkspaceContextMock.mockReset();
   checkRateLimitMock.mockReset();
   findFirstMock.mockReset();
@@ -339,15 +344,58 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     await expect(res.json()).resolves.toEqual({
       code: "NO_CONNECTIONS",
       error:
-        "Approved, but nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what to reconnect.",
+        "Approved, but nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what to connect or reconnect.",
     });
     expect(inngestSendMock).not.toHaveBeenCalled();
     // R9-client-journey L3: the decision was recorded, so the submitter is told, with why nothing went out.
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sendEmailMock.mock.calls[0][0].subject).toContain("was approved, but nothing was sent");
     expect(sendEmailMock.mock.calls[0][0].html).toContain(
-      "Approved, but nothing was sent: each of this post&#39;s platforms is either not connected or needs reconnecting. The workspace owner can reconnect them in Settings; Activity shows which.",
+      "Approved, but nothing was sent: each of this post&#39;s platforms is either not connected or needs reconnecting. The workspace owner can connect or reconnect them in Settings; Activity shows which.",
     );
+  });
+
+  // R59 pages-a L1: the owner's answer and the member's email word the step
+  // from the failed rows' codes: Connect for no connection, Reconnect for a flagged one.
+  describe("approving with nothing sent: the step from the failed rows' codes", () => {
+    const LEAD = "Approved, but nothing was posted: each of this post's platforms is either not connected or needs reconnecting.";
+    const EMAIL_LEAD = "Approved, but nothing was sent: each of this post&#39;s platforms is either not connected or needs reconnecting.";
+    const cases = {
+      gone: {
+        rows: [{ platform: "x", status: "failed", errorCode: "CONNECTION_GONE" }],
+        answer: `${LEAD} Activity shows what to connect.`,
+        email: `${EMAIL_LEAD} The workspace owner can connect them in Settings; Activity shows which.`,
+      },
+      flagged: {
+        rows: [
+          { platform: "x", status: "failed", errorCode: "RECONNECT_REQUIRED" },
+          { platform: "instagram", status: "failed", errorCode: "RECONNECT_REQUIRED" },
+        ],
+        answer: `${LEAD} Activity shows what to reconnect.`,
+        email: `${EMAIL_LEAD} The workspace owner can reconnect them in Settings; Activity shows which.`,
+      },
+      mixed: {
+        rows: [
+          { platform: "x", status: "failed", errorCode: "CONNECTION_GONE" },
+          { platform: "instagram", status: "failed", errorCode: "RECONNECT_REQUIRED" },
+        ],
+        answer: `${LEAD} Activity shows what to connect or reconnect.`,
+        email: `${EMAIL_LEAD} The workspace owner can connect or reconnect them in Settings; Activity shows which.`,
+      },
+    };
+    for (const [kind, { rows, answer, email }] of Object.entries(cases)) {
+      it(kind, async () => {
+        findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+        prepareDispatchMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+        resultFindManyMock.mockResolvedValue(rows);
+
+        const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+        expect(res.status).toBe(409);
+        expect(await res.json()).toEqual({ code: "NO_CONNECTIONS", error: answer });
+        expect(sendEmailMock.mock.calls[0][0].html).toContain(email);
+      });
+    }
   });
 
   // Review of T1, item 1: the approval stands; the reservation as it went out refused it.

@@ -1,5 +1,6 @@
 import type { Platform } from "@prisma/client";
 
+import { connectionStepSentence, type ConnectionStep } from "./connectionSteps";
 import { platformLabel } from "./platforms";
 
 /**
@@ -9,12 +10,12 @@ import { platformLabel } from "./platforms";
 
 /** A chosen platform whose connection needs reconnecting when the post is sent (H1). */
 export function reconnectRequiredMessage(platform: Platform): string {
-  return `Reconnect ${platformLabel(platform)} in Settings, then retry.`;
+  return connectionStepSentence({ form: "row", platform, step: "reconnect" }, "owner");
 }
 
 /** R9-client-journey L4: the reconnect sentence a member reads; only an owner can reconnect. */
 export function memberReconnectMessage(platform: Platform): string {
-  return `The workspace owner can reconnect ${platformLabel(platform)}; then retry.`;
+  return connectionStepSentence({ form: "row", platform, step: "reconnect" }, "member");
 }
 
 /**
@@ -31,7 +32,7 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
     "LinkedIn refused the post because the connected LinkedIn account is not a Super admin of this company page. A Super admin of the page can add that account as a Super admin (Page admin tools > Manage admins); then the workspace owner can reconnect LinkedIn.";
   return new Map([
     [reconnectRequiredMessage(platform), reconnect],
-    [connectionGoneMessage(platform), `The workspace owner can connect ${label}; then retry.`],
+    [connectionGoneMessage(platform), connectionStepSentence({ form: "row", platform, step: "connect" }, "member")],
     [
       renewalRefusedMessage(platform),
       `${label} didn't renew the connection. Try again later; if it keeps happening, the workspace owner can reconnect ${label}.`,
@@ -167,7 +168,7 @@ export function sentenceForRecipient(
 
 /** A chosen platform with no connection at all when the post is sent (H1). */
 export function connectionGoneMessage(platform: Platform): string {
-  return `${platformLabel(platform)} is no longer connected. Connect it in Settings, then retry.`;
+  return connectionStepSentence({ form: "row", platform, step: "connect" }, "owner");
 }
 
 /** Why "Post now" could not send to a platform when the post was created (G1). */
@@ -213,19 +214,11 @@ export function notSentSentence(
   allFailed: boolean,
   role: "owner" | "member" = "owner",
 ): string {
-  const labelsFor = (reason: NotSentReason) =>
-    notSent.filter((entry) => entry.reason === reason).map((entry) => platformLabel(entry.platform));
-  const reconnect = labelsFor("RECONNECT_REQUIRED");
-  const connect = labelsFor("CONNECTION_GONE");
-  const steps = [
-    ...(reconnect.length > 0 ? [`reconnect ${joinWithAnd(reconnect)}`] : []),
-    ...(connect.length > 0 ? [`connect ${joinWithAnd(connect)}`] : []),
-  ];
-  const what = steps.length > 1 ? `${steps.join(", and ")}, in Settings` : `${steps[0] ?? ""} in Settings`;
-  const action =
-    role === "member"
-      ? `The workspace owner can ${steps.join(", and ")}; then use Retry in Activity.`
-      : `${what.charAt(0).toUpperCase()}${what.slice(1)}, then use Retry in Activity.`;
+  const step = (reason: NotSentReason): ConnectionStep => (reason === "CONNECTION_GONE" ? "connect" : "reconnect");
+  const action = connectionStepSentence(
+    { form: "composer", steps: notSent.map((entry) => ({ platform: entry.platform, step: step(entry.reason) })) },
+    role,
+  );
   const lead = allFailed ? "Nothing was sent" : `Not sent to ${joinWithAnd(notSent.map((entry) => platformLabel(entry.platform)))}`;
   return `${lead}: ${action}`;
 }

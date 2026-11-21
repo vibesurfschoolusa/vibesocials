@@ -14,7 +14,7 @@ import {
 } from "@/server/jobs/mediaRetentionBatch";
 import { drainPendingBlobDeletions } from "@/server/jobs/pendingBlobDeletion";
 import {
-  CONNECTION_GONE_FAILURE,
+  connectionGoneFailure,
   failPendingPostJobResults,
   failPendingResultsIfStillStale,
   finishPostJob,
@@ -583,7 +583,7 @@ async function publishToPlatform({
     if (!connection) {
       await finalizeClaimedResult(resultRecordId, runId, {
         status: "failed",
-        ...CONNECTION_GONE_FAILURE,
+        ...connectionGoneFailure(connectionRef.platform),
       });
       return {
         platform: connectionRef.platform,
@@ -1213,7 +1213,8 @@ export const publishToAllPlatforms = inngest.createFunction(
       // under its row lock (`failed`, also with no results at all). No outcome email,
       // as before.
       await step.run("mark-failed-no-connections", async () => {
-        await failPendingPostJobResults(postJobId, CONNECTION_GONE_FAILURE);
+        // Each row's platform names its own sentence (R59 publishing-flow L1).
+        await failPendingPostJobResults(postJobId, connectionGoneFailure);
       });
       return { error: "No connections" };
     }
@@ -1331,7 +1332,7 @@ export const publishToAllPlatforms = inngest.createFunction(
 
           await finalizeClaimedResult(resultRecord.id, runId, {
             status: "failed",
-            ...CONNECTION_GONE_FAILURE,
+            ...connectionGoneFailure(resultRecord.platform),
           });
           return { platform: resultRecord.platform, status: "failed", error: "Connection gone" };
         },
@@ -1528,8 +1529,8 @@ export const mediaRetentionSweep = inngest.createFunction(
  * Removed connections (2026-11-01 audit): a result outlives its connection
  * (`socialConnectionId` is SET NULL on Disconnect / Switch account). The retry
  * always publishes through the workspace's CURRENT connection for the platform
- * and repoints the result to it; with no usable connection the result is failed
- * with RECONNECT_REQUIRED ("no longer connected") instead of throwing.
+ * and repoints the result to it; with no connection the result is failed
+ * CONNECTION_GONE ("no longer connected. Connect it") instead of throwing.
  *
  * Caption source: unlike the initial publish (which carries caption/overrides
  * in the event payload), a retry re-derives them from the DB — the JOB's own
@@ -1607,11 +1608,13 @@ export const retryPlatforms = inngest.createFunction(
         }),
         // A post without a file (2026-11-10) has no media to load.
         postJob.mediaItemId === null ? null : prisma.mediaItem.findUnique({ where: { id: postJob.mediaItemId } }),
+        // R59 publishing-flow L1: flagged ones too, so publishToPlatform's own
+        // checks word each case: a flagged connection is told to reconnect,
+        // never that it is no longer connected.
         prisma.socialConnection.findMany({
           where: {
             workspaceId: postJob.workspaceId,
             platform: { in: platforms },
-            needsReconnect: false,
           },
           select: { id: true, platform: true },
         }),
@@ -1778,14 +1781,12 @@ export const retryPlatforms = inngest.createFunction(
           if (!connection) {
             // The platform was disconnected since the original post (the result's
             // own `socialConnectionId` is null — SetNull keeps the row when its
-            // connection is removed) and the workspace has no usable connection
-            // for it now; there is no token to publish with. Fail with a
-            // reconnect-shaped code so the UI can point the user at Settings.
+            // connection is removed) and the workspace has no connection for it
+            // now; there is no token to publish with. R59 publishing-flow L1:
+            // CONNECTION_GONE with the Connect sentence, as prepare writes.
             await finalizeClaimedResult(resultRecord.id, runId, {
               status: "failed",
-              errorCode: "RECONNECT_REQUIRED",
-              errorMessage:
-                "This platform is no longer connected. Reconnect it in Settings and try again.",
+              ...connectionGoneFailure(platform),
             });
             return { platform, status: "failed", error: "No connection" };
           }

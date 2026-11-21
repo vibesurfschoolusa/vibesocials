@@ -8,6 +8,7 @@ import {
   deriveApprovalState,
   isAwaitingApprovalDecision,
 } from "@/lib/approval";
+import { connectionStepSentence, type ConnectionStep } from "@/lib/connectionSteps";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -59,10 +60,12 @@ const CHANGED_SINCE_REVIEW_BODY = {
 /** See the sibling routes — generous throttle shared by the DB-only mutations. */
 /**
  * R9-client-journey L3: why nothing went out, in the submitter's decision
- * email. The submitter is a member: only an owner can reconnect.
+ * email. The submitter is a member: only an owner can connect or reconnect.
+ * R59 pages-a L1: the step from the failed rows' codes (dispatchNow's `connectionSteps`).
  */
-const NOT_SENT_NOTHING_CONNECTED =
-  "each of this post's platforms is either not connected or needs reconnecting. The workspace owner can reconnect them in Settings; Activity shows which.";
+function notSentNothingConnected(steps: readonly ConnectionStep[] = []): string {
+  return `each of this post's platforms is either not connected or needs reconnecting. ${connectionStepSentence({ form: "activityEmail", steps }, "member")}`;
+}
 const NOT_SENT_SEND_FAILED = "publishing couldn't start. Open the post in Activity and retry it there.";
 /** R28 publishing L2: the failed start left the post with no results, so Activity offers Send again on it. */
 const NOT_SENT_SEND_FAILED_NO_RESULTS =
@@ -421,7 +424,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         : {},
     );
 
-    if (pair && dispatch.notSent.has(pair.id)) pair = { ...pair, note: notSentNote(pair.kind) };
+    if (pair && dispatch.notSent.has(pair.id)) pair = { ...pair, note: notSentNote(pair.kind, "owner", dispatch.connectionSteps.get(pair.id)) };
     partial = partialSendMessage(postJobId, half, dispatch);
     // Same contract as the publish route: if the events can't be handed to
     // Inngest, the pending results are failed (job → failed) rather than left
@@ -464,11 +467,12 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       // No chosen platform is connected (F1 H1): `prepare` gave each one a
       // failed result with its sentence and marked the job failed, so it never
       // hangs in_progress. The approval itself stands (recorded above).
-      await tellSubmitter(NOT_SENT_NOTHING_CONNECTED);
+      const steps = dispatch.connectionSteps.get(postJobId);
+      await tellSubmitter(notSentNothingConnected(steps));
       return NextResponse.json(
         {
-          error:
-            "Approved, but nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what to reconnect.",
+          // Only an owner approves, so the owner's step.
+          error: `Approved, but nothing was posted: each of this post's platforms is either not connected or needs reconnecting. ${connectionStepSentence({ form: "activity", steps: steps ?? [] }, "owner")}`,
           code: dispatch.reasons.get(postJobId),
           ...(pair ? { otherHalf: pair } : {}),
         },

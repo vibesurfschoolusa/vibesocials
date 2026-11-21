@@ -1,6 +1,7 @@
 import type { Platform, PostJobStatus, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
+import { connectionGoneMessage } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
 
@@ -36,12 +37,17 @@ export const PUBLISH_STALLED_FAILURE = {
  * What a result is failed with when its connection was removed (Disconnect /
  * Switch account) after the job was dispatched (2026-11-02 scale audit,
  * correctness L1). The same code and copy `publishToPlatform` writes when the
- * connection vanishes between the setup step and the publish.
+ * connection vanishes between the setup step and the publish. R59
+ * publishing-flow L1: the platform is connected again, not reconnected
+ * (Settings shows only Connect), so the sentence is prepare's CONNECTION_GONE
+ * one. Rows written before keep their stored "Reconnect and retry." text.
  */
-export const CONNECTION_GONE_FAILURE = {
-  errorCode: "CONNECTION_GONE",
-  errorMessage: "This platform connection was removed. Reconnect and retry.",
-} as const satisfies PendingResultFailure;
+export function connectionGoneFailure(platform: Platform): PendingResultFailure {
+  return { errorCode: "CONNECTION_GONE", errorMessage: connectionGoneMessage(platform) };
+}
+
+/** A failure for every row, or one worded for each row's platform ({@link connectionGoneFailure}). */
+export type PendingFailure = PendingResultFailure | ((platform: Platform) => PendingResultFailure);
 
 /**
  * What a result that a platform step CLAIMED but never finished is failed with
@@ -205,7 +211,7 @@ export async function finishPostJob(
  */
 export async function failPendingPostJobResults(
   postJobId: string,
-  failure: PendingResultFailure,
+  failure: PendingFailure,
   options: { platforms?: Platform[] } = {},
 ): Promise<{ failedCount: number; unconfirmedCount: number; status: PostJobStatus }> {
   const { platforms } = options;
@@ -233,7 +239,7 @@ async function markPendingAndRecompute(
   tx: Prisma.TransactionClient,
   postJobId: string,
   scope: Prisma.PostJobResultWhereInput,
-  failure: PendingResultFailure,
+  failure: PendingFailure,
 ): Promise<{ failedCount: number; unconfirmedCount: number; status: PostJobStatus }> {
   const { count: unconfirmedCount } = await tx.postJobResult.updateMany({
     where: { ...scope, claimRunId: { not: null } },
@@ -243,14 +249,17 @@ async function markPendingAndRecompute(
       errorMessage: PUBLISH_UNCONFIRMED.errorMessage,
     },
   });
-  const { count: failedCount } = await tx.postJobResult.updateMany({
-    where: { ...scope, claimRunId: null },
-    data: {
-      status: "failed",
-      errorCode: failure.errorCode,
-      errorMessage: failure.errorMessage,
-    },
-  });
+  const unclaimed = { ...scope, claimRunId: null };
+  const write = async (where: Prisma.PostJobResultWhereInput, { errorCode, errorMessage }: PendingResultFailure) =>
+    (await tx.postJobResult.updateMany({ where, data: { status: "failed", errorCode, errorMessage } })).count;
+  let failedCount = 0;
+  if (typeof failure === "function") {
+    // One write per platform, so each row names its own platform.
+    const rows = await tx.postJobResult.findMany({ where: unclaimed, select: { platform: true }, distinct: ["platform"] });
+    for (const { platform } of rows) failedCount += await write({ ...unclaimed, platform }, failure(platform));
+  } else {
+    failedCount = await write(unclaimed, failure);
+  }
   const { status } = await recomputeInTransaction(tx, postJobId);
   return { failedCount, unconfirmedCount, status };
 }

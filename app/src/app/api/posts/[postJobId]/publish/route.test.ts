@@ -20,6 +20,7 @@ const {
   transactionMock,
   resultFindFirstMock,
   resultCountMock,
+  resultFindManyMock,
   reserveSendNowMock,
   releaseMock,
 } = vi.hoisted(() => ({
@@ -28,6 +29,7 @@ const {
   transactionMock: vi.fn(),
   resultFindFirstMock: vi.fn(),
   resultCountMock: vi.fn(),
+  resultFindManyMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   findFirstMock: vi.fn(),
@@ -48,7 +50,7 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     postJob: { findFirst: findFirstMock, updateMany: updateManyMock },
     socialConnection: { count: connectionCountMock },
-    postJobResult: { findFirst: resultFindFirstMock, count: resultCountMock },
+    postJobResult: { findFirst: resultFindFirstMock, count: resultCountMock, findMany: resultFindManyMock },
     $transaction: transactionMock,
   },
 }));
@@ -150,6 +152,9 @@ beforeEach(() => {
   }));
   releaseMock.mockReset();
   releaseMock.mockResolvedValue(undefined);
+  // The failed rows of a post that sent nothing (their codes word the step); none by default.
+  resultFindManyMock.mockReset();
+  resultFindManyMock.mockResolvedValue([]);
 
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
 
@@ -444,29 +449,58 @@ describe("POST /api/posts/[postJobId]/publish", () => {
 
     await expect(res.json()).resolves.toEqual({
       code: "NO_CONNECTIONS",
-      error: "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what to reconnect.",
+      error: "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what to connect or reconnect.",
     });
   });
 
   // R52 pages-a L4: prepareDeferredPostJobDispatch answers NO_CONNECTIONS when
   // no row is pending: a chosen platform with no connection (CONNECTION_GONE),
-  // one flagged needsReconnect (RECONNECT_REQUIRED), or a mix. The route sees
-  // only that reason, so one test covers its answer; the three cases
-  // themselves are in server/jobs/deferredDispatch.test.ts ("gives a chosen
-  // platform with no connection a CONNECTION_GONE result and fails the job",
-  // "all dead: every chosen platform gets a failed result with its sentence").
-  it("Publish now answered NO_CONNECTIONS: the sentence names both reasons, for the owner and for a member", async () => {
+  // one flagged needsReconnect (RECONNECT_REQUIRED), or a mix. R59 pages-a L1:
+  // the route reads the failed rows' codes, so the step names what Settings
+  // offers: Connect for no connection, Reconnect for a flagged one.
+  describe("Publish now answered NO_CONNECTIONS: the step from the failed rows' codes", () => {
+    const LEAD = "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting.";
+    const rows = {
+      gone: [
+        { platform: "x", status: "failed", errorCode: "CONNECTION_GONE" },
+        { platform: "instagram", status: "failed", errorCode: "CONNECTION_GONE" },
+      ],
+      flagged: [{ platform: "x", status: "failed", errorCode: "RECONNECT_REQUIRED" }],
+      mixed: [
+        { platform: "x", status: "failed", errorCode: "CONNECTION_GONE" },
+        { platform: "instagram", status: "failed", errorCode: "RECONNECT_REQUIRED" },
+      ],
+    };
+    const expected = {
+      owner: {
+        gone: `${LEAD} Activity shows what to connect.`,
+        flagged: `${LEAD} Activity shows what to reconnect.`,
+        mixed: `${LEAD} Activity shows what to connect or reconnect.`,
+      },
+      member: {
+        gone: `${LEAD} Activity shows what didn't go out; the workspace owner can connect it.`,
+        flagged: `${LEAD} Activity shows what didn't go out; the workspace owner can reconnect it.`,
+        mixed: `${LEAD} Activity shows what didn't go out; the workspace owner can connect or reconnect it.`,
+      },
+    };
     for (const role of ["owner", "member"] as const) {
-      getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role }));
-      findFirstMock.mockResolvedValue({ status: "draft" });
-      prepareDispatchMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+      for (const kind of ["gone", "flagged", "mixed"] as const) {
+        it(`${kind}, ${role}`, async () => {
+          getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role }));
+          findFirstMock.mockResolvedValue({ status: "draft" });
+          prepareDispatchMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+          resultFindManyMock.mockResolvedValue(rows[kind]);
 
-      const res = await POST(req({}), ctx("job-1"));
+          const res = await POST(req({}), ctx("job-1"));
 
-      expect(res.status).toBe(409);
-      const { error } = await res.json();
-      expect(error).toContain("either not connected or needs reconnecting");
-      expect(error).toContain(role === "owner" ? "Activity shows what to reconnect." : "the workspace owner can reconnect it.");
+          expect(res.status).toBe(409);
+          expect(await res.json()).toEqual({ code: "NO_CONNECTIONS", error: expected[role][kind] });
+          expect(resultFindManyMock).toHaveBeenCalledWith({
+            where: { postJobId: "job-1", status: "failed" },
+            select: { platform: true, status: true, errorCode: true },
+          });
+        });
+      }
     }
   });
 
@@ -1467,7 +1501,7 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
 
     expect(res.status).toBe(202);
     expect((await res.json()).message).toBe(
-      "The feed post is being sent. The Story was not: each of its platforms is either not connected or needs reconnecting. Activity shows what to reconnect.",
+      "The feed post is being sent. The Story was not: each of its platforms is either not connected or needs reconnecting. Activity shows what to connect or reconnect.",
     );
   });
 
@@ -1517,10 +1551,10 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
       const body = await (await POST(req({ includePair: true }), ctx("job-1"))).json();
 
       expect(body.message).toBe(
-        "The feed post is being sent. The Story was not: each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it.",
+        "The feed post is being sent. The Story was not: each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can connect or reconnect it.",
       );
       expect(body.otherHalf.note).toBe(
-        "Its Story was not sent: each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it.",
+        "Its Story was not sent: each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can connect or reconnect it.",
       );
     });
 
@@ -1533,7 +1567,7 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
 
       expect(res.status).toBe(409);
       expect((await res.json()).error).toBe(
-        "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it.",
+        "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can connect or reconnect it.",
       );
     });
 

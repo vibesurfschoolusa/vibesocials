@@ -171,7 +171,7 @@ vi.mock("@/server/jobs/failPendingResults", async (importOriginal) => {
 });
 
 import { EmailRetryableError } from "@/server/notifications/email";
-import { CONNECTION_GONE_FAILURE, PUBLISH_STALLED_FAILURE } from "./failPendingResults";
+import { connectionGoneFailure, PUBLISH_STALLED_FAILURE } from "./failPendingResults";
 import {
   failInterruptedPublishRun,
   failInterruptedRetryRun,
@@ -581,8 +581,9 @@ describe("publish heartbeat — finalizing a result bumps PostJob.updatedAt (Tas
       step: fakeStep(),
     });
 
+    // R59 publishing-flow L1: no connection is CONNECTION_GONE, as prepare writes.
     expect(resultWrites()).toEqual([
-      expect.objectContaining({ status: "failed", errorCode: "RECONNECT_REQUIRED", ...HEARTBEAT }),
+      expect.objectContaining({ status: "failed", errorCode: "CONNECTION_GONE", ...HEARTBEAT }),
     ]);
   });
 });
@@ -1305,14 +1306,21 @@ describe("retryPlatforms — a result whose connection was removed (Task 5)", ()
       const out = await retryRun(["x"]);
 
       expect(publishCtxs).toHaveLength(0);
+      // R59 publishing-flow L1: the saved row says Connect.
       expect(resultWrites()).toEqual([
-        expect.objectContaining({ status: "failed", errorCode: "CONNECTION_GONE", ...HEARTBEAT }),
+        expect.objectContaining({
+          status: "failed",
+          errorCode: "CONNECTION_GONE",
+          errorMessage: "X is no longer connected. Connect it in Settings, then retry.",
+          ...HEARTBEAT,
+        }),
       ]);
       expect(out.results).toEqual([{ platform: "x", status: "failed", error: "Connection gone" }]);
     });
   });
 
-  it("fails the result with a clear not-connected error — without throwing — when the platform has no connection", async () => {
+  // R59 publishing-flow L1: no connection is connected again, not reconnected.
+  it("fails the result CONNECTION_GONE with the Connect sentence — without throwing — when the platform has no connection", async () => {
     db.connectionFindMany.mockResolvedValue([]);
     db.resultFindUnique.mockResolvedValue({ status: "pending", socialConnectionId: null });
 
@@ -1323,12 +1331,39 @@ describe("retryPlatforms — a result whose connection was removed (Task 5)", ()
     expect(resultWrites()).toEqual([
       expect.objectContaining({
         status: "failed",
-        errorCode: "RECONNECT_REQUIRED",
-        errorMessage: "This platform is no longer connected. Reconnect it in Settings and try again.",
+        errorCode: "CONNECTION_GONE",
+        errorMessage: "X is no longer connected. Connect it in Settings, then retry.",
         ...HEARTBEAT,
       }),
     ]);
     expect(out.results).toEqual([{ platform: "x", status: "failed", error: "No connection" }]);
+  });
+
+  // R59 publishing-flow L1: the run reads every connection of its platforms,
+  // so a flagged one reaches publishToPlatform's own check and is told to
+  // reconnect, never that it is "no longer connected".
+  it("a flagged connection: the run keeps it, and its row says reconnect, not no longer connected", async () => {
+    db.connectionFindMany.mockResolvedValue([{ id: "conn-x", platform: "x" }]);
+    db.connectionFindUnique.mockResolvedValue({ ...connectionRow("x"), needsReconnect: true });
+    db.resultFindUnique.mockResolvedValue({ status: "pending", socialConnectionId: "conn-x" });
+
+    const out = await retryRun(["x"]);
+
+    expect(db.connectionFindMany).toHaveBeenCalledWith({
+      where: { workspaceId: WORKSPACE.id, platform: { in: ["x"] } },
+      select: { id: true, platform: true },
+    });
+    expect(publishCtxs).toHaveLength(0);
+    expect(resultWrites()).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        errorCode: "RECONNECT_REQUIRED",
+        errorMessage: "This platform needs to be reconnected in Settings before publishing.",
+        ...HEARTBEAT,
+      }),
+    ]);
+    expect(JSON.stringify(resultWrites())).not.toContain("no longer connected");
+    expect(out.results).toEqual([{ platform: "x", status: "failed", error: "Reconnect required" }]);
   });
 });
 
@@ -1343,7 +1378,8 @@ describe("publishToAllPlatforms - a result whose connection was removed after di
     name: "post/publish.requested",
     data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "c", perPlatformOverrides: null },
   };
-  const GONE_MESSAGE = "This platform connection was removed. Reconnect and retry.";
+  // R59 publishing-flow L1: a removed connection is connected again, so the row says Connect.
+  const GONE_MESSAGE = "LinkedIn is no longer connected. Connect it in Settings, then retry.";
 
   type RunOut = {
     status?: string;
@@ -1454,7 +1490,7 @@ describe("publishToAllPlatforms - a result whose connection was removed after di
           ...HEARTBEAT,
         }),
       ]);
-      expect(resultWrites()[1]).toMatchObject(CONNECTION_GONE_FAILURE);
+      expect(resultWrites()[1]).toMatchObject(connectionGoneFailure("linkedin"));
       expect(out.results).toEqual([
         { platform: "x", status: "success" },
         { platform: "linkedin", status: "failed", error: "Connection gone" },
@@ -1595,8 +1631,9 @@ describe("publishToAllPlatforms - a result whose connection was removed after di
 
       expect(step.order).toEqual(["run:fetch-data", "run:mark-failed-no-connections"]);
       expect(failPendingMock).toHaveBeenCalledTimes(1);
-      expect(failPendingMock).toHaveBeenCalledWith("job-1", CONNECTION_GONE_FAILURE);
-      expect(failPendingMock.mock.calls[0][1]).toEqual({
+      // Each row's platform names its own sentence (R59 publishing-flow L1).
+      expect(failPendingMock).toHaveBeenCalledWith("job-1", connectionGoneFailure);
+      expect(failPendingMock.mock.calls[0][1]("linkedin")).toEqual({
         errorCode: "CONNECTION_GONE",
         errorMessage: GONE_MESSAGE,
       });

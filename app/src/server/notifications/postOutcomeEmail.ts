@@ -1,5 +1,6 @@
 import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/client";
 
+import { connectionStepSentence } from "@/lib/connectionSteps";
 import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
 import { isUnconfirmedResult } from "@/lib/postsDto";
@@ -212,13 +213,13 @@ function renderResultRow(result: PostOutcomeResultSummary, recipientRole: "owner
   if (unconfirmed || (result.status === "failed" && result.errorCode === PUBLISH_STALLED_FAILURE.errorCode)) {
     const step = failedRowStep({ unconfirmed }, result.connectionStep != null);
     if (step === "check_platform") return `<li>${label}: ${escapeHtml(PUBLISH_UNCONFIRMED_MESSAGE)}</li>`;
-    const name = escapeHtml(platformLabel(result.platform));
     if (step === "retry") return `<li>${label}: ${stopped} Retry it in Activity.</li>`;
     // No connection is connected, not reconnected: Settings shows only Connect for it.
-    const verb = result.connectionStep === "connect" ? "connect" : "reconnect";
-    return recipientRole === "member"
-      ? `<li>${label}: ${stopped} The workspace owner can ${verb} ${name}; then retry it in Activity.</li>`
-      : `<li>${label}: ${stopped} ${verb === "connect" ? "Connect" : "Reconnect"} ${name} in Settings, then retry it in Activity.</li>`;
+    const sentence = connectionStepSentence(
+      { form: "emailRow", platform: result.platform, step: result.connectionStep === "connect" ? "connect" : "reconnect" },
+      recipientRole,
+    );
+    return `<li>${label}: ${stopped} ${escapeHtml(sentence)}</li>`;
   }
   if (result.status === "success") {
     // R44 publishing L3: the note the Activity card shows, so a success that

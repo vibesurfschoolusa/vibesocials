@@ -1,6 +1,7 @@
 import type { Platform, PostJobStatus, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
+import { connectionStepSentence, stepsForRows, type ConnectionStep } from "@/lib/connectionSteps";
 import { inngest } from "@/lib/inngest";
 import { otherHalfStartText, type FailedStart } from "@/lib/composerSubmitOutcome";
 import { logger } from "@/lib/logger";
@@ -169,9 +170,13 @@ export async function applyToPair<R>(args: {
 /** Who reads an answer: only an owner can connect or reconnect (R11-publishing L1). */
 type ViewerRole = "owner" | "member";
 
-/** The note for a half that was claimed but had no connected platform to go to. */
-export function notSentNote(kind: PairHalf["kind"], role: ViewerRole = "owner"): string {
-  return `Its ${halfName(kind)} was not sent: ${noPlatformConnected(role)}`;
+/**
+ * The note for a half that was claimed but had no connected platform to go to.
+ * `steps`: its failed rows' steps (dispatchNow's `connectionSteps`); none known
+ * reads "connect or reconnect" (R59 pages-a L1).
+ */
+export function notSentNote(kind: PairHalf["kind"], role: ViewerRole = "owner", steps: readonly ConnectionStep[] = []): string {
+  return `Its ${halfName(kind)} was not sent: ${noPlatformConnected(role, steps)}`;
 }
 
 /**
@@ -212,6 +217,12 @@ export type DispatchResult = {
   /** prepare's reason code for each post in `notSent`. */
   reasons: Map<string, string>;
   /**
+   * R59 pages-a L1: for a post in `notSent` with no connection to go to, the
+   * steps its failed rows ask for (from their codes), so the answer says Connect
+   * or Reconnect as Settings does. Missing when the rows couldn't be read.
+   */
+  connectionSteps: Map<string, ConnectionStep[]>;
+  /**
    * Only when some went out and some did not: each one in `notSent`'s first
    * failed result (its sentence as stored, and its platform), or null if none.
    */
@@ -236,10 +247,8 @@ export type DispatchResult = {
   withoutResults: Set<string>;
 };
 
-function noPlatformConnected(role: ViewerRole): string {
-  return role === "member"
-    ? "each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it."
-    : "each of its platforms is either not connected or needs reconnecting. Activity shows what to reconnect.";
+function noPlatformConnected(role: ViewerRole, steps: readonly ConnectionStep[]): string {
+  return `each of its platforms is either not connected or needs reconnecting. ${connectionStepSentence({ form: "activity", steps }, role)}`;
 }
 
 /**
@@ -309,6 +318,7 @@ export async function dispatchNow(
     sent: new Set(),
     notSent: new Set(),
     reasons: new Map(),
+    connectionSteps: new Map(),
     whyNotSent: new Map(),
     limitRefusals: new Map(),
     sendFailed: false,
@@ -365,6 +375,20 @@ export async function dispatchNow(
       if (prep.reason === "LIMIT_REACHED" && prep.refusal) {
         result.limitRefusals.set(id, { error: prep.refusal.errorMessage, code: prep.refusal.errorCode });
       }
+    }
+  }
+  // R59 pages-a L1: what each post with no connection to go to needs, from
+  // its failed rows' codes. Unread, the answer says "connect or reconnect".
+  for (const [id, reason] of result.reasons) {
+    if (reason !== "NO_CONNECTIONS") continue;
+    try {
+      const rows = await prisma.postJobResult.findMany({
+        where: { postJobId: id, status: "failed" },
+        select: { platform: true, status: true, errorCode: true },
+      });
+      result.connectionSteps.set(id, stepsForRows(rows).map((entry) => entry.step));
+    } catch (error) {
+      logger.error(`[${log.route}] Couldn't read why a post was not sent`, { error, postJobId: id });
     }
   }
   // A reserved post with nothing to send after all makes no run.
@@ -452,7 +476,7 @@ export function partialSendMessage(
   const stored = dispatch.whyNotSent.get(notId) ?? null;
   const why = stored
     ? (sentenceForRecipient(stored.errorMessage, stored.platform, role) ?? stored.errorMessage)
-    : noPlatformConnected(role);
+    : noPlatformConnected(role, dispatch.connectionSteps.get(notId) ?? []);
   return `The ${halfName(sentKind)} is being sent. ${capitalized(`the ${halfName(notKind)}`)} was not: ${why}`;
 }
 

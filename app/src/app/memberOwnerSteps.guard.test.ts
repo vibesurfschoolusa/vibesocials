@@ -123,7 +123,8 @@ const OWNER_STEPS: RegExp[] = [
   /\bDisconnect\b/,
   /\bHow to connect\b/,
   /\bChoose (which|the board|a board)\b/,
-  /\bshows what to reconnect\b/,
+  // R59 pages-a L1: worded from the failed rows' codes.
+  /\bshows what to (?:connect or )?(?:re)?connect\b/,
   // R26: the Reviews notices and the Google publish 403s.
   /\bchoose the location from the list in Settings\b/i,
   /(?:^|[.>]\s*)Check in Google Business Profile that this Google account\b/,
@@ -310,6 +311,10 @@ const SURFACES: Record<string, (role: Role) => string | Promise<string>> = {
   "Create, nothing connected (POST /api/posts NO_CONNECTIONS)": (role) => noConnectionsMessage("create", role),
   "Publish now, nothing connected (publish NO_CONNECTIONS)": (role) => noConnectionsMessage("publish", role),
   "Publish now, none of the post's platforms connected (publish 409)": (role) => nothingSentMessage(role),
+  "Publish now, none of the post's platforms connected, all removed (publish 409)": (role) =>
+    nothingSentMessage(role, ["connect"]),
+  "Publish now, none of the post's platforms connected, all flagged (publish 409)": (role) =>
+    nothingSentMessage(role, ["reconnect"]),
   "Retry, the platform needs reconnecting (retry RECONNECT_REQUIRED)": (role) =>
     retryReconnectMessage(["instagram", "facebook_page"], role),
   "Retry, the platform has no connection (retry RECONNECT_REQUIRED, reason connect)": (role) =>
@@ -321,7 +326,7 @@ const ROUTES_USING_THE_HELPERS: Array<[string, string[]]> = [
   ["api/posts/route.ts", ['noConnectionsMessage("create", context.role)']],
   [
     "api/posts/[postJobId]/publish/route.ts",
-    ['noConnectionsMessage("publish", workspaceContext.role)', "nothingSentMessage(workspaceContext.role)"],
+    ['noConnectionsMessage("publish", workspaceContext.role)', "nothingSentMessage(workspaceContext.role, dispatch.connectionSteps.get(postJobId))"],
   ],
   [
     "api/posts/[postJobId]/retry/route.ts",

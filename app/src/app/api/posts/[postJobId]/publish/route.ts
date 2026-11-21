@@ -509,7 +509,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     { reserved: { ...reservation.reserved, postJobIds: reservation.reserved.postJobIds.filter((id) => claimed.includes(id)) } },
   );
 
-  if (pair && dispatch.notSent.has(pair.id)) pair = { ...pair, note: notSentNote(pair.kind, workspaceContext.role) };
+  if (pair && dispatch.notSent.has(pair.id)) {
+    pair = { ...pair, note: notSentNote(pair.kind, workspaceContext.role, dispatch.connectionSteps.get(pair.id)) };
+  }
   const pairAnswer = pair ? { otherHalf: pair } : {};
   // One half went out and the other had nothing to send: a success that says both.
   const partial = partialSendMessage(postJobId, half, dispatch, workspaceContext.role);
@@ -546,7 +548,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     // hangs in_progress and Activity lists what did not go out.
     return NextResponse.json(
       {
-        error: nothingSentMessage(workspaceContext.role),
+        // R59 pages-a L1: the step from the failed rows' codes (Connect or Reconnect).
+        error: nothingSentMessage(workspaceContext.role, dispatch.connectionSteps.get(postJobId)),
         code: dispatch.reasons.get(postJobId),
         ...pairAnswer,
       },

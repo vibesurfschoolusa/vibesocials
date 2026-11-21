@@ -9,10 +9,12 @@ const {
   withdrawSendMock,
   resultFindFirstMock,
   resultCountMock,
+  resultFindManyMock,
   reserveMock,
   canSendMock,
 } =
   vi.hoisted(() => ({
+    resultFindManyMock: vi.fn(),
     resultCountMock: vi.fn(),
     reserveMock: vi.fn(),
     canSendMock: vi.fn(),
@@ -30,7 +32,7 @@ const TX = { tx: true };
 vi.mock("@/lib/db", () => ({
   prisma: {
     postJob: { findFirst: findFirstMock },
-    postJobResult: { findFirst: resultFindFirstMock, count: resultCountMock },
+    postJobResult: { findFirst: resultFindFirstMock, count: resultCountMock, findMany: resultFindManyMock },
     $transaction: transactionMock,
   },
 }));
@@ -48,6 +50,7 @@ vi.mock("@/server/jobs/failPendingResults", async (importOriginal) => ({
 vi.mock("@/server/usage/usageLog", () => ({ withdrawSend: withdrawSendMock, reserveFreeRuns: reserveMock }));
 
 import { prisma } from "@/lib/db";
+import type { ConnectionStep } from "@/lib/connectionSteps";
 
 import {
   applyToPair,
@@ -585,11 +588,15 @@ describe("dispatchNow - with the route's reservation", () => {
 
 // R11-publishing L1: the answer to Publish now / Send again is worded for its reader.
 describe("partialSendMessage and notSentNote - worded for the viewer's role", () => {
-  const dispatch = (why: Map<string, { errorMessage: string; platform: "facebook_page" } | null>) => ({
+  const dispatch = (
+    why: Map<string, { errorMessage: string; platform: "facebook_page" } | null>,
+    connectionSteps: Map<string, ConnectionStep[]> = new Map(),
+  ) => ({
     sent: new Set(["feed-1"]),
     notSent: new Set(["story-1"]),
     reasons: new Map([["story-1", "NO_CONNECTIONS"]]),
     whyNotSent: why,
+    connectionSteps,
     limitRefusals: new Map(),
     sendFailed: false,
     resultsMarked: true,
@@ -610,23 +617,68 @@ describe("partialSendMessage and notSentNote - worded for the viewer's role", ()
     );
   });
 
-  it("no stored sentence: owner is pointed at Activity to reconnect; member is told the owner can", () => {
+  // R59 pages-a L1: the step is worded from the half's failed rows; not known, "connect or reconnect".
+  it("no stored sentence: owner is pointed at Activity for the step; member is told the owner can", () => {
     const none = new Map([["story-1", null]]);
     expect(partialSendMessage("feed-1", half(), dispatch(none), "owner")).toBe(
-      "The feed post is being sent. The Story was not: each of its platforms is either not connected or needs reconnecting. Activity shows what to reconnect.",
+      "The feed post is being sent. The Story was not: each of its platforms is either not connected or needs reconnecting. Activity shows what to connect or reconnect.",
     );
     expect(partialSendMessage("feed-1", half(), dispatch(none), "member")).toBe(
-      "The feed post is being sent. The Story was not: each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it.",
+      "The feed post is being sent. The Story was not: each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can connect or reconnect it.",
+    );
+    const gone = new Map([["story-1", ["connect" as const]]]);
+    expect(partialSendMessage("feed-1", half(), dispatch(none, gone), "owner")).toBe(
+      "The feed post is being sent. The Story was not: each of its platforms is either not connected or needs reconnecting. Activity shows what to connect.",
     );
   });
 
-  it("notSentNote: owner and member forms", () => {
-    expect(notSentNote("story", "owner")).toBe(
-      "Its Story was not sent: each of its platforms is either not connected or needs reconnecting. Activity shows what to reconnect.",
+  it("notSentNote: owner and member forms, for each reason", () => {
+    const LEAD = "Its Story was not sent: each of its platforms is either not connected or needs reconnecting.";
+    expect(notSentNote("story", "owner", ["reconnect"])).toBe(`${LEAD} Activity shows what to reconnect.`);
+    expect(notSentNote("story", "member", ["reconnect"])).toBe(
+      `${LEAD} Activity shows what didn't go out; the workspace owner can reconnect it.`,
     );
-    expect(notSentNote("story", "member")).toBe(
-      "Its Story was not sent: each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can reconnect it.",
+    expect(notSentNote("story", "owner", ["connect"])).toBe(`${LEAD} Activity shows what to connect.`);
+    expect(notSentNote("story", "member", ["connect"])).toBe(
+      `${LEAD} Activity shows what didn't go out; the workspace owner can connect it.`,
     );
+    expect(notSentNote("story", "owner")).toBe(`${LEAD} Activity shows what to connect or reconnect.`);
+  });
+
+  it("dispatchNow reads each unsent post's failed rows for its steps, whether or not anything went out", async () => {
+    prepareMock.mockReset();
+    prepareMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+    resultFindManyMock.mockReset();
+    resultFindManyMock.mockImplementation(async ({ where }: { where: { postJobId: string } }) =>
+      where.postJobId === "feed-1"
+        ? [
+            { platform: "x", status: "failed", errorCode: "CONNECTION_GONE" },
+            { platform: "instagram", status: "failed", errorCode: "RECONNECT_REQUIRED" },
+          ]
+        : [{ platform: "x", status: "failed", errorCode: "CONNECTION_GONE" }],
+    );
+
+    const result = await dispatchNow(["feed-1", "story-1"], { route: "test" });
+
+    expect(resultFindManyMock).toHaveBeenCalledWith({
+      where: { postJobId: "feed-1", status: "failed" },
+      select: { platform: true, status: true, errorCode: true },
+    });
+    expect(result.connectionSteps.get("feed-1")).toEqual(["connect", "reconnect"]);
+    expect(result.connectionSteps.get("story-1")).toEqual(["connect"]);
+  });
+
+  it("dispatchNow: rows that can't be read leave the steps unknown", async () => {
+    prepareMock.mockReset();
+    prepareMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+    resultFindManyMock.mockReset();
+    resultFindManyMock.mockRejectedValue(new Error("db blip"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await dispatchNow(["feed-1"], { route: "test" });
+
+    expect(result.notSent.has("feed-1")).toBe(true);
+    expect(result.connectionSteps.has("feed-1")).toBe(false);
   });
 
   it("dispatchNow keeps the platform of the first failed result with its sentence", async () => {
@@ -706,6 +758,7 @@ describe("failedStartAnswer", () => {
     sent: new Set<string>(),
     notSent: new Set(over.notSent ?? []),
     reasons: new Map(),
+    connectionSteps: new Map(),
     whyNotSent: new Map(),
     limitRefusals: new Map(),
     sendFailed: true,

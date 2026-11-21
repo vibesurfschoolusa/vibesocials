@@ -1,5 +1,6 @@
 import type { Platform } from "@prisma/client";
 
+import { connectionStepSentence, type ConnectionStep } from "./connectionSteps";
 import { platformLabel } from "./platforms";
 
 /**
@@ -16,7 +17,7 @@ import { platformLabel } from "./platforms";
  * "reconnect": Settings shows only Connect for it, and the failed row already
  * says "Connect it in Settings, then retry." A flagged connection is "reconnect".
  */
-export type ConnectionStep = "connect" | "reconnect";
+export type { ConnectionStep };
 export type LeftOutReason = "unconfirmed" | ConnectionStep;
 export type LeftOut = { platform: Platform; reason: LeftOutReason };
 
@@ -73,9 +74,7 @@ export function leftOutSentence(leftOut: readonly LeftOut[], role: "owner" | "me
     .map(({ platform, reason }) =>
       reason === "unconfirmed"
         ? `${platformLabel(platform)} left out: check whether it posted first.`
-        : role === "member"
-          ? `${platformLabel(platform)} left out: the workspace owner can ${reason} it.`
-          : `${platformLabel(platform)} left out: ${reason} it in Settings.`,
+        : connectionStepSentence({ form: "leftOut", platform, step: reason }, role),
     )
     .join(" ");
 }
