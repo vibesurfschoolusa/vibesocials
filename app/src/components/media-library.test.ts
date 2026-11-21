@@ -233,3 +233,55 @@ describe("Media: a lost answer may have gone through", () => {
     expect(forget).toMatch(/next\.delete\(id\)/);
   });
 });
+
+// R57 client-journey-2 L1: the card is the only place the owner reads a
+// client's upload note, so the note and the sender are shown whole.
+describe("MediaCard: a client's upload", () => {
+  const base = {
+    id: "m2",
+    originalFilename: "beach.jpg",
+    mimeType: "image/jpeg",
+    sizeBytes: 1234,
+    baseCaption: "",
+    storageLocation: "https://blob.example/b.jpg",
+    createdAt: "2026-11-10T10:00:00.000Z",
+    lastUsedAt: null,
+  };
+  const card = (extra: Record<string, unknown>) =>
+    renderToStaticMarkup(
+      createElement(MediaCard, {
+        item: { ...base, ...extra } as never,
+        onReuse: () => {},
+        onDeleteRequest: () => {},
+        selected: false,
+        canSelect: true,
+        onToggleSelect: () => {},
+      }),
+    );
+
+  it("a 200-character note renders whole, wrapping, never clamped", () => {
+    const note = "Morning lesson at the north jetty, please post before noon. ".repeat(4).slice(0, 200);
+    const html = card({ clientSenderName: "Maria", clientNote: note });
+    const paragraph = /<p class="([^"]*)">([^<]*)<\/p>/g;
+    const noteTag = [...html.matchAll(paragraph)].find((m) => m[2] === note);
+    expect(noteTag).toBeDefined();
+    expect(noteTag?.[1]).not.toMatch(/line-clamp|truncate/);
+    expect(noteTag?.[1]).toMatch(/whitespace-pre-line/);
+    expect(noteTag?.[1]).toMatch(/break-words/);
+  });
+
+  it("a long sender name renders whole and wraps", () => {
+    const name = "Maria Fernanda de la Cruz Lopez-Hernandez from the Surf Club";
+    const html = card({ clientSenderName: name, clientNote: null });
+    const sender = /<p class="([^"]*)">From <!-- -->([^<]*)<\/p>/.exec(html);
+    expect(sender?.[2]).toBe(name);
+    expect(sender?.[1]).not.toMatch(/truncate/);
+    expect(sender?.[1]).toMatch(/break-words/);
+  });
+
+  it("an upload with no note shows the sender line only, as now", () => {
+    const html = card({ clientSenderName: null, clientNote: null });
+    expect(html).toContain("your client</p>");
+    expect(html).not.toContain("whitespace-pre-line");
+  });
+});
