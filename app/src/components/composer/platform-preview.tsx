@@ -131,7 +131,7 @@ export function PlatformPreviewList({
     <div className="space-y-2">
       <h2 className="text-sm font-medium text-foreground">Preview</h2>
       <p className="text-xs text-muted-foreground">
-        How this post will look on each connected platform.
+        How this post will look on each platform it goes to.
       </p>
       {platforms.length === 1 ? (
         card

@@ -164,6 +164,45 @@ export function automaticCaptionRefusedText(routeSentence: string): string {
 }
 
 /**
+ * The banner after Post. R57 publishing-flow-2 L1: a repeating schedule made
+ * `seriesCount` posts (the answer's series.count), so it says how many; L2:
+ * Post now goes to the platforms ticked, not every connected one.
+ */
+export function submittedBanner(args: {
+  mode: PublishMode;
+  awaitingApproval: boolean;
+  seriesCount: number | null;
+}): { title: string; text: string } {
+  const series = args.seriesCount !== null && args.seriesCount > 1 ? args.seriesCount : null;
+  if (args.awaitingApproval) {
+    return {
+      title: "Sent for approval",
+      text: series
+        ? `${series} posts sent for approval. An owner will review each one before anything publishes. You can follow their status in the Queue.`
+        : "An owner will review it before anything publishes. You can follow its status in the Queue.",
+    };
+  }
+  if (args.mode === "draft") {
+    return { title: "Draft saved", text: "Your draft is saved. Publish or schedule it any time from the Queue." };
+  }
+  if (args.mode === "schedule") {
+    return series
+      ? {
+          title: "Posts scheduled",
+          text: `${series} posts scheduled. We'll publish each one at its own time. Edit or cancel them from the Queue until then.`,
+        }
+      : {
+          title: "Post scheduled",
+          text: "We'll publish this at the time you chose. Edit or cancel it from the Queue until then.",
+        };
+  }
+  return {
+    title: "Post queued",
+    text: "We're publishing to the platforms you chose. Per-platform results appear in Activity.",
+  };
+}
+
+/**
  * Posts without a photo (2026-11-10): the page is writing a text post when no
  * file is attached and no library item is still loading (`?mediaItemId=`).
  */
@@ -1253,6 +1292,8 @@ function CreatePostFormInner({
   // Approval workflow — set from the create response so the success copy tells
   // the truth for a held post (nothing is queued or scheduled yet).
   const [awaitingApproval, setAwaitingApproval] = useState(false);
+  // R57 publishing-flow-2 L1: how many posts a repeating schedule made, for the banner.
+  const [submittedSeriesCount, setSubmittedSeriesCount] = useState<number | null>(null);
   // Final review M3 — the post was saved but its publishing never started
   // (503 DISPATCH_FAILED): the banner points at Activity to retry it, in the
   // outcome's own sentence, so it matches the toast (KK4). Null otherwise.
@@ -2533,6 +2574,11 @@ function CreatePostFormInner({
       setNotSent(postNotSent);
       setDispatchFailed(outcome.kind === "dispatch_failed" ? outcome.toast : null);
       setAwaitingApproval(outcome.kind === "success" && outcome.heldForApproval);
+      const seriesCount =
+        "repeatAt" in repeatFields && outcome.kind === "success"
+          ? (data as { series?: { count?: unknown } } | null)?.series?.count
+          : null;
+      setSubmittedSeriesCount(typeof seriesCount === "number" ? seriesCount : null);
       setSubmittedMode(publishMode);
       setSubmittedToTikTok(tiktokSelected);
       setShowSuccess(true);
@@ -2771,6 +2817,7 @@ function CreatePostFormInner({
 
   // G1 review: what the confirmation says about platforms not sent.
   const banner = notSentBanner(notSent);
+  const submittedText = submittedBanner({ mode: submittedMode, awaitingApproval, seriesCount: submittedSeriesCount });
 
   // Review of R29 pages L6: the first child of every view below, so React
   // keeps this one region mounted while the views change around it.
@@ -2920,28 +2967,9 @@ function CreatePostFormInner({
 
         {showSuccess && !dispatchFailed && banner?.kind !== "warning" && (
           <div ref={successRef} className="scroll-mt-24">
-            <Alert
-              variant="success"
-              title={
-                awaitingApproval
-                  ? "Sent for approval"
-                  : submittedMode === "draft"
-                    ? "Draft saved"
-                    : submittedMode === "schedule"
-                      ? "Post scheduled"
-                      : "Post queued"
-              }
-            >
+            <Alert variant="success" title={submittedText.title}>
               <div className="flex flex-col items-start gap-2">
-                <p>
-                  {awaitingApproval
-                    ? "An owner will review it before anything publishes. You can follow its status in the Queue."
-                    : submittedMode === "draft"
-                      ? "Your draft is saved. Publish or schedule it any time from the Queue."
-                      : submittedMode === "schedule"
-                        ? "We'll publish this at the time you chose. Edit or cancel it from the Queue until then."
-                        : "We're publishing to your connected platforms. Per-platform results appear in Activity."}
-                </p>
+                <p>{submittedText.text}</p>
                 {banner?.kind === "line" ? <p>{banner.text}</p> : null}
                 {submittedToTikTok && submittedMode !== "draft" && !awaitingApproval ? (
                   <p>
