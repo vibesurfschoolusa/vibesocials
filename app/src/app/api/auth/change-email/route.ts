@@ -103,6 +103,11 @@ export async function POST(request: Request) {
       (await prisma.user.findUnique({ where: { email: newEmail }, select: { id: true } })) ||
       (await addressHeldUntil(prisma, newEmail, now));
     if (taken) {
+      // No email goes out, so none can be accepted: an earlier change to
+      // another address is retired here too (R57 new-customer L1, below).
+      await prisma.emailChangeRequest.deleteMany({
+        where: { userId: user.id, usedAt: null, newEmail: { not: newEmail } },
+      });
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
@@ -117,12 +122,19 @@ export async function POST(request: Request) {
       select: { id: true, createdAt: true },
     });
 
-    // Only the newest link works, as with the other account links, but the
-    // previous pending change is retired only once this email is accepted
-    // (R56 new-customer L1, as lib/accountToken.ts issueAccountToken): by
-    // createdAt, so two requests at once can't retire each other's.
+    // Only the newest link works, as with the other account links. A pending
+    // change to another address is retired now, whatever the send's result:
+    // that address may be a typo this request corrects, and its link could
+    // move the account to a stranger's mailbox (R57 new-customer L1). One to
+    // this same address goes to the same mailbox, so it is retired only once
+    // this email is accepted (R56 new-customer L1, as lib/accountToken.ts
+    // issueAccountToken). Both by createdAt, so two requests at once can't
+    // retire each other's.
     let delivered = false;
     try {
+      await prisma.emailChangeRequest.deleteMany({
+        where: { userId: user.id, usedAt: null, newEmail: { not: newEmail }, createdAt: { lt: created.createdAt } },
+      });
       delivered = await deliverAccountEmail(
         newEmail,
         buildEmailChangeEmail({ to: newEmail, rawToken: raw, baseUrl: process.env.NEXTAUTH_URL ?? "" }),
