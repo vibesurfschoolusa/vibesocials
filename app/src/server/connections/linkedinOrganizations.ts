@@ -114,17 +114,22 @@ export const LINKEDIN_LOOKUP_TIMEOUT_MS = 15_000;
  * runs after organizationAcls failed, when LinkedIn is most likely to refuse
  * (403 during the Standard tier review), rate-limit or time out; telling the
  * owner to check an address that was right is wrong. So "not found" is only
- * LinkedIn's own answer that there is no such page (a 404, or a 2xx with no
- * organization in it); any other status, an unreadable body, a timeout or a
- * throw is "failed".
+ * LinkedIn's own answer that there is no such page or that the address is bad
+ * (a 404 or a 400; the address is the only part of the request that varies),
+ * or the vanity search's empty `elements`. Any other status, an answer we
+ * can't read as an organization, a timeout or a throw is "failed" (R54 fix
+ * review L1: an unreadable answer says nothing about the address).
  */
 export type OrganizationLookup =
   | { outcome: "found"; organization: LinkedInOrganizationDetails }
   | { outcome: "not_found" }
   | { outcome: "failed" };
 
-const lookedUp = (organization: LinkedInOrganizationDetails | null): OrganizationLookup =>
-  organization ? { outcome: "found", organization } : { outcome: "not_found" };
+const readOrFailed = (organization: LinkedInOrganizationDetails | null): OrganizationLookup =>
+  organization ? { outcome: "found", organization } : { outcome: "failed" };
+
+const refusedOutcome = (status: number): OrganizationLookup =>
+  status === 404 || status === 400 ? { outcome: "not_found" } : { outcome: "failed" };
 
 /**
  * `GET /rest/organizations/{id}`: the page's details, or why there are none.
@@ -144,9 +149,9 @@ export async function lookupOrganizationOutcome(
     );
     if (!response.ok) {
       console.log("[LinkedIn OAuth] Organization lookup failed", { orgId: id, status: response.status });
-      return response.status === 404 ? { outcome: "not_found" } : { outcome: "failed" };
+      return refusedOutcome(response.status);
     }
-    return lookedUp(readOrganization(await response.json(), id));
+    return readOrFailed(readOrganization(await response.json(), id));
   } catch (error) {
     console.log("[LinkedIn OAuth] Organization lookup error", { orgId: id, ...errorKind(error) });
     return { outcome: "failed" };
@@ -180,10 +185,11 @@ export async function lookupOrganizationByVanityNameOutcome(
     );
     if (!response.ok) {
       console.log("[LinkedIn OAuth] Vanity name lookup failed", { status: response.status });
-      return response.status === 404 ? { outcome: "not_found" } : { outcome: "failed" };
+      return refusedOutcome(response.status);
     }
     const elements = asRecord(await response.json())?.elements;
-    return lookedUp(Array.isArray(elements) ? readOrganization(elements[0]) : null);
+    if (Array.isArray(elements) && elements.length === 0) return { outcome: "not_found" };
+    return readOrFailed(Array.isArray(elements) ? readOrganization(elements[0]) : null);
   } catch (error) {
     console.log("[LinkedIn OAuth] Vanity name lookup error", errorKind(error));
     return { outcome: "failed" };

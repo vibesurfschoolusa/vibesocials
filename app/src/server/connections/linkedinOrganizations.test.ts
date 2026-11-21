@@ -360,6 +360,46 @@ describe("lookupOrganizationOutcome", () => {
   });
 });
 
+// R54 fix review L1: only LinkedIn's own "no such page" is not_found. An
+// answer we can't read says nothing about the address; a 400 says the address
+// (the only part of the request that varies) is wrong.
+const vanityAnswers: [string, () => Response, "not_found" | "failed"][] = [
+  ["a 200 with no elements", () => json({}), "failed"],
+  ["a 200 whose elements isn't an array", () => json({ elements: { id: 888 } }), "failed"],
+  ["a 200 whose first element is null", () => json({ elements: [null] }), "failed"],
+  ["a 200 whose first element has no id", () => json({ elements: [{ localizedName: "Acme" }] }), "failed"],
+  ["a 200 with empty elements", () => json({ elements: [] }), "not_found"],
+  ["a 400", () => json({ message: "Bad request" }, 400), "not_found"],
+];
+const idAnswers: [string, () => Response, "not_found" | "failed"][] = [
+  ["a 200 whose body is null", () => json(null), "failed"],
+  ["a 200 whose body is an array", () => json([]), "failed"],
+  ["a 400", () => json({ message: "Bad request" }, 400), "not_found"],
+];
+
+describe("an answer the lookups can't read", () => {
+  it.each(vanityAnswers)("vanity name, %s", async (_kind, answer, outcome) => {
+    stubFetch(answer);
+    expect(await lookupOrganizationByVanityNameOutcome("tok", "acme-surf")).toEqual({ outcome });
+  });
+
+  it.each(idAnswers)("numeric id, %s", async (_kind, answer, outcome) => {
+    stubFetch(answer);
+    expect(await lookupOrganizationOutcome("tok", "777")).toEqual({ outcome });
+  });
+
+  it("the null-returning lookups answer null for every one of them", async () => {
+    for (const [kind, answer] of vanityAnswers) {
+      stubFetch(answer);
+      expect(await lookupOrganizationByVanityName("tok", "acme-surf"), kind).toBeNull();
+    }
+    for (const [kind, answer] of idAnswers) {
+      stubFetch(answer);
+      expect(await lookupOrganization("tok", "777"), kind).toBeNull();
+    }
+  });
+});
+
 // The daily sweep, the admin pages listing and the callback's previous-page
 // check still read null for anything but a page, exactly as before.
 describe("the null-returning lookups answer as before", () => {
