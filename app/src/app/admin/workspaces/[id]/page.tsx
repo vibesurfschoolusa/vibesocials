@@ -9,6 +9,7 @@ import { PLAN_STATE_LABELS } from "@/lib/billing";
 import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
 import { tooManyTriesSentence } from "@/lib/tooManyTriesText";
 import { checkAdminRateLimit, getOperator } from "@/lib/operator";
+import { countWord } from "@/lib/plural";
 import { platformLabel } from "@/lib/platforms";
 import { formatStorageGb, type WorkspaceLimits } from "@/lib/usageLimits";
 import { LIMIT_FIELDS, LIMIT_MAX, type LimitField } from "@/server/admin/actions";
@@ -133,7 +134,7 @@ export default async function AdminWorkspacePage({ params }: { params: Promise<{
             <dt className="text-xs text-muted-foreground">Connected</dt>
             <dd>
               {workspace.platforms.length ? workspace.platforms.map(platformLabel).join(", ") : "Nothing connected"}
-              {workspace.reconnectCount > 0 ? ` (${workspace.reconnectCount} need reconnecting)` : ""}
+              {workspace.reconnectCount > 0 ? ` (${workspace.reconnectCount} ${countWord(workspace.reconnectCount, "needs", "need")} reconnecting)` : ""}
             </dd>
           </div>
         </dl>

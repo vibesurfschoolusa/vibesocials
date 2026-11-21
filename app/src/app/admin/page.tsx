@@ -10,6 +10,7 @@ import { PLAN_STATE_LABELS } from "@/lib/billing";
 import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
 import { tooManyTriesSentence } from "@/lib/tooManyTriesText";
 import { checkAdminRateLimit, getOperator } from "@/lib/operator";
+import { countWord } from "@/lib/plural";
 import { platformLabel } from "@/lib/platforms";
 import { formatStorageGb } from "@/lib/usageLimits";
 import { ADMIN_SEARCH_MAX_LENGTH, listAdminWorkspaces, type AdminWorkspaceRow } from "@/server/admin/queries";
@@ -71,7 +72,7 @@ function WorkspaceRowCard({ row }: { row: AdminWorkspaceRow }) {
           <dt className="text-xs text-muted-foreground">Connected</dt>
           <dd>
             {row.platforms.length ? row.platforms.map(platformLabel).join(", ") : "Nothing connected"}
-            {row.reconnectCount > 0 ? ` (${row.reconnectCount} need reconnecting)` : ""}
+            {row.reconnectCount > 0 ? ` (${row.reconnectCount} ${countWord(row.reconnectCount, "needs", "need")} reconnecting)` : ""}
           </dd>
         </div>
       </dl>
