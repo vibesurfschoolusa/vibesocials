@@ -23,6 +23,7 @@ import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { MULTI_PHOTO_MIME_TYPES } from "@/lib/postMedia";
 import type { PostCover } from "@/lib/videoCover";
 import { instagramImageUrl } from "./instagramPhoto";
+import { hashtagsIn } from "@/lib/hashtags";
 import { classifyRateLimit } from "./rateLimited";
 
 /**
@@ -178,10 +179,10 @@ export function computeInstagramCaption(caption: string): string {
 export const INSTAGRAM_MAX_HASHTAGS = 30;
 export const INSTAGRAM_MAX_MENTIONS = 20;
 
-// A tag starts the text or follows a character that cannot be part of a word,
-// so "C#", "issue#4", "&#39;" and "hello@example.com" are not tags. A username
-// never ends with a period, so "@sam." at the end of a sentence is "@sam".
-const HASHTAG_PATTERN = /(?<![\p{L}\p{N}_&#])#[\p{L}\p{N}_]+/gu;
+// A tag follows the shared rule (lib/hashtags.ts). A mention, likewise, starts
+// the text or follows a character that cannot be part of a word, so
+// "hello@example.com" is not one. A username never ends with a period, so
+// "@sam." at the end of a sentence is "@sam".
 const MENTION_PATTERN = /(?<![\p{L}\p{N}_.@])@([A-Za-z0-9_](?:[A-Za-z0-9._]*[A-Za-z0-9_])?)/gu;
 
 /**
@@ -199,7 +200,7 @@ export function fitInstagramTags(caption: string): {
 } {
   let text = caption;
 
-  const allTags = [...text.matchAll(HASHTAG_PATTERN)];
+  const allTags = hashtagsIn(text);
   const extraTags = allTags.slice(INSTAGRAM_MAX_HASHTAGS);
   // Named once each, ignoring case, and never a tag the post still carries.
   const kept = new Set(allTags.slice(0, INSTAGRAM_MAX_HASHTAGS).map((match) => match[0].toLowerCase()));

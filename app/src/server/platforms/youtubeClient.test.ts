@@ -2481,6 +2481,18 @@ describe("buildYouTubeVideoResource — text YouTube accepts", () => {
     expect(resourceFor({ caption: "Book at site.com#book" }).snippet.tags).toBeUndefined();
   });
 
+  // Coordinator decision (R58 platform-clients L1): a link's #fragment is not a
+  // YouTube tag, so links are left out before the shared hashtag rule reads the caption.
+  it("drops a #fragment in a link with or without a scheme, and keeps the tags around it", () => {
+    expect(resourceFor({ caption: "Book at site.com/#book #surf" }).snippet.tags).toEqual(["surf"]);
+    expect(resourceFor({ caption: "Book at https://site.com/#book, then #surf" }).snippet.tags).toEqual(["surf"]);
+    expect(resourceFor({ caption: "www.site.com/#book" }).snippet.tags).toBeUndefined();
+  });
+
+  it("keeps a plain #surf as it was", () => {
+    expect(resourceFor({ caption: "Morning session #surf" }).snippet.tags).toEqual(["surf"]);
+  });
+
   it("fits accented tags to the 500-character limit too", () => {
     // 60 tags of 11 characters ("olaséxito01".."olaséxito60"): 41 fit, as with ASCII tags.
     const names = Array.from({ length: 60 }, (_, i) => `olaséxito${String(i + 1).padStart(2, "0")}`);

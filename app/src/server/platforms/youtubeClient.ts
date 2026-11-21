@@ -45,6 +45,7 @@ import {
 } from "./largeUpload";
 import { COVER_REQUEST_TIMEOUT_MS, fetchCoverImage } from "./coverImage";
 import { budgetedTimeout, PUBLISH_BUDGET_EXCEEDED_CODE, remainingMs } from "./publishBudget";
+import { hashtagsIn } from "@/lib/hashtags";
 import { classifyRateLimit, isRateLimitedError, readGoogleErrorBody } from "./rateLimited";
 import { isNeverConnectedFetchError } from "./transientRetry";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
@@ -232,12 +233,18 @@ export function computeYouTubeTitle(
 const YOUTUBE_TAGS_MAX_CHARS = 500;
 
 /**
- * R58 platform-clients L1: Instagram's hashtag rule (instagramClient.ts), so
- * accented tags (#niños) are kept whole. A tag starts the text or follows a
- * character that cannot be part of a word, so "site.com/#book", "C#" and
- * "&#39;" are not tags.
+ * R58 platform-clients L1: a link, with or without its scheme
+ * ("https://site.com/#book", "www.site.com/#book", "site.com/#book"). Its
+ * #fragment is not a YouTube tag, so links are left out before the shared
+ * hashtag rule reads the caption. (Instagram keeps every #word: Instagram
+ * itself makes one a hashtag.)
  */
-const HASHTAG_PATTERN = /(?<![\p{L}\p{N}_&#])#[\p{L}\p{N}_]+/gu;
+const LINK_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S+|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+\/\S*/giu;
+
+/** The caption's hashtags as tags, without the "#", links left out. */
+function youtubeHashtags(caption: string): string[] {
+  return hashtagsIn(caption.replace(LINK_PATTERN, " ")).map((match) => match[0].substring(1));
+}
 
 function fitYouTubeTags(tags: readonly string[]): string[] {
   const kept: string[] = [];
@@ -266,8 +273,7 @@ export function buildYouTubeVideoResource(ctx: PublishContext): {
   const { caption } = ctx;
 
   // Hashtags in the caption become tags, as many as fit YouTube's 500 characters.
-  const hashtagMatches = caption.match(HASHTAG_PATTERN) || [];
-  const tags = fitYouTubeTags(hashtagMatches.map((tag) => tag.substring(1))); // Remove # prefix
+  const tags = fitYouTubeTags(youtubeHashtags(caption));
 
   // YouTube video metadata: the post's base caption for the title (no
   // footer), the full caption for the description (with footer).
