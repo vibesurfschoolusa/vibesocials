@@ -62,7 +62,9 @@ export function WorkspacePausedBanner({
       // The existing route, with its own per-person limit of 3 in 15 minutes.
       const response = await fetchOrNoAnswer("/api/auth/resend-verification", { method: "POST" });
       if (response.ok) {
-        success("We sent a new link. Open it from your inbox to start posting.");
+        // R55 new-customer-2 L1: the route answers 200 only once the email went,
+        // and each resend cancels the unused link before it.
+        success("We sent a new link. If you have more than one, open the newest: only its link works.");
       } else {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         error(data?.error ?? "Could not send the link. Try again in a minute.");
