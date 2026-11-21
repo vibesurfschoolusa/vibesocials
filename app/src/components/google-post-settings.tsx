@@ -27,6 +27,8 @@ import type { GoogleBusinessPostMetadata } from "@/server/platforms/types";
 interface GooglePostSettingsProps {
   metadata: GoogleBusinessPostMetadata;
   onChange: (metadata: GoogleBusinessPostMetadata) => void;
+  /** R65: Create's send lock (sendLocksFields): every field is disabled. */
+  disabled?: boolean;
 }
 
 type EventFields = NonNullable<GoogleBusinessPostMetadata["event"]>;
@@ -81,7 +83,7 @@ const ACTION = "post to Google";
  * event or an offer, and a button. Only the chosen type's fields show. The
  * message under the fields is the same check POST /api/posts applies.
  */
-export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsProps) {
+export function GooglePostSettings({ metadata, onChange, disabled = false }: GooglePostSettingsProps) {
   // R45 lead review: a field over its limit is said by its count (and the
   // press refused by its validity), so the alert line keeps every other problem.
   const check = parseGooglePostMetadata(withinLimits(metadata));
@@ -119,6 +121,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
         <Label htmlFor="google-post-type">Post type</Label>
         <Select
           id="google-post-type"
+          disabled={disabled}
           value={metadata.postType}
           onChange={(e) => setType(e.target.value as GooglePostType)}
         >
@@ -136,6 +139,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
             <Label htmlFor="google-event-title">Event title</Label>
             <Input
               id="google-event-title"
+              disabled={disabled}
               ref={refusedWhileOver(tooLongText(event.title, "event title", GOOGLE_TITLE_MAX))}
               value={event.title}
               aria-describedby="google-event-title-count"
@@ -154,6 +158,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
               <Label htmlFor="google-event-start-date">Start date</Label>
               <Input
                 id="google-event-start-date"
+                disabled={disabled}
                 type="date"
                 value={event.startDate}
                 onChange={(e) => setEvent({ startDate: e.target.value })}
@@ -163,6 +168,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
               <Label htmlFor="google-event-start-time">Start time (optional)</Label>
               <Input
                 id="google-event-start-time"
+                disabled={disabled}
                 type="time"
                 value={event.startTime ?? ""}
                 onChange={(e) => setEvent({ startTime: e.target.value || undefined })}
@@ -172,6 +178,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
               <Label htmlFor="google-event-end-date">End date</Label>
               <Input
                 id="google-event-end-date"
+                disabled={disabled}
                 type="date"
                 value={event.endDate}
                 onChange={(e) => setEvent({ endDate: e.target.value })}
@@ -181,6 +188,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
               <Label htmlFor="google-event-end-time">End time (optional)</Label>
               <Input
                 id="google-event-end-time"
+                disabled={disabled}
                 type="time"
                 value={event.endTime ?? ""}
                 onChange={(e) => setEvent({ endTime: e.target.value || undefined })}
@@ -199,6 +207,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
             <Label htmlFor="google-offer-title">Offer title</Label>
             <Input
               id="google-offer-title"
+              disabled={disabled}
               ref={refusedWhileOver(tooLongText(offer.title, "offer title", GOOGLE_TITLE_MAX))}
               value={offer.title}
               aria-describedby="google-offer-title-count"
@@ -217,6 +226,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
               <Label htmlFor="google-offer-start-date">Start date</Label>
               <Input
                 id="google-offer-start-date"
+                disabled={disabled}
                 type="date"
                 value={offer.startDate}
                 onChange={(e) => setOffer({ startDate: e.target.value })}
@@ -226,6 +236,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
               <Label htmlFor="google-offer-end-date">End date</Label>
               <Input
                 id="google-offer-end-date"
+                disabled={disabled}
                 type="date"
                 value={offer.endDate}
                 onChange={(e) => setOffer({ endDate: e.target.value })}
@@ -236,6 +247,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
             <Label htmlFor="google-offer-coupon">Coupon code (optional)</Label>
             <Input
               id="google-offer-coupon"
+              disabled={disabled}
               ref={refusedWhileOver(tooLongText(couponCode, "coupon code", GOOGLE_COUPON_CODE_MAX))}
               value={couponCode}
               aria-describedby="google-offer-coupon-count"
@@ -253,6 +265,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
             <Label htmlFor="google-offer-redeem-url">Link to redeem online (optional)</Label>
             <Input
               id="google-offer-redeem-url"
+              disabled={disabled}
               type="url"
               placeholder="https://"
               value={offer.redeemUrl ?? ""}
@@ -263,6 +276,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
             <Label htmlFor="google-offer-terms">Terms and conditions (optional)</Label>
             <Textarea
               id="google-offer-terms"
+              disabled={disabled}
               rows={3}
               ref={refusedWhileOver(tooLongText(terms, "terms and conditions", GOOGLE_TERMS_MAX))}
               value={terms}
@@ -286,6 +300,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
           <Label htmlFor="google-button-type">Button</Label>
           <Select
             id="google-button-type"
+            disabled={disabled}
             value={metadata.button?.type ?? ""}
             onChange={(e) => setButtonType(e.target.value)}
           >
@@ -301,6 +316,7 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
               <Label htmlFor="google-button-url">Button link</Label>
               <Input
                 id="google-button-url"
+                disabled={disabled}
                 type="url"
                 placeholder="https://"
                 value={button.url ?? ""}

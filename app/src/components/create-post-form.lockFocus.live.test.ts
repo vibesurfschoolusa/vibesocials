@@ -411,31 +411,6 @@ describe("Create adds nothing around its parts (R65 publishing-flow L2, review L
     await pick(photo("still"));
     expect(findAll(container, (n) => n.nodeName === "FIELDSET" && n.childNodes.length === 0)).toEqual([]);
   }, 10_000);
-
-  it("on the page: the lock still disables what it wraps during a waiting send, and enables it after", async () => {
-    postAnswer = REFUSED;
-    await mount();
-    await typeCaption("Surf lesson today");
-    await pressSchedule();
-    await pick(photo("img"));
-    const googleBox = () => {
-      const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.["aria-controls"] === "google-post-box-settings");
-      if (!hit) throw new Error("no Google box button");
-      return hit;
-    };
-    expect(disabledNow(googleBox())).toBe(false);
-    expect(disabledNow(byId("post-alt-text"))).toBe(false);
-    postStalls = true;
-    await submit();
-    expect(posted).toHaveLength(1);
-
-    expect(disabledNow(googleBox())).toBe(true);
-    expect(disabledNow(byId("post-alt-text"))).toBe(true);
-    await act(async () => postRelease!());
-    await settle();
-    expect(disabledNow(googleBox())).toBe(false);
-    expect(disabledNow(byId("post-alt-text"))).toBe(false);
-  }, 10_000);
 });
 
 describe("Create: the lock keeps keyboard focus (R65 new-customer L1, pages-b L1)", () => {

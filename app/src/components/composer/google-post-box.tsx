@@ -86,11 +86,17 @@ export function GooglePostBox({
   onChange,
   open,
   onOpenChange,
+  disabled = false,
 }: {
   metadata: GoogleBusinessPostMetadata;
   onChange: (metadata: GoogleBusinessPostMetadata) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * R65 review L1: Create's send lock (sendLocksFields) disables the fields.
+   * The summary button stays usable: opening or closing changes nothing in the post.
+   */
+  disabled?: boolean;
 }) {
   const settingsRef = useRef<HTMLDivElement>(null);
   // The browser's validity of the fields, read on change (a url field typed
@@ -155,6 +161,7 @@ export function GooglePostBox({
       >
         <GooglePostSettings
           metadata={metadata}
+          disabled={disabled}
           onChange={(next) => {
             if (googleBoxOpenAfterChange(open, { metadata: next, fieldsValid }) !== open) onOpenChange(true);
             onChange(next);

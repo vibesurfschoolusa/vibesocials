@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, Suspense, type ReactNode } from "react";
+import { useCallback, useState, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
@@ -3408,14 +3408,13 @@ function CreatePostFormInner({
           />
         )}
         {googleOptionsShown && (
-          <SendLock locked={sendLocksFields}>
-            <GooglePostBox
-              metadata={googleMetadata}
-              onChange={setGoogleMetadata}
-              open={googleBoxOpen}
-              onOpenChange={setGoogleBoxOpen}
-            />
-          </SendLock>
+          <GooglePostBox
+            metadata={googleMetadata}
+            onChange={setGoogleMetadata}
+            open={googleBoxOpen}
+            onOpenChange={setGoogleBoxOpen}
+            disabled={sendLocksFields}
+          />
         )}
         {selectedPlatforms.includes("instagram") && activeMimeType && (
           <StoryPlacementSettings
@@ -3723,26 +3722,6 @@ const REPEAT_CHOICES: [RepeatInterval | "none", string][] = [
  * Repeat (brief 11), under the schedule time: how often and how many posts in
  * total, then the dates that will be created, in the viewer's zone.
  */
-/**
- * R64 fix review L1: locks the controls of a part with no disabled prop of its
- * own while a send waits (sendLocksFields). A disabled fieldset disables every
- * control inside it.
- *
- * R65 publishing-flow L2: it wraps one element and takes its place as a plain
- * block, so the parent's space-y gap falls on it. `contents` made no box and
- * dropped that margin, and a margin class here would override it (Tailwind v4's
- * space-y has zero specificity). min-w-0 undoes a fieldset's min-content width.
- * With no child it renders nothing, so no empty box takes a gap.
- */
-export function SendLock({ locked, children }: { locked: boolean; children: ReactNode }) {
-  if (children === null || children === undefined || children === false) return null;
-  return (
-    <fieldset disabled={locked} className="min-w-0 border-0 p-0">
-      {children}
-    </fieldset>
-  );
-}
-
 function RepeatControls(props: {
   repeat: RepeatInterval | "none";
   onRepeatChange: (repeat: RepeatInterval | "none") => void;
