@@ -423,6 +423,25 @@ describe("a refused upload's sentence reaches the person", () => {
     expect(UPLOAD_BYTES_LIMIT_MESSAGE).toBe(UPLOAD_DAY_LIMIT_MESSAGE);
   });
 
+  // R62 pages-a-2 L1: only this file doesn't fit; the page names what still can.
+  it("19.7 GB used plus a 400 MB file: the \"would take you past\" sentence, in the answer and on the page", async () => {
+    const left = (20 * 1024 * 1024 - Math.round(19.7 * 1024 * 1024)) * 1024;
+    consumeDayBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 32_400, leftBytes: left });
+    const past =
+      "This file would take you past today's 20 GB upload limit. A file under 307 MB can still go today; the limit resets at midnight UTC.";
+    const res = await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: JSON.stringify({ size: 400 * MB }), multipart: false });
+    expect(res.status).toBe(429);
+    await expect(res.json()).resolves.toEqual({ error: past, retryAfterSeconds: 32_400 });
+    await expect(shown()).resolves.toBe(past);
+  });
+
+  it("exactly at 20 GB: the \"used\" sentence, in the answer and on the page", async () => {
+    consumeDayBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 32_400, leftBytes: 0 });
+    const res = await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false });
+    await expect(res.json()).resolves.toEqual({ error: UPLOAD_DAY_LIMIT_MESSAGE, retryAfterSeconds: 32_400 });
+    await expect(shown()).resolves.toBe(UPLOAD_DAY_LIMIT_MESSAGE);
+  });
+
   it("an empty file and one over 512 MB get their own sentences", async () => {
     await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: JSON.stringify({ size: 0 }), multipart: false });
     await expect(shown()).resolves.toBe("This file is empty.");

@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  UPLOAD_LINK_BYTES_LIMIT_MESSAGE,
   UPLOAD_LINK_DAILY_LIMIT_MESSAGE,
   UPLOAD_LINK_FILES_PER_DAY,
   UPLOAD_LINK_INACTIVE_MESSAGE,
   UPLOAD_LINK_STORAGE_FULL_MESSAGE,
   UPLOAD_LINK_TEXT_MAX,
   cleanSenderText,
+  uploadLinkBytesLimitMessage,
   isUploadLinkBlobPath,
   isUploadLinkPathname,
   isUploadLinkTokenShape,
@@ -31,6 +33,29 @@ describe("the sentences and limits", () => {
     );
     expect(UPLOAD_LINK_FILES_PER_DAY).toBe(200);
     expect(UPLOAD_LINK_TEXT_MAX).toBe(200);
+  });
+});
+
+// R62 pages-a-2 L1: only this file may not fit the link's day; a smaller one still can.
+describe("uploadLinkBytesLimitMessage", () => {
+  const LEFT = (20 * 1024 * 1024 - Math.round(19.7 * 1024 * 1024)) * 1024;
+
+  it("19.7 GB used plus a 400 MB file: the \"would take this link past\" sentence, naming what is left", () => {
+    expect(uploadLinkBytesLimitMessage(LEFT)).toBe(
+      "This file would take this link past today's 20 GB upload limit. A file under 307 MB can still go today; the limit resets at midnight UTC.",
+    );
+  });
+
+  it("exactly at 20 GB: the \"used\" sentence", () => {
+    expect(uploadLinkBytesLimitMessage(0)).toBe(UPLOAD_LINK_BYTES_LIMIT_MESSAGE);
+    expect(uploadLinkBytesLimitMessage(1024 * 1024 - 1)).toBe(UPLOAD_LINK_BYTES_LIMIT_MESSAGE);
+    expect(UPLOAD_LINK_BYTES_LIMIT_MESSAGE).toBe("This link has taken 20 GB of files today, its daily limit. Send the rest tomorrow.");
+  });
+
+  it("what is left not known: a smaller file may still go", () => {
+    expect(uploadLinkBytesLimitMessage(undefined)).toBe(
+      "This file would take this link past today's 20 GB upload limit. A smaller file may still go today; the limit resets at midnight UTC.",
+    );
   });
 });
 

@@ -15,7 +15,9 @@ import {
   UPLOAD_PAGE_OUT_OF_DATE_MESSAGE,
   UPLOAD_REFUSAL_MEMORY_MS,
   clearUploadRefusal,
+  dayLimitRefusalMessage,
   readUploadRefusal,
+  recordDayLimitRefusal,
   recordUploadRefusal,
 } from "./uploadRefusal";
 
@@ -75,6 +77,42 @@ describe("upload refusal memory", () => {
     await expect(readUploadRefusal("user-1", NOW)).resolves.toMatchObject({ error: "This file is empty." });
     await recordUploadRefusal("user-1", "too-large", NOW);
     await expect(readUploadRefusal("user-1", NOW)).resolves.toMatchObject({ error: "File is too large (max 512 MB)." });
+  });
+
+  // R62 pages-a-2 L1: only this file may not fit; a smaller one still can.
+  describe("a file that would go past the day's 20 GB", () => {
+    const MB = 1024 * 1024;
+    // 19.7 GB used: 314,573 KiB left, 307.2 MB.
+    const LEFT = (20 * 1024 * 1024 - Math.round(19.7 * 1024 * 1024)) * 1024;
+    const PAST =
+      "This file would take you past today's 20 GB upload limit. A file under 307 MB can still go today; the limit resets at midnight UTC.";
+
+    it("19.7 GB used plus a 400 MB file: the \"would take you past\" sentence, naming what is left", async () => {
+      expect(dayLimitRefusalMessage(LEFT)).toBe(PAST);
+      store();
+      await recordDayLimitRefusal("user-1", LEFT, NOW);
+      await expect(readUploadRefusal("user-1", NOW)).resolves.toEqual({ error: PAST, code: "UPLOAD_DAY_LIMIT" });
+    });
+
+    it("exactly at 20 GB: the \"used\" sentence", async () => {
+      expect(dayLimitRefusalMessage(0)).toBe(UPLOAD_DAY_LIMIT_MESSAGE);
+      expect(dayLimitRefusalMessage(MB - 1)).toBe(UPLOAD_DAY_LIMIT_MESSAGE);
+      store();
+      await recordDayLimitRefusal("user-1", 0, NOW);
+      await expect(readUploadRefusal("user-1", NOW)).resolves.toEqual({ error: UPLOAD_DAY_LIMIT_MESSAGE, code: "UPLOAD_DAY_LIMIT" });
+    });
+
+    it("what is left not known: a smaller file may still go", () => {
+      expect(dayLimitRefusalMessage(undefined)).toBe(
+        "This file would take you past today's 20 GB upload limit. A smaller file may still go today; the limit resets at midnight UTC.",
+      );
+    });
+
+    it("is remembered for 10 minutes, like the other reasons", async () => {
+      const rows = store();
+      await recordDayLimitRefusal("user-1", LEFT, NOW);
+      expect(rows.get(KEY)?.expiresAt).toEqual(new Date(NOW + UPLOAD_REFUSAL_MEMORY_MS));
+    });
   });
 
   it("forgets it after 10 minutes, after a clear, and for another person", async () => {

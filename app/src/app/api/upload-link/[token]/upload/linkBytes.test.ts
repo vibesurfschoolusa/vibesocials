@@ -84,6 +84,23 @@ describe("consumeUploadLinkDayBytes", () => {
     expect((await consumeUploadLinkDayBytes("link-1", 1024 * 1024, NOW)).allowed).toBe(true);
   });
 
+  // R62 pages-a-2 L1: the refusal says what is left, so /u can name it.
+  it("19.7 GB used plus a 400 MB file: refused, naming the bytes left before it", async () => {
+    const rows = countingStore();
+    const key = `upload-link:link-1:upload-link/bytes-day:${BUCKET}`;
+    const usedKib = Math.round(19.7 * 1024 * 1024);
+    rows.set(key, usedKib);
+    const refused = await consumeUploadLinkDayBytes("link-1", 400 * 1024 * 1024, NOW);
+    expect(refused).toMatchObject({ allowed: false, leftBytes: (UPLOAD_LINK_BYTES_PER_DAY / 1024 - usedKib) * 1024 });
+    expect(rows.get(key)).toBe(usedKib);
+  });
+
+  it("exactly at 20 GB: refused with nothing left", async () => {
+    const rows = countingStore();
+    rows.set(`upload-link:link-1:upload-link/bytes-day:${BUCKET}`, UPLOAD_LINK_BYTES_PER_DAY / 1024);
+    await expect(consumeUploadLinkDayBytes("link-1", 1024, NOW)).resolves.toMatchObject({ allowed: false, leftBytes: 0 });
+  });
+
   // R39 client-journey L1: a store error is marked, so the route says "couldn't check", not "20 GB used".
   it("fails closed when the store is down, marked unavailable", async () => {
     upsertMock.mockRejectedValue(new Error("db down"));

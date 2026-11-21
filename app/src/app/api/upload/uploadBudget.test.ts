@@ -99,6 +99,24 @@ describe("consumeUploadDayBytes", () => {
     await expect(consumeUploadDayBytes("user-1", MB, NOW)).resolves.toEqual({ allowed: true });
   });
 
+  // R62 pages-a-2 L1: the refusal says what is left, so the sentence can name it.
+  it("19.7 GB used plus a 400 MB file: refused, naming the bytes left before it", async () => {
+    const rows = countingStore();
+    const usedKib = Math.round(19.7 * 1024 * 1024);
+    rows.set(KEY, usedKib);
+    await expect(consumeUploadDayBytes("user-1", 400 * MB, NOW)).resolves.toEqual({
+      allowed: false,
+      retryAfterSeconds: 9 * 60 * 60,
+      leftBytes: (UPLOAD_BYTES_PER_DAY / 1024 - usedKib) * 1024,
+    });
+  });
+
+  it("exactly at 20 GB: refused with nothing left", async () => {
+    const rows = countingStore();
+    rows.set(KEY, UPLOAD_BYTES_PER_DAY / 1024);
+    await expect(consumeUploadDayBytes("user-1", MB, NOW)).resolves.toMatchObject({ allowed: false, leftBytes: 0 });
+  });
+
   it("fails closed when the counter cannot be reached, saying so apart from a used-up day", async () => {
     upsertMock.mockRejectedValue(new Error("db down"));
     await expect(consumeUploadDayBytes("user-1", MB, NOW)).resolves.toEqual({

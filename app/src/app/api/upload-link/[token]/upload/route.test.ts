@@ -36,6 +36,8 @@ import {
   UPLOAD_LINK_STORAGE_FULL_MESSAGE,
 } from "@/lib/uploadLink";
 
+import { uploadLimitText } from "@/app/u/[token]/send-file";
+
 import { POST } from "./route";
 
 const TOKEN = "T".repeat(43);
@@ -351,6 +353,28 @@ describe("the bytes a link takes in a day", () => {
     expect(response.headers.get("Retry-After")).toBe("5000");
     await expect(response.json()).resolves.toMatchObject({ error: UPLOAD_LINK_BYTES_LIMIT_MESSAGE });
     expect(handleUploadMock).not.toHaveBeenCalled();
+  });
+});
+
+// R62 pages-a-2 L1: only this file doesn't fit; /u names what still can.
+describe("a file that would take the link past its 20 GB day", () => {
+  const LEFT = (20 * 1024 * 1024 - Math.round(19.7 * 1024 * 1024)) * 1024;
+  const PAST =
+    "This file would take this link past today's 20 GB upload limit. A file under 307 MB can still go today; the limit resets at midnight UTC.";
+
+  it("19.7 GB used plus a 400 MB file: the \"would take this link past\" sentence, which /u shows as it is", async () => {
+    consumeBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 5000, leftBytes: LEFT });
+    const response = await call(tokenRequest({ size: 400 * 1024 * 1024 }));
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({ error: PAST });
+    expect(uploadLimitText(PAST, 5000)).toBe(PAST);
+    expect(handleUploadMock).not.toHaveBeenCalled();
+  });
+
+  it("exactly at 20 GB: the \"used\" sentence", async () => {
+    consumeBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 5000, leftBytes: 0 });
+    const response = await call(tokenRequest());
+    await expect(response.json()).resolves.toMatchObject({ error: UPLOAD_LINK_BYTES_LIMIT_MESSAGE });
   });
 });
 
