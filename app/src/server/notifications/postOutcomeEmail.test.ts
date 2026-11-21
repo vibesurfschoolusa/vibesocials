@@ -154,6 +154,25 @@ describe("buildPostOutcomeEmail", () => {
     });
 
     // R58 fix review: no connection is connected, not reconnected (the card's rule, lib/retryAll.ts).
+    it("one email, a row with no connection and a flagged one: Connect for the first, Reconnect for the second", () => {
+      const stalled = {
+        status: "failed" as const,
+        errorCode: "PUBLISH_STALLED",
+        errorMessage: "Publish did not complete (stalled). You can retry this platform.",
+      };
+      const results = [
+        { ...stalled, platform: "instagram" as const, connectionStep: "connect" as const },
+        { ...stalled, platform: "x" as const, connectionStep: "reconnect" as const },
+      ];
+      const owner = buildPostOutcomeEmail({ results, appBaseUrl: null, ...WS }).html;
+      expect(owner).toContain(
+        "<li>Instagram: Not sent — publishing stopped before it reached Instagram. Connect Instagram in Settings, then retry it in Activity.</li>",
+      );
+      expect(owner).toContain("<li>X: Not sent — publishing stopped before it reached X. Reconnect X in Settings, then retry it in Activity.</li>");
+      expect(owner).not.toContain("Reconnect Instagram");
+      expect(owner).not.toContain("Connect X");
+    });
+
     it("stalled with no connection: connect first (owner and member)", () => {
       const row = {
         platform: "instagram" as const,

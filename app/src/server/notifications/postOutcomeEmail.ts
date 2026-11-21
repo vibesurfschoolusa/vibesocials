@@ -98,7 +98,7 @@ export interface BuildPostOutcomeEmailParams {
   caption: string;
   /** The scanner's once-a-day notice (scannerNotice.ts): adds {@link SCAN_NOTICE_ONCE_A_DAY_LINE}. */
   scanNotice?: boolean;
-  /** Who reads it: a member is told the owner can reconnect (R9-client-journey L4). */
+  /** Who reads it: a member is told the owner can connect or reconnect (R9-client-journey L4). */
   recipientRole?: "owner" | "member";
   /**
    * The email is about a Story half alone (R47 publishing L1): with no results
