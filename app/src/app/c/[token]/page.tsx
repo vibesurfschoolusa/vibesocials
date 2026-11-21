@@ -224,10 +224,11 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
             const idShown = platform !== "linkedin" && platform !== "facebook_page";
             const name = connection?.username || (idShown ? connection?.accountIdentifier : null) || null;
             const connected = name ? `Connected: ${name}` : "Connected";
-            const form = (label: string) => (
+            // R56: the label starts with the visible text and names the platform, as the rows repeat.
+            const form = (label: string, accessibleName = `${label} ${PLATFORM_LABELS[platform]}`) => (
               <form action={action} method="post">
                 <input type="hidden" name="platform" value={platform} />
-                <Button type="submit" size="md">
+                <Button type="submit" size="md" aria-label={accessibleName}>
                   {label}
                 </Button>
               </form>
@@ -240,6 +241,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
               connection && platform === "linkedin" ? (
                 <details className="min-w-0 max-w-sm flex-1 text-right">
                   <summary
+                    aria-label={`Reconnect ${PLATFORM_LABELS[platform]}`}
                     className={cn(buttonVariants({ size: "md" }), "cursor-pointer list-none [&::-webkit-details-marker]:hidden")}
                   >
                     Reconnect
@@ -255,7 +257,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
                       </li>
                       <li>{linkedInReconnectSignInStep(connectedAccountName(connection))}</li>
                     </ol>
-                    <div className="mt-3 flex justify-end">{form("Continue")}</div>
+                    <div className="mt-3 flex justify-end">{form("Continue", `Continue to ${PLATFORM_LABELS[platform]}`)}</div>
                   </div>
                 </details>
               ) : (

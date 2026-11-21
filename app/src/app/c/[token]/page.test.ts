@@ -116,6 +116,19 @@ describe("the connect link page", () => {
     expect(html).not.toMatch(/>X</);
   });
 
+  // R56 pages-a L3: Connect and Reconnect repeat per row, so each names its platform.
+  it("names the platform on each Connect and Reconnect, and keeps their text", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "tiktok", accountIdentifier: "open-1", username: "Surf TT", locationName: null, needsReconnect: true },
+    ]);
+    const html = await render();
+    expect(html).toContain('aria-label="Reconnect TikTok"');
+    expect(html).toContain('aria-label="Connect Instagram"');
+    expect(html).toContain('aria-label="Connect Facebook Page"');
+    expect(html.match(/>Connect</g)).toHaveLength(2);
+    expect(html.match(/>Reconnect</g)).toHaveLength(1);
+  });
+
   // R33 new-customer L2 / pages L6a: every offered platform lost its app keys on this site.
   it("nothing left to connect: one sentence instead of an empty list", async () => {
     h.findLink.mockResolvedValue({ ...LINK, platforms: ["x", "pinterest"] });
@@ -541,6 +554,9 @@ describe("LinkedIn on the client's page", () => {
     expect(steps).toContain(`<form action="/api/connect-link/${TOKEN}/start" method="post">`);
     expect(steps).toContain('name="platform" value="linkedin"');
     expect(steps).toMatch(/<button[^>]*type="submit"[^>]*>Continue<\/button>/);
+    // R56: the summary and its Continue name LinkedIn; the visible text stays.
+    expect(row).toContain('aria-label="Reconnect LinkedIn"');
+    expect(steps).toContain('aria-label="Continue to LinkedIn"');
   });
 
   it("without the page's name: the connected LinkedIn page, never the profile id", async () => {

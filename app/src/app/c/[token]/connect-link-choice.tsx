@@ -466,6 +466,7 @@ export function ConnectLinkChoiceView({
               size="sm"
               loading={busy === candidate.id}
               aria-disabled={busy !== null || undefined}
+              aria-label={`Connect ${candidate.name}`}
               onClick={(event) => onChoose(candidate.id, event.currentTarget)}
             >
               Connect

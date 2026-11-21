@@ -46,6 +46,14 @@ describe("the connect link's account choice", () => {
     expect(html).not.toContain('role="alert"');
   });
 
+  // R56 new-customer L3: each Connect names its account, so the right Page can be picked by ear.
+  it("names the account on each Connect and keeps its text", () => {
+    const html = view();
+    expect(html).toContain('aria-label="Connect Surf Co"');
+    expect(html).toContain('aria-label="Connect Surf Co Kids"');
+    expect(html.match(/>Connect</g)).toHaveLength(2);
+  });
+
   // R5-pages L9: the answer to a press arrives later, so it is announced.
   it("announces a failed choice as an alert", () => {
     const html = view({ error: "Couldn't connect that account. Try again." });
