@@ -1352,6 +1352,9 @@ function CreatePostFormInner({
   const activeUploadRef = useRef<{
     file: File;
     promise: Promise<UploadedBlobInfo>;
+    // R62 publishing-flow-2 L1: a new pick, no file, Remove all or leaving
+    // the page stops its bytes.
+    abort: AbortController;
   } | null>(null);
   // Counts file picks. Preparing a pick (HEIC -> JPEG, shrinking a big photo)
   // is async, so a newer pick can finish first; an older pick that finishes
@@ -1734,6 +1737,7 @@ function CreatePostFormInner({
     }
 
     const uploadKey = generateBlobKey(file);
+    const abort = new AbortController();
 
     setUploadProgress(0);
 
@@ -1746,6 +1750,7 @@ function CreatePostFormInner({
       access: "public",
       handleUploadUrl: uploadRouteUrl(workspaceId),
       clientPayload: uploadSizePayload(file),
+      abortSignal: abort.signal,
       // Progress feedback only; does not change upload semantics. Guarded so a
       // stale in-flight upload for a swapped-out file never moves the bar.
       onUploadProgress: (event) => {
@@ -1779,13 +1784,15 @@ function CreatePostFormInner({
           activeUploadRef.current = null;
           setUploadProgress(null);
         }
+        // Stopped on purpose: nothing to say about it.
+        if (abort.signal.aborted) throw new SingleUploadAbortedError();
         // A full workspace storage reaches the user as its own sentence, not
         // as the blob client's generic token failure (lib/uploadFailure.ts).
         throw await explainUploadFailure(err, workspaceId);
       },
     );
 
-    activeUploadRef.current = { file, promise };
+    activeUploadRef.current = { file, promise, abort };
 
     return promise;
   }
@@ -1917,7 +1924,8 @@ function CreatePostFormInner({
     setShowSuccess(false);
     // Changing (or clearing) the file invalidates any
     // in-flight/completed upload for the previous file so it
-    // can never be applied to this new selection.
+    // can never be applied to this new selection, and stops its bytes.
+    activeUploadRef.current?.abort.abort();
     activeUploadRef.current = null;
 
     if (!pickedFile) {
@@ -1979,6 +1987,7 @@ function CreatePostFormInner({
         });
       }
     } catch (err: unknown) {
+      if (err instanceof SingleUploadAbortedError) return;
       console.error(
         "Error uploading media for auto-caption:",
         err,
@@ -2121,9 +2130,11 @@ function CreatePostFormInner({
   }
   useEffect(() => {
     const aborts = photoUploadAbortsRef.current;
+    const single = activeUploadRef;
     return () => {
       for (const abort of aborts.values()) abort.abort();
       aborts.clear();
+      single.current?.abort.abort();
     };
   }, []);
   const isCoverPhoto = (key: string) => photoSetRef.current[0]?.key === key;
@@ -3662,6 +3673,14 @@ function RepeatControls(props: {
       ) : null}
     </div>
   );
+}
+
+/** The single file's upload, stopped on purpose (a new pick, no file, leaving the page). */
+class SingleUploadAbortedError extends Error {
+  constructor() {
+    super("The upload was stopped.");
+    this.name = "SingleUploadAbortedError";
+  }
 }
 
 /** Lightweight placeholder for the Suspense boundary `useSearchParams`
