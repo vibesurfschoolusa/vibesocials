@@ -194,7 +194,10 @@ export async function POST(request: Request) {
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
     if (code === "P2002") {
       return NextResponse.json(
-        { error: "Another Vibe Socials account now signs in with this address, so your email is unchanged." },
+        {
+          error:
+            "Another Vibe Socials account now signs in with this address, so your email is unchanged. To use another address, ask for the change again in Settings, Account.",
+        },
         { status: 409 },
       );
     }
