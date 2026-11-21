@@ -76,7 +76,6 @@ function keepAddress(address: string): void {
   }
 }
 
-/** `workspaceId`: the workspace this page was rendered for; the start route refuses any other (F3). */
 /**
  * The vanity name (or numeric id) from what the owner typed. Handles
  * https://www.linkedin.com/company/vibe-surf-school-usa/ (with or without more path after it),
@@ -93,6 +92,7 @@ export function linkedInVanityName(typed: string): string {
   return /^\d+$/.test(name) ? name : name.toLowerCase().replace(/\s+/g, "-");
 }
 
+/** `workspaceId`: the workspace this page was rendered for; the start route refuses any other (F3). */
 export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
