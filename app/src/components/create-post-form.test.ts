@@ -695,7 +695,7 @@ describe("the media changed: one caption rule for every path", () => {
 
   it("a new single pick, a cleared pick and a replacing set go through it (attachPickedFile)", () => {
     expect(fn("attachPickedFile")).toContain("forgetMediaCaption();");
-    expect(fn("attachPickedPhotos")).toContain("void attachPickedFile(null);");
+    expect(fn("attachPickedPhotos")).toContain("void attachPickedFile(null, { photosFollow: true });");
   });
 
   it("Remove all and removing the last photo go through attachPickedFile, with no rule of their own", () => {
@@ -1326,7 +1326,7 @@ describe("the Post button's failure", () => {
     const catchBlock = submit.slice(submit.lastIndexOf("} catch (err: unknown) {"));
     expect(catchBlock.replace(/\s+/g, " ")).toBe(
       // R62 fix review L1: a file changed or removed while it sent has its own sentence first.
-      "} catch (err: unknown) { if (err instanceof SingleUploadAbortedError) { setUploadLoading(false); toast.error( singleUploadStoppedText(err.stop, submitButtonLabel({ mode: publishMode, noFile: false, loading: false })), ); return; } // Nothing is cleared: the person's post stays as it was (lib/postSubmitFailure.ts). toast.error(submitErrorText(err, { mode: publishMode, holdsForApproval })); setUploadLoading(false); }",
+      "} catch (err: unknown) { if (err instanceof SingleUploadAbortedError) { setUploadLoading(false); toast.error( singleUploadStoppedText(await err.stop, submitButtonLabel({ mode: publishMode, noFile: false, loading: false })), ); return; } // Nothing is cleared: the person's post stays as it was (lib/postSubmitFailure.ts). toast.error(submitErrorText(err, { mode: publishMode, holdsForApproval })); setUploadLoading(false); }",
     );
   });
 });

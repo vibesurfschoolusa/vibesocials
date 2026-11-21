@@ -168,7 +168,8 @@ afterEach(async () => {
 });
 
 const photo = (name: string) => new File([name], `${name}.jpg`, { type: "image/jpeg" });
-const uploadsOf = (name: string) => uploads.filter((u) => u.key.includes(name));
+// By the file's own name in the key, so a short name can't match the key's random part.
+const uploadsOf = (name: string) => uploads.filter((u) => u.key.includes(`-${name}.`));
 
 describe("Create: a photo removed while it uploads", () => {
   it("the upload is aborted, quietly, and the next photo starts", async () => {

@@ -1786,7 +1786,7 @@ function CreatePostFormInner({
         }
         // Stopped on purpose: nothing to say about it.
         // Only this file aborts it, always with a SingleUploadStop as the reason.
-        if (abort.signal.aborted) throw new SingleUploadAbortedError(abort.signal.reason as SingleUploadStop);
+        if (abort.signal.aborted) throw new SingleUploadAbortedError(abort.signal.reason as SingleUploadStopReason);
         // A full workspace storage reaches the user as its own sentence, not
         // as the blob client's generic token failure (lib/uploadFailure.ts).
         throw await explainUploadFailure(err, workspaceId);
@@ -1898,9 +1898,18 @@ function CreatePostFormInner({
     }
   }
 
+  // R63 new-customer L1: a dropped upload's stop is worded by what the page
+  // holds once the change settles, so it is told here, not when it is dropped.
+  const droppedStopRef = useRef<((stop: "changed" | "removed") => void) | null>(null);
+  function settleDroppedUpload(stop: "changed" | "removed") {
+    droppedStopRef.current?.(stop);
+    droppedStopRef.current = null;
+  }
+
   // The one way a file gets attached: picked in the file input, or shared to
-  // the installed app on Android (the effect below). Null clears the pick.
-  async function attachPickedFile(pickedFile: File | null) {
+  // the installed app on Android (the effect below). Null clears the pick;
+  // `photosFollow`: the photos attachPickedPhotos is about to attach replace it.
+  async function attachPickedFile(pickedFile: File | null, options: { photosFollow?: boolean } = {}) {
     const selection = ++fileSelectionRef.current;
     setPreparingPick((current) =>
       nextPreparingPick(current, pickedFile ? { type: "pick", selection } : { type: "clear" }),
@@ -1926,8 +1935,24 @@ function CreatePostFormInner({
     // Changing (or clearing) the file invalidates any
     // in-flight/completed upload for the previous file so it
     // can never be applied to this new selection, and stops its bytes.
-    activeUploadRef.current?.abort.abort(pickedFile ? "changed" : "removed");
+    // R63 pages-b L1: the set's uploads too, so new photos never wait behind them.
+    const dropped = activeUploadRef.current;
     activeUploadRef.current = null;
+    abortPhotoUploads();
+    if (dropped) {
+      // R63 new-customer L2: its error handler no longer sees it as active.
+      setUploadProgress(null);
+      const earlier = droppedStopRef.current;
+      dropped.abort.abort(
+        new Promise<SingleUploadStop>((resolve) => {
+          droppedStopRef.current = (stop) => {
+            earlier?.(stop);
+            resolve(stop);
+          };
+        }),
+      );
+    }
+    if (!pickedFile && !options.photosFollow) settleDroppedUpload("removed");
 
     if (!pickedFile) {
       // A cleared input ends any busy state an earlier pick or press left.
@@ -1948,6 +1973,8 @@ function CreatePostFormInner({
         setPreparingPick((current) => nextPreparingPick(current, { type: "settled", selection }));
         setPickJudgment((current) => nextPickJudgment(current, { type: "settled", selection }));
         if (selection === fileSelectionRef.current) {
+          // Refused: nothing is attached.
+          settleDroppedUpload("removed");
           // Clear the input so the same file can be picked again.
           setFileInputKey((key) => key + 1);
           // R50 pages-b L1, R51: a refusal of the file itself (over 512 MB,
@@ -1967,6 +1994,7 @@ function CreatePostFormInner({
         return;
       }
       setUploadFile(nextFile);
+      settleDroppedUpload("changed");
       fileEvent({ type: "attached" });
       singlePhotoRef.current = nextFile;
 
@@ -2207,7 +2235,7 @@ function CreatePostFormInner({
     }
 
     if (replace) {
-      void attachPickedFile(null);
+      void attachPickedFile(null, { photosFollow: true });
       setUploadProgress(null);
     }
     const selection = fileSelectionRef.current;
@@ -2273,9 +2301,12 @@ function CreatePostFormInner({
         changePhotoSet((prev) => patchPhoto(prev, key, { file, status: "waiting" }));
       }
       fileEvent({ type: "attached" });
+      if (replace) settleDroppedUpload("changed");
       queuePhotoUploads(prepared, isStale, replace);
     } catch (err: unknown) {
       if (isStale()) return;
+      // Nothing from this pick is attached.
+      if (replace) settleDroppedUpload("removed");
       // Attach nothing from this pick.
       changePhotoSet((prev) => prev.filter((photo) => !pickKeys.has(photo.key)));
       const message = (err as Error).message || "Failed to prepare media for posting. Please try again.";
@@ -2683,7 +2714,7 @@ function CreatePostFormInner({
       if (err instanceof SingleUploadAbortedError) {
         setUploadLoading(false);
         toast.error(
-          singleUploadStoppedText(err.stop, submitButtonLabel({ mode: publishMode, noFile: false, loading: false })),
+          singleUploadStoppedText(await err.stop, submitButtonLabel({ mode: publishMode, noFile: false, loading: false })),
         );
         return;
       }
@@ -3697,9 +3728,12 @@ function RepeatControls(props: {
 /** Why the single file's upload was stopped on purpose. */
 type SingleUploadStop = "changed" | "removed" | "left";
 
+/** A change of file tells its stop once it settles (attachPickedFile); leaving the page tells it at once. */
+type SingleUploadStopReason = SingleUploadStop | Promise<SingleUploadStop>;
+
 /** The single file's upload, stopped on purpose (a new pick, no file, leaving the page). */
 class SingleUploadAbortedError extends Error {
-  constructor(readonly stop: SingleUploadStop) {
+  constructor(readonly stop: SingleUploadStopReason) {
     super("The upload was stopped.");
     this.name = "SingleUploadAbortedError";
   }
