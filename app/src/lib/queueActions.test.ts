@@ -296,6 +296,53 @@ describe("editOutcome (PATCH route response)", () => {
   });
 });
 
+// R56 client-journey-2 L1: an edit or a drag that changed the approved text or
+// time withdrew the client's approval on the server; the card drops its badge.
+describe("editOutcome: a withdrawn client approval", () => {
+  const approved = {
+    id: "job-1",
+    status: "scheduled",
+    scheduledFor: "2026-11-25T15:00:00.000Z",
+    caption: "Dawn patrol",
+    approvalState: "none",
+    clientApprovedAt: "2026-11-19T10:00:00.000Z",
+  } as unknown as PostJobDTO;
+
+  it("an edit of the text: the patch carries clientApprovedAt null, and the card loses it", () => {
+    const outcome = editOutcome({ ok: true, clientApprovedAt: null });
+    expect(outcome).toEqual({ patch: { clientApprovedAt: null }, message: "Changes saved." });
+    expect(applyJobPatch(approved, { caption: "Sunset session", ...outcome.patch }).clientApprovedAt).toBeNull();
+  });
+
+  it("a drag to another time: the calendar's patch withdraws it too", () => {
+    const outcome = editOutcome({ ok: true, clientApprovedAt: null });
+    const moved = applyJobPatch(approved, { scheduledFor: "2026-11-26T15:00:00.000Z", ...outcome.patch });
+    expect(moved.clientApprovedAt).toBeNull();
+    expect(moved.scheduledFor).toBe("2026-11-26T15:00:00.000Z");
+  });
+
+  it("a re-held edit withdraws it as well", () => {
+    expect(editOutcome({ ok: true, status: "draft", approvalState: "pending", clientApprovedAt: null }).patch).toEqual({
+      status: "draft",
+      approvalState: "pending",
+      clientApprovedAt: null,
+    });
+  });
+
+  it("an edit that leaves the approved text and time: no clientApprovedAt in the answer, so the card keeps it", () => {
+    const outcome = editOutcome({ ok: true });
+    expect(outcome.patch).not.toHaveProperty("clientApprovedAt");
+    expect(applyJobPatch(approved, { caption: "Dawn patrol", ...outcome.patch }).clientApprovedAt).toBe(
+      "2026-11-19T10:00:00.000Z",
+    );
+  });
+
+  it("a post with no client approval is unchanged", () => {
+    const plain = { ...approved, clientApprovedAt: null } as PostJobDTO;
+    expect(applyJobPatch(plain, editOutcome({ ok: true, clientApprovedAt: null }).patch)).toEqual(plain);
+  });
+});
+
 // R31 publishing L3-L5 and pages L2: one rule for a refused post action, on
 // every page (Queue's buttons, Edit, the calendar drag, Activity).
 describe("postActionRefusal", () => {

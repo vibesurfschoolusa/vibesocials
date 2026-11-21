@@ -149,7 +149,7 @@ export function approveHint(
 /* ----- response handling: what a successful server answer does to the card ----- */
 
 export type JobPatch = Partial<
-  Pick<PostJobDTO, "status" | "approvalState" | "scheduledFor" | "caption">
+  Pick<PostJobDTO, "status" | "approvalState" | "scheduledFor" | "caption" | "clientApprovedAt">
 >;
 
 export type QueueOutcome =
@@ -236,17 +236,19 @@ export function decisionOutcome(decision: "approve" | "reject", data: unknown): 
 /**
  * `PATCH /api/posts/{id}` 2xx. Only a member's edit of a scheduled post
  * answers `approvalState: "pending"` (it was re-held); anything else is a plain
- * save. The caller adds the caption / time it sent.
+ * save. The caller adds the caption / time it sent. `clientApprovedAt: null`
+ * (R56 client-journey-2 L1): the edit or drag withdrew the client's approval.
  */
 export function editOutcome(data: unknown): { patch: JobPatch; message: string } {
   const r = asRecord(data);
+  const withdrawn: JobPatch = r.clientApprovedAt === null ? { clientApprovedAt: null } : {};
   if (r.approvalState === "pending") {
     return {
-      patch: { status: "draft", approvalState: "pending" },
+      patch: { status: "draft", approvalState: "pending", ...withdrawn },
       message: "Changes saved — sent back for approval.",
     };
   }
-  return { patch: {}, message: "Changes saved." };
+  return { patch: withdrawn, message: "Changes saved." };
 }
 
 /**

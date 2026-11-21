@@ -408,6 +408,8 @@ describe("PATCH /api/posts/[postJobId]", () => {
         mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } },
         // R3-client-journey M1: where a Feed and Story card finds its other half.
         storyOfPostJobId: true,
+        // R56 client-journey-2 L1: whether the edit withdraws a client approval.
+        clientApprovedAt: true,
       },
     });
   });
@@ -884,6 +886,37 @@ describe("PATCH /api/posts/[postJobId] — the client's approval (client review 
     expect((await PATCH(req({ baseCaption: "Sunset session" }), ctx("job-1"))).status).toBe(200);
     expect(updateManyMock).toHaveBeenCalledTimes(1);
     expect(written()).toEqual({ baseCaption: "Sunset session", clientApprovedAt: null });
+  });
+
+  // R56 client-journey-2 L1: the answer says so, so the Queue card drops its badge.
+  const APPROVED_AT = new Date("2026-11-19T10:00:00.000Z");
+
+  it("answers clientApprovedAt null when the edit withdrew it (text or time), and nothing else new", async () => {
+    findFirstMock.mockResolvedValue(approvedScheduled({ clientApprovedAt: APPROVED_AT }));
+    await expect((await PATCH(req({ baseCaption: "Sunset session" }), ctx("job-1"))).json()).resolves.toEqual({
+      ok: true,
+      clientApprovedAt: null,
+    });
+    findFirstMock.mockResolvedValue(approvedScheduled({ clientApprovedAt: APPROVED_AT }));
+    const later = new Date(AT.getTime() + 60 * 60 * 1000).toISOString();
+    await expect((await PATCH(req({ scheduledFor: later }), ctx("job-1"))).json()).resolves.toEqual({
+      ok: true,
+      clientApprovedAt: null,
+    });
+  });
+
+  it("answers as before when the edit leaves the approved text and time", async () => {
+    findFirstMock.mockResolvedValue(approvedScheduled({ clientApprovedAt: APPROVED_AT }));
+    const res = await PATCH(
+      req({ baseCaption: "Dawn patrol", scheduledFor: FUTURE, perPlatformOverrides: { instagram: "IG text" } }),
+      ctx("job-1"),
+    );
+    await expect(res.json()).resolves.toEqual({ ok: true });
+  });
+
+  it("answers as before for a post with no client approval", async () => {
+    findFirstMock.mockResolvedValue(approvedScheduled({ clientApprovedAt: null }));
+    await expect((await PATCH(req({ baseCaption: "Sunset session" }), ctx("job-1"))).json()).resolves.toEqual({ ok: true });
   });
 
   it("withdraws it when a platform's own caption changes, is added or is removed", async () => {

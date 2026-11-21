@@ -250,6 +250,8 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
       publishMetadata: true,
       mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } },
       storyOfPostJobId: true,
+      // R56 client-journey-2 L1: whether this edit withdraws a client approval, for the answer.
+      clientApprovedAt: true,
     },
   });
 
@@ -395,6 +397,11 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     );
   }
   const pairAnswer = result.pair ? { otherHalf: result.pair } : {};
+  // R56 client-journey-2 L1: the write withdrew the client's approval (dataFor)
+  // from a post that had one, so the Queue card drops its "Client approved"
+  // badge without a reload.
+  const approvalAnswer =
+    existing.clientApprovedAt && changesWhatClientApproved(existing, data, perPlatformOverrides) ? { clientApprovedAt: null } : {};
 
   if (approvalEffect === "rehold") {
     // 2026-11-01 audit (M1): the post as it is NOW - this request's edits laid
@@ -436,12 +443,12 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
 
   if (approvalEffect !== "none") {
     return NextResponse.json(
-      { ok: true, status: "draft", approvalState: "pending", ...pairAnswer },
+      { ok: true, status: "draft", approvalState: "pending", ...approvalAnswer, ...pairAnswer },
       { status: 200 },
     );
   }
 
-  return NextResponse.json({ ok: true, ...pairAnswer }, { status: 200 });
+  return NextResponse.json({ ok: true, ...approvalAnswer, ...pairAnswer }, { status: 200 });
 }
 
 /**
