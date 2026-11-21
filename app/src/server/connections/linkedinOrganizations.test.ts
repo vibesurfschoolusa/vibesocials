@@ -192,14 +192,48 @@ describe("findAdministeredOrganizations", () => {
     expect(await findAdministeredOrganizations("li-access")).toBeNull();
   });
 
-  it("keeps the pages it found when a later page fails", async () => {
-    stubFetch((url) => {
-      if (url === aclUrl(0)) return json(aclPage([acl(1)], true));
-      if (url.includes("organizationAcls")) return json({}, 500);
-      return json({ id: 1, localizedName: "One" });
+  // R64 platform-clients L2: never a partial list, as Meta's page read. A list
+  // cut short would show the chooser only some pages, and the person would
+  // think they aren't an admin of the rest.
+  const tenAdminPages = () => aclPage(Array.from({ length: 10 }, (_, i) => acl(i + 1)), true);
+
+  it("answers null when page 2 answers 503, so the callback takes its failure path", async () => {
+    const li = stubFetch((url) => {
+      if (url === aclUrl(0)) return json(tenAdminPages());
+      if (url.includes("organizationAcls")) return json({ message: "Service Unavailable" }, 503);
+      throw new Error(`unexpected ${url}`);
     });
 
-    expect(await findAdministeredOrganizations("li-access")).toEqual([{ id: "1", name: "One" }]);
+    expect(await findAdministeredOrganizations("li-access")).toBeNull();
+    // No page name is read for a list that is not used.
+    expect(li.urls().filter((u) => u.includes("/organizations/"))).toEqual([]);
+  });
+
+  it("answers null when page 2 throws", async () => {
+    stubFetch((url) => {
+      if (url === aclUrl(0)) return json(tenAdminPages());
+      if (url.includes("organizationAcls")) return Promise.reject(new TypeError("fetch failed"));
+      throw new Error(`unexpected ${url}`);
+    });
+
+    expect(await findAdministeredOrganizations("li-access")).toBeNull();
+  });
+
+  it("answers the full list when every page succeeds", async () => {
+    stubFetch((url) => {
+      if (url === aclUrl(0)) return json(tenAdminPages());
+      if (url === aclUrl(10)) return json(aclPage(Array.from({ length: 10 }, (_, i) => acl(i + 11)), true));
+      if (url === aclUrl(20)) return json(aclPage([acl(21)]));
+      const id = /\/organizations\/(\d+)$/.exec(url)?.[1];
+      if (id) return json({ id: Number(id), localizedName: `Page ${id}` });
+      throw new Error(`unexpected ${url}`);
+    });
+
+    const organizations = await findAdministeredOrganizations("li-access");
+
+    expect(organizations).toEqual(
+      Array.from({ length: 21 }, (_, i) => ({ id: String(i + 1), name: `Page ${i + 1}` })),
+    );
   });
 
   it("logs statuses only, never the token", async () => {
