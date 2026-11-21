@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { buildPlatformPreview } from "./platformPreview";
 import { adaptMaxLength } from "./platformOverrides";
 import { removeXMentions } from "./xMentions";
-import { xWeightedLength } from "./xWeightedLength";
+import { textUnits } from "./truncate";
+import { countsAsLink, xWeightedLength } from "./xWeightedLength";
 import { computeTweetText } from "@/server/platforms/xClient";
 
 // The footer from the 2026-11-08 live post that X refused with 403.
@@ -159,5 +160,20 @@ describe("removeXMentions and the X count agree on links", () => {
     const source = readFileSync(fileURLToPath(new URL("./xMentions.ts", import.meta.url)), "utf8");
     expect(source).toContain("countsAsLink(");
     expect(source).not.toContain("xWeightedLength(");
+    // R59 third look: no copy of the ending list or its test either.
+    expect(source).not.toMatch(/GENERIC_TLDS|isLinkEnding|typedEnding/);
+    expect(source).not.toMatch(/new Set\(\[|"(?:com|net|org|surf|co|za)"/);
+  });
+
+  // R59 third look: the cut agrees with countsAsLink on every shape of name.
+  it.each([
+    "kai.surf", "kai.Surf", "kai.SURF", "KAI.surf", "surf.co", "surf.Co", "vibesurfschool.za", "vibesurfschool.ZA",
+    "kai.com", "kai.Com", "kai.net", "kai.org", "kai.pro", "kai.Pro", "kai.xyzzy", "kai.Thanks", "kai.thanks",
+    "www.kai", "www.Kai", "WWW.kai", "www.kai.com", "heinrich_.schroder", "kai_surf.co", "kai_.co", "kai2.com",
+    "surf2026.co", "kai.c0m", "kai.co1", "a.b.c.com", "kai.school", "kai.School", "kai.miami",
+  ])("@%s: cut before its first dot exactly when countsAsLink says link", (name) => {
+    const units = textUnits(name);
+    const isLink = units.length === 1 && units[0].link !== null && countsAsLink(units[0].link, units[0].text);
+    expect(removeXMentions(`Hi @${name}`)).toBe(isLink ? `Hi ${name.slice(0, name.indexOf("."))}` : `Hi ${name}`);
   });
 });
