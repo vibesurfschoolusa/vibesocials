@@ -240,12 +240,14 @@ describe("a link flow without its cookie, in a browser signed in as the creator"
     expect(h.create).not.toHaveBeenCalled();
   });
 
-  it("x: the link's handshake row is refused by the callback as an expired session", async () => {
+  // R55 client-journey L1: the X callback finds the link's handshake row and
+  // gives the same reopen page as the others, never /settings.
+  it("x: the link's handshake row gets the same /c reopen page", async () => {
     h.getCurrentUser.mockResolvedValue({ id: CREATOR });
 
     const res = await xGET(linkRequest("x", false));
 
-    expect(res.headers.get("location")).toBe(`${ORIGIN}/settings?error=x_session_expired`);
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/c`);
     expect(h.getCurrentUser).not.toHaveBeenCalled();
     expect(h.fetch).not.toHaveBeenCalled();
     expect(h.create).not.toHaveBeenCalled();

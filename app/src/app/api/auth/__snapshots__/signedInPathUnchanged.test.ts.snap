@@ -1219,6 +1219,14 @@ exports[`'x' callback, signed in: unchanged > provider_error 1`] = `
       "console.error",
       "[X OAuth 1.0a] Authorization denied",
     ],
+    [
+      "prisma.oAuthHandshake.findUnique",
+      {
+        "where": {
+          "token": "req-token",
+        },
+      },
+    ],
   ],
   "headers": {
     "location": "https://app.example.com/settings?error=x_auth_denied",

@@ -11,6 +11,7 @@ const {
   createMock,
   updateManyMock,
   connectionFindUniqueMock,
+  linkFindUniqueMock,
   fetchMock,
 } = vi.hoisted(() => ({
   getCurrentUserMock: vi.fn(),
@@ -20,6 +21,7 @@ const {
   createMock: vi.fn(),
   updateManyMock: vi.fn(),
   connectionFindUniqueMock: vi.fn(),
+  linkFindUniqueMock: vi.fn(),
   fetchMock: vi.fn(),
 }));
 
@@ -39,6 +41,7 @@ vi.mock("@/lib/db", () => ({
     },
     // The shared save creates a first connection (R6 second review 3).
     socialConnection: { create: createMock, updateMany: updateManyMock, findUnique: connectionFindUniqueMock },
+    workspaceConnectLink: { findUnique: linkFindUniqueMock, update: vi.fn() },
   },
 }));
 
@@ -48,6 +51,9 @@ vi.mock("@/lib/logger", () => ({
 
 import { CONNECT_CALL_TIMEOUT_MS } from "@/lib/fetchWithTimeout";
 import { abortSignalTimeoutOnFakeClock, bodyNeverEnds, headersNeverCome } from "@/lib/stallingFetch.testkit";
+
+import { generateInviteToken } from "@/lib/inviteToken";
+import { sealConnectCookie } from "@/server/connectLink/cookie";
 
 import { GET } from "./route";
 
@@ -95,6 +101,7 @@ beforeEach(() => {
     createMock,
     updateManyMock,
     connectionFindUniqueMock,
+    linkFindUniqueMock,
     fetchMock,
   ]) {
     m.mockReset();
@@ -292,5 +299,96 @@ describe("X OAuth callback: a reconnect keeps the same account", () => {
     expect(updateManyMock).not.toHaveBeenCalled();
     // The one-time handshake is used up either way.
     expect(handshakeDeleteMock).toHaveBeenCalledWith({ where: { token: "req-token" } });
+  });
+});
+
+// R55 client-journey L1: X finds a link flow only by its vs_connect cookie,
+// which is gone after 15 minutes, in another browser or in X's in-app one.
+// A link's handshake without a link flow then gets the "open the link you
+// were sent again" page the other platforms give, never /settings (and so the
+// sign-in page for a signed-out client).
+describe("X OAuth callback: a link's handshake without the link's cookie", () => {
+  const LINK_TOKEN = generateInviteToken().raw;
+  const linkHandshake = (overrides: Record<string, unknown> = {}) =>
+    handshakeRow({ connectLinkId: "link-1", connectLinkNonce: "nonce-1", ...overrides });
+  const deniedRequest = (cookie?: string) =>
+    new Request(`${ORIGIN}/api/auth/x/callback?denied=req-token`, { headers: cookie ? { cookie } : {} });
+  const withCookie = () =>
+    new Request(`${ORIGIN}/api/auth/x/callback?oauth_token=req-token&oauth_verifier=the-verifier`, {
+      headers: { cookie: `vs_connect=${encodeURIComponent(sealConnectCookie({ linkId: "link-1", nonce: "nonce-1", token: LINK_TOKEN }))}` },
+    });
+
+  function expectReopenPage(res: Response) {
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/c`);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
+    expect(getCurrentUserMock).not.toHaveBeenCalled();
+  }
+
+  it("a live link handshake: the /c reopen page", async () => {
+    handshakeFindUniqueMock.mockResolvedValue(linkHandshake());
+
+    expectReopenPage(await GET(callbackRequest()));
+  });
+
+  it("an expired link handshake: the /c reopen page, and the row goes", async () => {
+    handshakeFindUniqueMock.mockResolvedValue(linkHandshake({ expiresAt: new Date(Date.now() - 1000) }));
+
+    expectReopenPage(await GET(callbackRequest()));
+    expect(handshakeDeleteMock).toHaveBeenCalledWith({ where: { token: "req-token" } });
+  });
+
+  it("a denied return for a link handshake: the /c reopen page", async () => {
+    handshakeFindUniqueMock.mockResolvedValue(linkHandshake());
+
+    expectReopenPage(await GET(deniedRequest()));
+    expect(handshakeFindUniqueMock).toHaveBeenCalledWith({ where: { token: "req-token" } });
+  });
+
+  it("an owner's handshake, expired or denied: /settings as before", async () => {
+    handshakeFindUniqueMock.mockResolvedValue(handshakeRow({ expiresAt: new Date(Date.now() - 1000) }));
+    const expired = location(await GET(callbackRequest()));
+    expect(expired.pathname).toBe("/settings");
+    expect(expired.searchParams.get("error")).toBe("x_session_expired");
+
+    handshakeFindUniqueMock.mockResolvedValue(handshakeRow());
+    const denied = location(await GET(deniedRequest()));
+    expect(denied.pathname).toBe("/settings");
+    expect(denied.searchParams.get("error")).toBe("x_auth_denied");
+  });
+
+  it("no handshake row at all: /settings as before, denied or not", async () => {
+    handshakeFindUniqueMock.mockResolvedValue(null);
+    expect(location(await GET(callbackRequest())).searchParams.get("error")).toBe("x_session_expired");
+    expect(location(await GET(deniedRequest())).searchParams.get("error")).toBe("x_auth_denied");
+    handshakeFindUniqueMock.mockRejectedValue(new Error("db down"));
+    expect(location(await GET(deniedRequest())).searchParams.get("error")).toBe("x_auth_denied");
+  });
+
+  it("the matching link flow: the visitor's own page, as before", async () => {
+    vi.stubEnv("X_CALLBACK_URL", `${ORIGIN}/api/auth/x/callback`);
+    // A test-only key, so the cookie seals and opens.
+    vi.stubEnv("TOKEN_ENCRYPTION_KEY", Buffer.alloc(32, 7).toString("base64"));
+    linkFindUniqueMock.mockResolvedValue({
+      id: "link-1",
+      workspaceId: WORKSPACE,
+      createdById: STARTER,
+      platforms: ["x"],
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      revokedAt: null,
+      workspace: { name: "Surf Co", pausedAt: null, pausedReason: null },
+    });
+    handshakeFindUniqueMock.mockResolvedValue(linkHandshake({ expiresAt: new Date(Date.now() - 1000) }));
+
+    const expired = location(await GET(withCookie()));
+    expect(expired.pathname).toBe(`/c/${LINK_TOKEN}`);
+    expect(expired.searchParams.get("error")).toBe("x_session_expired");
+
+    handshakeFindUniqueMock.mockResolvedValue(linkHandshake());
+    const denied = location(
+      await GET(deniedRequest(`vs_connect=${encodeURIComponent(sealConnectCookie({ linkId: "link-1", nonce: "nonce-1", token: LINK_TOKEN }))}`)),
+    );
+    expect(denied.pathname).toBe(`/c/${LINK_TOKEN}`);
+    expect(denied.searchParams.get("error")).toBe("x_cancelled");
   });
 });

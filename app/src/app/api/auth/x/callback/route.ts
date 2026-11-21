@@ -8,6 +8,7 @@ import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallb
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
 import { withConnectLink } from "@/server/connectLink/callback";
+import { appOrigin } from "@/server/connectLink/origin";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 
@@ -37,6 +38,21 @@ function generateOAuthSignature(
   return createHmac("sha1", signingKey).update(signatureBase).digest("base64");
 }
 
+/**
+ * R55 client-journey L1: X finds a link flow only by its vs_connect cookie
+ * (server/connectLink/callback.ts), which is gone after 15 minutes, in another
+ * browser or in X's in-app one. A link's handshake without a link flow gets
+ * the "open the link you were sent again" page the other platforms give
+ * there, not /settings (for a signed-out client, the sign-in page).
+ */
+function linkHandshakeWithoutFlow(
+  handshake: { connectLinkId?: string | null } | null,
+  link: ConnectLinkFlow | null,
+  request: Request,
+): NextResponse | null {
+  return handshake?.connectLinkId && !link ? NextResponse.redirect(new URL("/c", appOrigin(request))) : null;
+}
+
 async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
   const { searchParams } = new URL(request.url);
   const oauthToken = searchParams.get("oauth_token");
@@ -45,7 +61,11 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
 
   if (denied) {
     console.error("[X OAuth 1.0a] Authorization denied");
-    return oauthErrorRedirect("x", "auth_denied", process.env.NEXTAUTH_URL!);
+    // A failed lookup answers as before: the owner's /settings.
+    const deniedHandshake = link
+      ? null
+      : await prisma.oAuthHandshake.findUnique({ where: { token: denied } }).catch(() => null);
+    return linkHandshakeWithoutFlow(deniedHandshake, link, request) ?? oauthErrorRedirect("x", "auth_denied", process.env.NEXTAUTH_URL!);
   }
 
   if (!oauthToken || !oauthVerifier) {
@@ -64,7 +84,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
         await prisma.oAuthHandshake.delete({ where: { token: oauthToken } }).catch(() => {});
       }
       console.error("[X OAuth 1.0a] Missing or expired handshake");
-      return oauthErrorRedirect("x", "session_expired", process.env.NEXTAUTH_URL!);
+      return linkHandshakeWithoutFlow(handshake, link, request) ?? oauthErrorRedirect("x", "session_expired", process.env.NEXTAUTH_URL!);
     }
 
     // Client connect link: a handshake row belongs to a link flow exactly when
@@ -74,7 +94,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
       (handshake.connectLinkId ?? null) !== (link?.id ?? null) ||
       (handshake.connectLinkNonce ?? null) !== (link?.nonce ?? null)
     ) {
-      return oauthErrorRedirect("x", "session_expired", process.env.NEXTAUTH_URL!);
+      return linkHandshakeWithoutFlow(handshake, link, request) ?? oauthErrorRedirect("x", "session_expired", process.env.NEXTAUTH_URL!);
     }
 
     const { tokenSecret: oauthTokenSecret, userId, workspaceId } = handshake;
