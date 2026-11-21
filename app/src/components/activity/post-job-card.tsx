@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ChevronDown } from "lucide-react";
 import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/client";
 
-import { ExternalLink } from "@/components/external-link";
+import { ExternalLink, NEW_TAB_HINT } from "@/components/external-link";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -15,6 +15,7 @@ import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
+import { labelName } from "@/lib/queueLabelName";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { answerLostText } from "@/lib/answerLost";
 import { dispatchFailedText } from "@/lib/composerSubmitOutcome";
@@ -445,6 +446,8 @@ export function PostJobCard({
   const status = JOB_STATUS_META[displayedJobStatus(job.status, sentAgain)];
   const results = orderResults(job.results);
   const time = cardTime(job);
+  // R57 pages-b L1: the buttons repeat on every card, so each one's name carries the post's caption, as the Queue's do.
+  const name = labelName(job.caption);
   // 2026-11-10: platforms this post went to as a Story (labelled, and no link built from the id).
   const isStory = (platform: Platform) => job.storyPlatforms?.includes(platform) ?? false;
   const postUrl = (result: PostJobDTO["results"][number]) =>
@@ -712,7 +715,13 @@ export function PostJobCard({
 
       {canSendAgain ? (
         <div className="mt-3">
-          <Button size="sm" variant="outline" loading={sendingAgain} onClick={() => void sendAgain()}>
+          <Button
+            size="sm"
+            variant="outline"
+            loading={sendingAgain}
+            aria-label={`Send again "${name}"`}
+            onClick={() => void sendAgain()}
+          >
             Send again
           </Button>
         </div>
@@ -731,6 +740,7 @@ export function PostJobCard({
               <ExternalLink
                 key={result.platform}
                 href={url}
+                aria-label={`View on ${platformLabel(result.platform)} ${NEW_TAB_HINT} "${name}"`}
                 className="rounded text-xs font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
               >
                 View on {platformLabel(result.platform)}
@@ -770,6 +780,7 @@ export function PostJobCard({
                 size="sm"
                 variant="outline"
                 loading={pending.has(platform)}
+                aria-label={`${pending.has(platform) ? "Retrying" : "Retry"} ${platformLabel(platform)} "${name}"`}
                 onClick={() => retry(platform)}
               >
                 {pending.has(platform) ? "Retrying" : "Retry"}{" "}
@@ -782,6 +793,7 @@ export function PostJobCard({
               size="sm"
               variant="outline"
               loading={retryAllPlatforms.some((platform) => pending.has(platform))}
+              aria-label={`Retry all failed "${name}"`}
               onClick={() => retry("all", retryAllPlatforms)}
             >
               Retry all failed
@@ -796,6 +808,7 @@ export function PostJobCard({
             type="button"
             onClick={() => setExpanded((value) => !value)}
             aria-expanded={expanded}
+            aria-label={`${expanded ? "Hide" : "Show"} ${failures.length} ${failures.length === 1 ? "error" : "errors"} "${name}"`}
             className="inline-flex items-center gap-1 rounded text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           >
             <ChevronDown
