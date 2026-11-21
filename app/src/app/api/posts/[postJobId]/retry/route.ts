@@ -27,6 +27,11 @@ interface RetryRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
 }
 
+// Retry all with nothing failed: before the claim (the usual case, every
+// platform already retried or out) and after it (another retry won the race).
+const NOTHING_FAILED_TEXT =
+  "Nothing to retry: none of this post's platforms has failed. Activity now shows where it stands.";
+
 /**
  * Parsed retry request: retry every failed platform, or one named platform.
  */
@@ -229,7 +234,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   if (candidates.length === 0) {
     return NextResponse.json(
       {
-        error: "Nothing to retry — this post has no failed platforms.",
+        error: NOTHING_FAILED_TEXT,
         code: "NOTHING_TO_RETRY",
       },
       { status: 409 },
@@ -329,7 +334,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
         error:
           target.kind === "platform"
             ? `${platformLabel(target.platform)} is already being retried or has gone out. Activity now shows where it stands.`
-            : "Nothing to retry: none of this post's platforms has failed. Activity now shows where it stands.",
+            : NOTHING_FAILED_TEXT,
         code: "NOTHING_TO_RETRY",
       },
       { status: 409 },

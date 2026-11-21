@@ -229,10 +229,11 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     );
 
     const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
-    const body = (await res.json()) as { code?: string };
+    const body = (await res.json()) as { code?: string; error?: string };
 
     expect(res.status).toBe(409);
     expect(body.code).toBe("NOTHING_TO_RETRY");
+    expect(body.error).toBe("Nothing to retry: none of this post's platforms has failed. Activity now shows where it stands.");
     expect(resultUpdateManyMock).not.toHaveBeenCalled();
   });
 
