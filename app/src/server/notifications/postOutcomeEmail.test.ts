@@ -159,6 +159,28 @@ describe("buildPostOutcomeEmail", () => {
       expect(out).not.toContain("Failed —");
     });
 
+    // R54 publishing-flow L1: the card's own rule (isUnconfirmedResult) also
+    // counts TikTok's pending answer, so the email must not call it Failed.
+    it("TikTok pending: the shared may-already-be-live sentence, no Failed", () => {
+      const out = html({
+        platform: "tiktok",
+        status: "failed",
+        errorCode: "TIKTOK_PUBLISH_PENDING",
+        errorMessage: "TikTok is still processing this video.",
+      });
+      expect(out).toContain(`<li>TikTok: ${escapeForHtml(PUBLISH_UNCONFIRMED_MESSAGE)}</li>`);
+      expect(out).not.toContain("Failed");
+    });
+
+    it("a plain failed row: Failed with its reason, as before", () => {
+      const out = html({ platform: "youtube", status: "failed", errorCode: "SOMETHING", errorMessage: "Quota exceeded" });
+      expect(out).toContain("<li>YouTube: Failed — Quota exceeded</li>");
+    });
+
+    it("a success row: Succeeded, as before", () => {
+      expect(html({ platform: "x", status: "success", errorCode: null })).toContain("<li>X: Succeeded</li>");
+    });
+
     it("a row still pending in a closed job (closed before this fix) names no control it lacks", () => {
       const out = html({ platform: "instagram", status: "pending", notSent: true });
       expect(out).toContain(

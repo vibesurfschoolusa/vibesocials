@@ -2,7 +2,8 @@ import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/clien
 
 import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
-import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
+import { isUnconfirmedResult } from "@/lib/postsDto";
+import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { failedRowStep, needsReconnecting } from "@/lib/retryAll";
 import { sentenceForRecipient } from "@/lib/publishFailureText";
 import { storyPlatformsOf } from "@/lib/storyPlacement";
@@ -187,7 +188,8 @@ function renderResultRow(result: PostOutcomeResultSummary, recipientRole: "owner
   // The card's rule (lib/retryAll.ts failedRowStep): an unconfirmed row may
   // already be live, so the platform is checked first; a stalled one never
   // reached the platform and is retried, after a reconnect when it needs one.
-  const unconfirmed = result.status === "failed" && result.errorCode === PUBLISH_UNCONFIRMED_CODE;
+  // R54: the card's own unconfirmed rule, so TikTok's pending answer counts too.
+  const unconfirmed = isUnconfirmedResult({ status: result.status, errorCode: result.errorCode ?? null });
   if (unconfirmed || (result.status === "failed" && result.errorCode === PUBLISH_STALLED_FAILURE.errorCode)) {
     const step = failedRowStep({ unconfirmed }, result.needsReconnect === true);
     if (step === "check_platform") return `<li>${label}: ${escapeHtml(PUBLISH_UNCONFIRMED_MESSAGE)}</li>`;
