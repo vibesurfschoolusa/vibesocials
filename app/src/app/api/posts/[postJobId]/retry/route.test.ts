@@ -291,6 +291,63 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     expect(body.code).toBe("RECONNECT_REQUIRED");
   });
 
+  // R58 pages-a-4 L1: no connection is its own reason, so the step is Connect
+  // (the only control Settings shows for it); status and code stay as they are.
+  it("no connection, an owner: Connect in Settings, reason connect", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "instagram", status: "failed" }]));
+    connectionFindUniqueMock.mockResolvedValue(null);
+
+    const res = await POST(req({ platform: "instagram" }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "Connect Instagram in Settings, then retry.",
+      code: "RECONNECT_REQUIRED",
+      platform: "instagram",
+      reason: "connect",
+    });
+    expect(resultUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("no connection, a member: the owner can connect it", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member" }));
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "instagram", status: "failed" }]));
+    connectionFindUniqueMock.mockResolvedValue(null);
+
+    const res = await POST(req({ platform: "instagram" }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "The workspace owner can connect Instagram; then retry.",
+      code: "RECONNECT_REQUIRED",
+      platform: "instagram",
+      reason: "connect",
+    });
+  });
+
+  it("a flagged connection: the Reconnect wording, reason reconnect, for an owner and a member", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "instagram", status: "failed" }]));
+    connectionFindUniqueMock.mockResolvedValue({ needsReconnect: true });
+
+    const owner = await POST(req({ platform: "instagram" }), ctx("job-1"));
+    expect(owner.status).toBe(409);
+    expect(await owner.json()).toEqual({
+      error: "Reconnect Instagram in Settings before retrying.",
+      code: "RECONNECT_REQUIRED",
+      platform: "instagram",
+      reason: "reconnect",
+    });
+
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member" }));
+    const member = await POST(req({ platform: "instagram" }), ctx("job-1"));
+    expect(await member.json()).toEqual({
+      error: "The workspace owner can reconnect Instagram; then retry.",
+      code: "RECONNECT_REQUIRED",
+      platform: "instagram",
+      reason: "reconnect",
+    });
+  });
+
   it("IDEMPOTENCY: returns 409 and emits no event when the conditional claim matches nothing", async () => {
     postJobFindFirstMock.mockResolvedValue(
       makeJob([{ platform: "tiktok", status: "failed" }]),
@@ -690,9 +747,9 @@ describe("POST /api/posts/[postJobId]/retry", () => {
       retrying: ["tiktok"],
       leftOut: [
         { platform: "youtube", reason: "reconnect" },
-        { platform: "x", reason: "reconnect" },
+        { platform: "x", reason: "connect" },
       ],
-      notice: "YouTube left out: reconnect it in Settings. X left out: reconnect it in Settings.",
+      notice: "YouTube left out: reconnect it in Settings. X left out: connect it in Settings.",
     });
     expect(resultUpdateManyMock).toHaveBeenCalledTimes(1);
     expect((inngestSendMock.mock.calls[0][0] as { data: { platforms: string[] } }).data.platforms).toEqual(["tiktok"]);
@@ -772,6 +829,61 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     expect(resultUpdateManyMock).not.toHaveBeenCalled();
     expect(reserveRetryMock).not.toHaveBeenCalled();
     expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  // R58 pages-a-4 L1: Retry all with one platform left out for each reason.
+  it("retryAllFailed: one left out for each reason, refused: each with its own step, for an owner and a member", async () => {
+    postJobFindFirstMock.mockResolvedValue(
+      makeJob([
+        { platform: "instagram", status: "failed", errorCode: "PUBLISH_UNCONFIRMED" },
+        { platform: "x", status: "failed", errorCode: null },
+        { platform: "youtube", status: "failed", errorCode: null },
+      ]),
+    );
+    connectionFindUniqueMock.mockImplementation(async ({ where }: { where: { workspaceId_platform: { platform: string } } }) =>
+      where.workspaceId_platform.platform === "youtube" ? null : { needsReconnect: true },
+    );
+    const leftOut = [
+      { platform: "instagram", reason: "unconfirmed" },
+      { platform: "x", reason: "reconnect" },
+      { platform: "youtube", reason: "connect" },
+    ];
+
+    const owner = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+    expect(owner.status).toBe(409);
+    expect(await owner.json()).toEqual({
+      error:
+        "Instagram left out: check whether it posted first. X left out: reconnect it in Settings. YouTube left out: connect it in Settings.",
+      code: "RECONNECT_REQUIRED",
+      platform: "x",
+      leftOut,
+    });
+
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member" }));
+    const member = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+    expect(await member.json()).toEqual({
+      error:
+        "Instagram left out: check whether it posted first. X left out: the workspace owner can reconnect it. YouTube left out: the workspace owner can connect it.",
+      code: "RECONNECT_REQUIRED",
+      platform: "x",
+      leftOut,
+    });
+    expect(resultUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("retryAllFailed: only a platform with no connection left: refused with Connect, code unchanged", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "youtube", status: "failed", errorCode: null }]));
+    connectionFindUniqueMock.mockResolvedValue(null);
+
+    const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "YouTube left out: connect it in Settings.",
+      code: "RECONNECT_REQUIRED",
+      platform: "youtube",
+      leftOut: [{ platform: "youtube", reason: "connect" }],
+    });
   });
 
   it("retryAllFailed: only an unconfirmed platform left: refused, saying to check it first", async () => {

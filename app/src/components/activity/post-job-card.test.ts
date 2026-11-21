@@ -24,6 +24,7 @@ import {
   PostJobCard,
   ReconnectStep,
   reconnectRefusalToast,
+  refusedSteps,
   retryAllToast,
   retryRequestBody,
   SEND_AGAIN_FAILED,
@@ -665,6 +666,62 @@ describe("PostJobCard - what a member reads", () => {
     expect(reconnectRefusalToast("member", ["x", "instagram"], "the failed platforms", undefined)).toBe(
       "The workspace owner can reconnect X and Instagram; then retry.",
     );
+  });
+
+  // R58 pages-a-4 L1: a platform with no connection is connected, not reconnected.
+  it("the step for no connection: Connect with a Settings link for an owner, the owner's step for a member", () => {
+    const owner = renderToStaticMarkup(
+      createElement(ReconnectStep, { platform: "instagram", role: "owner", step: "connect" }),
+    ).replace(/<!-- -->/g, "");
+    expect(owner).toContain("Connect Instagram in");
+    expect(owner).not.toContain("Reconnect");
+    expect(owner).toContain("href=\"/settings");
+    const member = renderToStaticMarkup(
+      createElement(ReconnectStep, { platform: "instagram", role: "member", step: "connect" }),
+    ).replace(/<!-- -->/g, "");
+    expect(member).toContain("The workspace owner can connect Instagram; then retry.");
+    expect(member).not.toContain("href=");
+  });
+
+  it("the step for a flagged connection keeps Reconnect", () => {
+    const owner = renderToStaticMarkup(
+      createElement(ReconnectStep, { platform: "instagram", role: "owner", step: "reconnect" }),
+    ).replace(/<!-- -->/g, "");
+    expect(owner).toContain("Reconnect Instagram in");
+    const member = renderToStaticMarkup(
+      createElement(ReconnectStep, { platform: "instagram", role: "member", step: "reconnect" }),
+    ).replace(/<!-- -->/g, "");
+    expect(member).toContain("The workspace owner can reconnect Instagram; then retry.");
+  });
+
+  it("a retry refused for no connection: the fallback says Connect; for a flagged one, Reconnect", () => {
+    expect(reconnectRefusalToast("owner", ["x"], "X", undefined, "connect")).toBe("Connect X in Settings, then retry.");
+    expect(reconnectRefusalToast("member", ["x"], "X", undefined, "connect")).toBe(
+      "The workspace owner can connect X; then retry.",
+    );
+    expect(reconnectRefusalToast("owner", ["x"], "X", undefined, "reconnect")).toBe("Reconnect X in Settings before retrying.");
+    expect(reconnectRefusalToast("member", ["x"], "X", undefined, "reconnect")).toBe(
+      "The workspace owner can reconnect X; then retry.",
+    );
+  });
+
+  it("the step each refused platform shows comes from the server's reason", () => {
+    expect(refusedSteps("instagram", { code: "RECONNECT_REQUIRED", reason: "connect" })).toEqual([["instagram", "connect"]]);
+    expect(refusedSteps("instagram", { code: "RECONNECT_REQUIRED", reason: "reconnect" })).toEqual([["instagram", "reconnect"]]);
+    // An answer from before the reason was sent keeps the old step.
+    expect(refusedSteps("instagram", { code: "RECONNECT_REQUIRED" })).toEqual([["instagram", "reconnect"]]);
+    expect(
+      refusedSteps("all", {
+        leftOut: [
+          { platform: "instagram", reason: "unconfirmed" },
+          { platform: "x", reason: "reconnect" },
+          { platform: "youtube", reason: "connect" },
+        ],
+      }),
+    ).toEqual([
+      ["x", "reconnect"],
+      ["youtube", "connect"],
+    ]);
   });
 
   it("the card takes the viewer's role", () => {

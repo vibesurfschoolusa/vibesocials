@@ -10,10 +10,10 @@ import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { logger } from "@/lib/logger";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { isUnconfirmedResult } from "@/lib/postsDto";
-import { leftOutSentence, needsReconnecting, retryAllPlan, type LeftOut } from "@/lib/retryAll";
+import { connectionStep, leftOutSentence, retryAllPlan, type ConnectionStep, type LeftOut } from "@/lib/retryAll";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
-import { retryReconnectMessage } from "@/lib/ownerStepAnswers";
+import { retryConnectMessage, retryReconnectMessage } from "@/lib/ownerStepAnswers";
 import { recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import { buildRetryEvent } from "@/server/jobs/posting";
 import { isPostMediaComplete } from "@/server/jobs/postMedia";
@@ -82,13 +82,13 @@ export function parseRetryBody(body: unknown): RetryTarget | { error: string } {
   return { error: "Provide `platform` (one) or `retryAllFailed: true`." };
 }
 
-/** Whether `platform` has no connection in the workspace, or one that needs reconnecting. */
-async function needsReconnect(workspaceId: string, platform: Platform): Promise<boolean> {
+/** "connect" when `platform` has no connection in the workspace, "reconnect" when it is flagged, else null. */
+async function needsReconnect(workspaceId: string, platform: Platform): Promise<ConnectionStep | null> {
   const connection = await prisma.socialConnection.findUnique({
     where: { workspaceId_platform: { workspaceId, platform } },
     select: { needsReconnect: true },
   });
-  return needsReconnecting(connection);
+  return connectionStep(connection);
 }
 
 /**
@@ -206,19 +206,20 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   let leftOut: LeftOut[] = [];
   if (target.kind === "all") {
     const failed = postJob.results.filter((r) => r.status === "failed");
-    const dead = new Set<Platform>();
+    const dead = new Map<Platform, ConnectionStep>();
     for (const result of failed) {
-      if (!isUnconfirmedResult(result) && (await needsReconnect(workspaceContext.workspace.id, result.platform))) {
-        dead.add(result.platform);
-      }
+      if (isUnconfirmedResult(result)) continue;
+      const step = await needsReconnect(workspaceContext.workspace.id, result.platform);
+      if (step) dead.set(result.platform, step);
     }
     const plan = retryAllPlan(
       failed.map((result) => ({ ...result, unconfirmed: isUnconfirmedResult(result) })),
-      (platform) => dead.has(platform),
+      (platform) => dead.get(platform) ?? null,
     );
     leftOut = plan.leftOut;
     if (plan.included.length === 0 && leftOut.length > 0) {
-      const reconnect = leftOut.find((entry) => entry.reason === "reconnect");
+      // No connection keeps the RECONNECT_REQUIRED code; its reason says Connect.
+      const reconnect = leftOut.find((entry) => entry.reason !== "unconfirmed");
       return NextResponse.json(
         {
           error: leftOutSentence(leftOut, workspaceContext.role),
@@ -265,16 +266,21 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   // PERSONAL workspace — wrong for an invited member acting in someone
   // else's shared workspace).
   const dead: Platform[] = [];
-  if (target.kind === "platform" && (await needsReconnect(workspaceContext.workspace.id, target.platform))) {
-    dead.push(target.platform);
-  }
+  const step = target.kind === "platform" ? await needsReconnect(workspaceContext.workspace.id, target.platform) : null;
+  if (target.kind === "platform" && step) dead.push(target.platform);
   if (dead.length > 0) {
     return NextResponse.json(
       {
-        // R10-client-journey L1: only an owner can reconnect.
-        error: retryReconnectMessage(dead, workspaceContext.role),
+        // R10-client-journey L1: only an owner can reconnect. R58 pages-a-4
+        // L1: no connection is "connect" (Settings shows only Connect), with
+        // the same code; `reason` tells the card which step to show.
+        error:
+          step === "connect"
+            ? retryConnectMessage(dead, workspaceContext.role)
+            : retryReconnectMessage(dead, workspaceContext.role),
         code: "RECONNECT_REQUIRED",
         platform: dead[0],
+        reason: step,
       },
       { status: 409 },
     );

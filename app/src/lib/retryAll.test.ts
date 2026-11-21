@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { failedRowStep, leftOutSentence, needsReconnecting, retryAllPlan } from "./retryAll";
+import { connectionStep, failedRowStep, leftOutSentence, needsReconnecting, retryAllPlan } from "./retryAll";
 
 // R7 review, points 1 and 2: the one rule for what Retry all failed covers.
 describe("retryAllPlan", () => {
@@ -48,6 +48,28 @@ describe("retryAllPlan", () => {
     );
   });
 
+  // R58 pages-a-4 L1: no connection is its own reason; Settings offers only Connect for it.
+  it("one platform left out for each reason: unconfirmed, reconnect and connect, each with its own step", () => {
+    const plan = retryAllPlan(
+      [failed("instagram", true), failed("x"), failed("youtube"), failed("linkedin")] as never,
+      (p) => (p === "x" ? "reconnect" : p === "youtube" ? "connect" : null),
+    );
+    expect(plan).toEqual({
+      included: ["linkedin"],
+      leftOut: [
+        { platform: "instagram", reason: "unconfirmed" },
+        { platform: "x", reason: "reconnect" },
+        { platform: "youtube", reason: "connect" },
+      ],
+    });
+    expect(leftOutSentence(plan.leftOut, "owner")).toBe(
+      "Instagram left out: check whether it posted first. X left out: reconnect it in Settings. YouTube left out: connect it in Settings.",
+    );
+    expect(leftOutSentence(plan.leftOut, "member")).toBe(
+      "Instagram left out: check whether it posted first. X left out: the workspace owner can reconnect it. YouTube left out: the workspace owner can connect it.",
+    );
+  });
+
   it("nothing left out: no sentence", () => {
     expect(leftOutSentence([])).toBeNull();
   });
@@ -69,8 +91,15 @@ describe("failedRowStep and needsReconnecting", () => {
     expect(needsReconnecting({ needsReconnect: false })).toBe(false);
   });
 
+  it("connectionStep: no connection is connect, a flagged one is reconnect, a working one needs neither", () => {
+    expect(connectionStep(null)).toBe("connect");
+    expect(connectionStep(undefined)).toBe("connect");
+    expect(connectionStep({ needsReconnect: true })).toBe("reconnect");
+    expect(connectionStep({ needsReconnect: false })).toBeNull();
+  });
+
   it("retryAllPlan reads the same rule", () => {
     const source = readFileSync(new URL("./retryAll.ts", import.meta.url), "utf8");
-    expect(source).toMatch(/const step = failedRowStep\(result, needsReconnect\(result\.platform\)\);/);
+    expect(source).toMatch(/const step = failedRowStep\(result, gap !== null\);/);
   });
 });

@@ -35,7 +35,17 @@ export function nothingSentMessage(role: AnswerReader): string {
     : "Nothing was posted: each of this post's platforms is either not connected or needs reconnecting. Activity shows what to reconnect.";
 }
 
-/** Retry refused because the platform needs reconnecting first (RECONNECT_REQUIRED). */
+/**
+ * Retry refused because the platform has no connection (RECONNECT_REQUIRED,
+ * reason "connect"): Settings offers Connect for it, not Reconnect (R58 pages-a-4 L1).
+ */
+export function retryConnectMessage(platforms: readonly Platform[], role: AnswerReader): string {
+  return role === "member"
+    ? `The workspace owner can connect ${platformList(platforms)}; then retry.`
+    : `Connect ${platformList(platforms)} in Settings, then retry.`;
+}
+
+/** Retry refused because the platform's connection needs reconnecting first (RECONNECT_REQUIRED). */
 export function retryReconnectMessage(platforms: readonly Platform[], role: AnswerReader): string {
   return role === "member"
     ? `The workspace owner can reconnect ${platformList(platforms)}; then retry.`

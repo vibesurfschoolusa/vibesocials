@@ -11,7 +11,13 @@ import { platformLabel } from "./platforms";
  * again). Pure: no database, safe in the browser.
  */
 
-export type LeftOutReason = "unconfirmed" | "reconnect";
+/**
+ * R58 pages-a-4 L1: a platform with no connection is "connect", not
+ * "reconnect": Settings shows only Connect for it, and the failed row already
+ * says "Connect it in Settings, then retry." A flagged connection is "reconnect".
+ */
+export type ConnectionStep = "connect" | "reconnect";
+export type LeftOutReason = "unconfirmed" | ConnectionStep;
 export type LeftOut = { platform: Platform; reason: LeftOutReason };
 
 /**
@@ -26,22 +32,31 @@ export function failedRowStep(result: { unconfirmed: boolean }, needsReconnect: 
   return needsReconnect ? "reconnect" : "retry";
 }
 
+/** What the connection needs before a retry can work: connecting, reconnecting, or nothing. */
+export function connectionStep(connection: { needsReconnect: boolean } | null | undefined): ConnectionStep | null {
+  if (!connection) return "connect";
+  return connection.needsReconnect ? "reconnect" : null;
+}
+
 /** No connection for the platform, or one flagged as needing a reconnect. */
 export function needsReconnecting(connection: { needsReconnect: boolean } | null | undefined): boolean {
-  return !connection || connection.needsReconnect;
+  return connectionStep(connection) !== null;
 }
 
 export function retryAllPlan(
   results: ReadonlyArray<{ platform: Platform; status: string; unconfirmed: boolean }>,
-  needsReconnect: (platform: Platform) => boolean,
+  // A caller that only knows a flag passes a boolean; true reads as "reconnect".
+  needsReconnect: (platform: Platform) => ConnectionStep | boolean | null,
 ): { included: Platform[]; leftOut: LeftOut[] } {
   const included: Platform[] = [];
   const leftOut: LeftOut[] = [];
   for (const result of results) {
     if (result.status !== "failed") continue;
-    const step = failedRowStep(result, needsReconnect(result.platform));
+    const answer = needsReconnect(result.platform);
+    const gap: ConnectionStep | null = answer === true ? "reconnect" : answer === false ? null : answer;
+    const step = failedRowStep(result, gap !== null);
     if (step === "check_platform") leftOut.push({ platform: result.platform, reason: "unconfirmed" });
-    else if (step === "reconnect") leftOut.push({ platform: result.platform, reason: "reconnect" });
+    else if (gap !== null) leftOut.push({ platform: result.platform, reason: gap });
     else included.push(result.platform);
   }
   return { included, leftOut };
@@ -49,7 +64,8 @@ export function retryAllPlan(
 
 /**
  * What was left out and what to do about each, or null when nothing was. Only
- * an owner can reconnect, so a member's names the owner (R10-client-journey L1).
+ * an owner can connect or reconnect, so a member's names the owner
+ * (R10-client-journey L1).
  */
 export function leftOutSentence(leftOut: readonly LeftOut[], role: "owner" | "member" = "owner"): string | null {
   if (leftOut.length === 0) return null;
@@ -58,8 +74,8 @@ export function leftOutSentence(leftOut: readonly LeftOut[], role: "owner" | "me
       reason === "unconfirmed"
         ? `${platformLabel(platform)} left out: check whether it posted first.`
         : role === "member"
-          ? `${platformLabel(platform)} left out: the workspace owner can reconnect it.`
-          : `${platformLabel(platform)} left out: reconnect it in Settings.`,
+          ? `${platformLabel(platform)} left out: the workspace owner can ${reason} it.`
+          : `${platformLabel(platform)} left out: ${reason} it in Settings.`,
     )
     .join(" ");
 }

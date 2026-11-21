@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { connectionsSectionIntro, noConnectionsMessage, nothingSentMessage } from "./ownerStepAnswers";
+import {
+  connectionsSectionIntro,
+  noConnectionsMessage,
+  nothingSentMessage,
+  retryConnectMessage,
+  retryReconnectMessage,
+} from "./ownerStepAnswers";
 
 // R12 L3: the Connections section's intro, for whoever reads it.
 describe("connectionsSectionIntro", () => {
@@ -46,5 +52,18 @@ describe("noConnectionsMessage (unchanged)", () => {
     expect(noConnectionsMessage("create", "owner")).toBe("Connect at least one platform before creating a post.");
     expect(noConnectionsMessage("publish", "owner")).toBe("Connect at least one platform before publishing.");
     expect(noConnectionsMessage("publish", "member")).toBe("The workspace owner can connect a platform for this workspace.");
+  });
+});
+
+// R58 pages-a-4 L1: a platform with no connection is connected, not reconnected.
+describe("retryConnectMessage and retryReconnectMessage", () => {
+  it("no connection: Connect for an owner, the owner's step for a member", () => {
+    expect(retryConnectMessage(["instagram"], "owner")).toBe("Connect Instagram in Settings, then retry.");
+    expect(retryConnectMessage(["instagram"], "member")).toBe("The workspace owner can connect Instagram; then retry.");
+  });
+
+  it("a flagged connection keeps the Reconnect wording", () => {
+    expect(retryReconnectMessage(["instagram"], "owner")).toBe("Reconnect Instagram in Settings before retrying.");
+    expect(retryReconnectMessage(["instagram"], "member")).toBe("The workspace owner can reconnect Instagram; then retry.");
   });
 });

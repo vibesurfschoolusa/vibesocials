@@ -23,7 +23,7 @@ import { postActionRefusal, sendActionRequest } from "@/lib/queueActions";
 import { memberReconnectMessage, NOT_SENT_MESSAGE, sentenceForRecipient } from "@/lib/publishFailureText";
 import { sendAgainTooOld, tooOldToSendText } from "@/lib/sendAgain";
 import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
-import { retryAllPlan, type LeftOut } from "@/lib/retryAll";
+import { retryAllPlan, type ConnectionStep, type LeftOut } from "@/lib/retryAll";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 import { PlatformResultBadge } from "./platform-result";
 import { DailyMetricStats, PostMetricStats } from "./post-metric-stats";
@@ -50,6 +50,8 @@ interface RetryErrorBody {
   code?: string;
   /** RECONNECT_REQUIRED: the first platform to reconnect. */
   platform?: Platform;
+  /** RECONNECT_REQUIRED for one platform: connect it (no connection) or reconnect it (R58 pages-a-4 L1). */
+  reason?: ConnectionStep | null;
   /** R7 review: what Retry all failed left out, and why (on a 202 or a 409). */
   leftOut?: LeftOut[];
   /** On a 202: the sentence naming what was left out. */
@@ -81,22 +83,54 @@ export function reconnectRefusalToast(
   dead: readonly Platform[],
   label: string,
   serverError: string | undefined,
+  step: ConnectionStep = "reconnect",
 ): string {
   if (serverError) return serverError;
   const which = dead.length > 0 ? platformList(dead) : label;
+  if (step === "connect") {
+    return role === "member" ? `The workspace owner can connect ${which}; then retry.` : `Connect ${which} in Settings, then retry.`;
+  }
   return role === "member"
     ? `The workspace owner can reconnect ${which}; then retry.`
     : `Reconnect ${which} in Settings before retrying.`;
 }
 
-/** In place of a failed platform's Retry once the server said it needs reconnecting. */
-export function ReconnectStep({ platform, role }: { platform: Platform; role: ViewerRole }) {
+/**
+ * The platforms a retry answer sent to Settings, each with its step: Retry
+ * all's left-out list, or the one platform and the route's `reason` (an
+ * answer without one is from before it was sent, so "reconnect").
+ */
+export function refusedSteps(target: RetryTarget, body: RetryErrorBody): Array<[Platform, ConnectionStep]> {
+  if (target !== "all") return [[target, body.reason === "connect" ? "connect" : "reconnect"]];
+  return (body.leftOut ?? []).flatMap((entry): Array<[Platform, ConnectionStep]> =>
+    entry.reason === "unconfirmed" ? [] : [[entry.platform, entry.reason]],
+  );
+}
+
+/** In place of a failed platform's Retry once the server said it needs connecting or reconnecting. */
+export function ReconnectStep({
+  platform,
+  role,
+  step = "reconnect",
+}: {
+  platform: Platform;
+  role: ViewerRole;
+  step?: ConnectionStep;
+}) {
   const className =
     "inline-flex items-center gap-1 rounded-[var(--radius)] border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs text-foreground";
-  if (role === "member") return <span className={className}>{memberReconnectMessage(platform)}</span>;
+  if (role === "member") {
+    return (
+      <span className={className}>
+        {step === "connect"
+          ? `The workspace owner can connect ${platformLabel(platform)}; then retry.`
+          : memberReconnectMessage(platform)}
+      </span>
+    );
+  }
   return (
     <span className={className}>
-      Reconnect {platformLabel(platform)} in{" "}
+      {step === "connect" ? "Connect" : "Reconnect"} {platformLabel(platform)} in{" "}
       <Link
         href={SETTINGS_CONNECTIONS_HREF}
         className="font-medium text-primary underline underline-offset-2 hover:no-underline"
@@ -403,9 +437,9 @@ export function PostJobCard({
 }) {
   const [expanded, setExpanded] = useState(false);
   // Platforms whose retry is in flight (optimistic pending) and platforms the
-  // server told us to reconnect. Both are keyed by Platform.
+  // server told us to connect or reconnect, with that step. Both are keyed by Platform.
   const [pending, setPending] = useState<Set<Platform>>(new Set());
-  const [reconnect, setReconnect] = useState<Set<Platform>>(new Set());
+  const [reconnect, setReconnect] = useState<Map<Platform, ConnectionStep>>(new Map());
   const toast = useToast();
 
   // Task 8 — polling (usePostJobs) delivers a fresh `job` object identity
@@ -550,7 +584,7 @@ export function PostJobCard({
       const label = target === "all" ? "the failed platforms" : platformLabel(target);
       setReconnect((prev) => {
         if (!platforms.some((platform) => prev.has(platform))) return prev;
-        const next = new Set(prev);
+        const next = new Map(prev);
         for (const platform of platforms) next.delete(platform);
         return next;
       });
@@ -596,8 +630,8 @@ export function PostJobCard({
               for (const entry of leftOut) next.delete(entry.platform);
               return next;
             });
-            const dead = leftOut.filter((entry) => entry.reason === "reconnect").map((entry) => entry.platform);
-            if (dead.length > 0) setReconnect((prev) => new Set([...prev, ...dead]));
+            const dead = refusedSteps("all", body);
+            if (dead.length > 0) setReconnect((prev) => new Map([...prev, ...dead]));
             toast.success(retryAllToast(body.retrying ?? platforms, body.notice));
           } else {
             toast.success(`Retrying ${label}…`);
@@ -619,12 +653,18 @@ export function PostJobCard({
         rollBack();
 
         if (body.code === "RECONNECT_REQUIRED") {
-          const dead =
-            target === "all"
-              ? (body.leftOut ?? []).filter((entry) => entry.reason === "reconnect").map((entry) => entry.platform)
-              : [target];
-          if (dead.length > 0) setReconnect((prev) => new Set([...prev, ...dead]));
-          toast.error(reconnectRefusalToast(viewerRole, dead, label, body.error));
+          const dead = refusedSteps(target, body);
+          if (dead.length > 0) setReconnect((prev) => new Map([...prev, ...dead]));
+          const steps = dead.map(([, step]) => step);
+          toast.error(
+            reconnectRefusalToast(
+              viewerRole,
+              dead.map(([platform]) => platform),
+              label,
+              body.error,
+              steps.length > 0 && steps.every((step) => step === "connect") ? "connect" : "reconnect",
+            ),
+          );
           return;
         }
 
@@ -775,7 +815,7 @@ export function PostJobCard({
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {failedPlatforms.map((platform) =>
             reconnect.has(platform) ? (
-              <ReconnectStep key={platform} platform={platform} role={viewerRole} />
+              <ReconnectStep key={platform} platform={platform} role={viewerRole} step={reconnect.get(platform)} />
             ) : (
               <Button
                 key={platform}
