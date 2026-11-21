@@ -343,6 +343,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const pairDecided = Boolean(half && pair?.changed);
   // One half went out and the other had nothing to send: a success that says both.
   let partial: string | null = null;
+  // R60 pages-a-3 L1: the member's email line for the half that was not sent.
+  let partialNote: string | undefined;
 
   // The time the post is now scheduled for — only when approval kept its slot.
   const scheduledForIso =
@@ -426,6 +428,15 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
 
     if (pair && dispatch.notSent.has(pair.id)) pair = { ...pair, note: notSentNote(pair.kind, "owner", dispatch.connectionSteps.get(pair.id)) };
     partial = partialSendMessage(postJobId, half, dispatch);
+    // R60 pages-a-3 L1: the member's email said the Story "was approved too" and
+    // nothing more; it says which half was not sent, in the member's words, as
+    // the send-failed path does.
+    if (partial && pair) {
+      const [kind, id] = dispatch.notSent.has(pair.id)
+        ? [pair.kind, pair.id]
+        : [pair.kind === "story" ? ("feed" as const) : ("story" as const), postJobId];
+      partialNote = notSentNote(kind, "member", dispatch.connectionSteps.get(id));
+    }
     // Same contract as the publish route: if the events can't be handed to
     // Inngest, the pending results are failed (job → failed) rather than left
     // "publishing" forever. The approval itself stands. Checked first (R4 lows,
@@ -481,7 +492,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     }
   }
 
-  const authorEmail = await tellSubmitter();
+  const authorEmail = await tellSubmitter(undefined, false, false, partialNote ? { note: partialNote } : undefined);
 
   return NextResponse.json(
     {

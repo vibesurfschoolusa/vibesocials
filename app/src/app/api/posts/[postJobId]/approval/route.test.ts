@@ -97,6 +97,12 @@ import { htmlToPlainText } from "@/server/notifications/plainText";
 
 import { POST } from "./route";
 
+/** R60 pages-a-3 L1: the not-sent notes a member's email carries for a half-sent pair (the member's step). */
+const MEMBER_STEP =
+  "each of its platforms is either not connected or needs reconnecting. Activity shows what didn't go out; the workspace owner can connect or reconnect it.";
+const MEMBER_STORY_NOT_SENT = `Its Story was not sent: ${MEMBER_STEP}`;
+const MEMBER_FEED_NOT_SENT = `Its feed post was not sent: ${MEMBER_STEP}`;
+
 const SUBMITTED = new Date("2026-07-26T09:00:00Z");
 /** The version of the post the owner reviewed (PostJob.updatedAt). */
 const REVIEWED = new Date("2026-07-26T09:30:00.250Z");
@@ -1261,6 +1267,53 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
       "Approved. The Story is being sent. The feed post was not: Reconnect Facebook Page in Settings.",
     );
     expect(inngestSendMock).toHaveBeenCalledWith(expect.objectContaining({ id: "publish-story-1" }));
+  });
+
+  // R60 pages-a-3 L1: one half went out and the other had nothing to send.
+  // The member's email said the Story "was approved too" and nothing more; it
+  // now carries the not-sent note, as the send-failed path does, in the
+  // member's words.
+  describe("approved to publish now, one half not sent: the member's email", () => {
+    const event = (id: string) => ({
+      ok: true,
+      event: { postJobId: id, userId: "member-1", workspaceId: "ws-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null },
+    });
+
+    it("the Story not sent: the email says the Story was not sent, with the member's step", async () => {
+      findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+      prepareDispatchMock.mockImplementation(async (id: string) => (id === "story-1" ? { ok: false, reason: "NO_CONNECTIONS" } : event(id)));
+
+      const res = await POST(req({ decision: "approve", includePair: true }), ctx("job-1"));
+
+      expect(res.status).toBe(200);
+      const text = htmlToPlainText(sendEmailMock.mock.calls[0][0].html as string);
+      expect(text).toContain("It is approved and publishing now.");
+      expect(text).toContain("Its Story on Instagram was approved too.");
+      expect(text).toContain(MEMBER_STORY_NOT_SENT);
+    });
+
+    it("the feed post not sent: the email says the feed post was not sent", async () => {
+      findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+      prepareDispatchMock.mockImplementation(async (id: string) => (id === "job-1" ? { ok: false, reason: "NO_CONNECTIONS" } : event(id)));
+      resultFindFirstMock.mockResolvedValue({ errorMessage: "Reconnect Facebook Page in Settings." });
+
+      const res = await POST(req({ decision: "approve", includePair: true }), ctx("job-1"));
+
+      expect(res.status).toBe(200);
+      const text = htmlToPlainText(sendEmailMock.mock.calls[0][0].html as string);
+      expect(text).toContain(MEMBER_FEED_NOT_SENT);
+    });
+
+    it("both halves sent: no not-sent line, as now", async () => {
+      findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+      prepareDispatchMock.mockImplementation(async (id: string) => event(id));
+
+      await POST(req({ decision: "approve", includePair: true }), ctx("job-1"));
+
+      const text = htmlToPlainText(sendEmailMock.mock.calls[0][0].html as string);
+      expect(text).toContain("Its Story on Instagram was approved too.");
+      expect(text).not.toMatch(/was not sent/);
+    });
   });
 
   it("a pair approved to publish now counts as two posts today, neither against itself", async () => {
