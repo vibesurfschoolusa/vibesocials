@@ -304,10 +304,12 @@ describe("computeTikTokCaption", () => {
     const caption = piece.repeat(500);
     const result = computeTikTokCaption(caption);
     expect(result.length).toBeLessThanOrEqual(2200);
-    expect(result.length).toBeGreaterThan(2200 - piece.length);
+    expect(result.length).toBeGreaterThan(2200 - 8);
     expect(result.isWellFormed()).toBe(true);
-    expect(result.length % piece.length).toBe(0);
-    expect(caption.startsWith(result)).toBe(true);
+    const graphemes = (text: string) =>
+      [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map((s) => s.segment);
+    const kept = graphemes(result);
+    expect(kept).toEqual(graphemes(caption).slice(0, kept.length));
   });
 
   it("2,150 graphemes with 100 emoji (over 2,200 units) is cut to 2,200 units or fewer, at a whole word", () => {

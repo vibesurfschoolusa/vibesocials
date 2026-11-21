@@ -3,7 +3,7 @@ import type { Platform } from "@prisma/client";
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
 import { fitPinterestDescription, pinterestCountHint, pinterestDescriptionLength } from "@/lib/pinterestApi";
 import { type CaptionUnit, PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
-import { truncateGraphemesAtWord, truncateKeepingLinksAtWord } from "@/lib/truncate";
+import { truncateGraphemesAtWord, truncateKeepingLinksAtWord, truncateUtf16AtWord } from "@/lib/truncate";
 import { removeXMentions } from "@/lib/xMentions";
 import { truncateXWeighted, xWeightedLength } from "@/lib/xWeightedLength";
 import { fitYouTubeDescription, youtubeCountHint, youtubeDescriptionLength } from "@/lib/youtubeDescription";
@@ -22,6 +22,7 @@ function countGraphemes(text: string): number {
 function countIn(unit: CaptionUnit | null, text: string): number {
   if (unit === "xWeight") return xWeightedLength(text);
   if (unit === "codePoint") return pinterestDescriptionLength(text);
+  if (unit === "utf16") return text.length;
   return countGraphemes(text);
 }
 
@@ -178,6 +179,8 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
     if (input.platform === "x") rendered = truncateXWeighted(fullCaption, charLimit, ellipsis);
     else if (input.platform === "linkedin") rendered = truncateKeepingLinksAtWord(fullCaption, charLimit, ellipsis);
     else if (input.platform === "pinterest") rendered = fitPinterestDescription(fullCaption);
+    // R65: TikTok in UTF-16 units, as computeTikTokCaption cuts.
+    else if (unit === "utf16") rendered = truncateUtf16AtWord(fullCaption, charLimit, { ellipsis });
     // At the last whole word, as every client cuts (R62 Instagram, R63 TikTok,
     // R64 Google Business Profile, computeGbpPostSummary).
     else rendered = truncateGraphemesAtWord(fullCaption, charLimit, { ellipsis });

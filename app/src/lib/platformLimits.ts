@@ -34,9 +34,11 @@ import { MULTI_PHOTO_MIME_TYPES, X_MAX_PHOTOS } from "./postMedia";
  * - `xWeight`: X's weight (lib/xWeightedLength.ts), an emoji 2 and a link 23;
  * - `codePoint`: Unicode code points, what a JSON `maxLength` counts (Pinterest);
  *   a heart or a flag is one character and 2 code points;
- * - `utf8Byte`: UTF-8 bytes after the angle quotes (YouTube's description).
+ * - `utf8Byte`: UTF-8 bytes after the angle quotes (YouTube's description);
+ * - `utf16`: UTF-16 code units, JavaScript's `string.length` (TikTok's title),
+ *   an emoji 2.
  */
-export type CaptionUnit = "grapheme" | "xWeight" | "codePoint" | "utf8Byte";
+export type CaptionUnit = "grapheme" | "xWeight" | "codePoint" | "utf8Byte" | "utf16";
 
 export interface PlatformCaptionLimit {
   /**
@@ -62,8 +64,9 @@ export const PLATFORM_CAPTION_LIMITS: Record<Platform, PlatformCaptionLimit> = {
   // X counts by weight, not graphemes (fix round 1, M5): an emoji 2, a link 23
   // (lib/xWeightedLength.ts). xClient.ts cuts with truncateXWeighted.
   x: { charLimit: 280, unit: "xWeight", ellipsis: "..." },
-  // Matches the truncateGraphemesAtWord call in server/platforms/tiktokClient.ts.
-  tiktok: { charLimit: 2200, unit: "grapheme" },
+  // Matches the truncateUtf16AtWord call in server/platforms/tiktokClient.ts.
+  // R65: TikTok's Direct Post reference: "maximum length is 2200 in UTF-16 runes".
+  tiktok: { charLimit: 2200, unit: "utf16" },
   // youtubeClient.ts fits the VIDEO TITLE (a separate field, 100 chars) and
   // cuts the description, footer included, to YouTube's 5,000 BYTES with
   // fitYouTubeDescription (lib/youtubeDescription.ts), which reads this entry.

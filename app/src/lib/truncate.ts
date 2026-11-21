@@ -123,6 +123,44 @@ export function truncateGraphemesAtWord(text: string, maxGraphemes: number, opts
   return graphemes.slice(0, end).join("") + ellipsis;
 }
 
+/**
+ * `truncateGraphemesAtWord` counted in UTF-16 code units (R65, TikTok: "maximum
+ * length is 2200 in UTF-16 runes"), the strict reading, so it is safe whether
+ * TikTok means code units or code points. Whole graphemes are kept while they
+ * fit, so no grapheme or surrogate pair is split, then the cut ends at the last
+ * whole word, with the same 100-grapheme look-back. The ellipsis is counted in
+ * units too. Text that fits comes back unchanged.
+ */
+export function truncateUtf16AtWord(text: string, maxUnits: number, opts?: TruncateOptions): string {
+  const max = Math.max(0, Math.floor(maxUnits));
+  if (text.length <= max) return text;
+
+  const ellipsis = opts?.ellipsis ?? "";
+  const budget = max - ellipsis.length;
+  if (budget <= 0) return "";
+
+  const graphemes = toGraphemes(text);
+  let fit = 0;
+  let used = 0;
+  while (fit < graphemes.length && used + graphemes[fit].length <= budget) {
+    used += graphemes[fit].length;
+    fit += 1;
+  }
+
+  // The next grapheme is a space: the cut already ends a word.
+  let end = fit;
+  if (!WHITESPACE.test(graphemes[fit])) {
+    const stop = Math.max(0, fit - WORD_LOOKBACK);
+    let space = fit - 1;
+    while (space > stop && !WHITESPACE.test(graphemes[space])) space -= 1;
+    if (space > 0 && WHITESPACE.test(graphemes[space])) end = space;
+  }
+  while (end > 0 && WHITESPACE.test(graphemes[end - 1])) end -= 1;
+  // Only spaces before the limit: nothing whole to keep, so the plain unit cut.
+  if (end === 0) end = fit;
+  return graphemes.slice(0, end).join("") + ellipsis;
+}
+
 const sentenceSegmenter = new Intl.Segmenter(undefined, { granularity: "sentence" });
 
 /**

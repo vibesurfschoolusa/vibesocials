@@ -213,7 +213,8 @@ describe("PlatformPreviewList count line on the other platforms, unchanged by Pi
 
   it.each([
     ["x", ["198 / 280 characters"], ["3749 / 280 characters"]],
-    ["tiktok", ["189 / 2200 characters"], ["3749 / 2200 characters"]],
+    // R65: TikTok counts UTF-16 units, so the four waves count 2 each.
+    ["tiktok", ["193 / 2200 characters"], ["3749 / 2200 characters"]],
     ["instagram", ["189 / 2200 characters"], ["3749 / 2200 characters"]],
     ["linkedin", ["253 / 3000 characters"], ["3749 / 3000 characters"]],
     ["facebook_page", ["253 characters"], ["3867 characters"]],

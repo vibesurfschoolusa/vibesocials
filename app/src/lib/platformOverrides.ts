@@ -100,6 +100,7 @@ function platformLength(text: string, platform: Platform): number {
   const { unit } = PLATFORM_CAPTION_LIMITS[platform];
   if (unit === "xWeight") return xWeightedLength(text);
   if (unit === "codePoint") return pinterestDescriptionLength(text);
+  if (unit === "utf16") return text.length;
   return [...graphemeSegmenter.segment(text)].length;
 }
 

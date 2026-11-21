@@ -4,7 +4,7 @@ import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { asStorageReadFailure } from "@/lib/publishFailureText";
-import { truncateGraphemesAtWord } from "@/lib/truncate";
+import { truncateUtf16AtWord } from "@/lib/truncate";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 
 import { commitRequest, publishUnconfirmedError } from "./commitCall";
@@ -427,7 +427,8 @@ export function computeTikTokCaption(caption: string): string {
   // check only exists to satisfy the shared `Record<Platform, ...>` type.
   // R63 platform-clients L1: at the last whole word, so a #tag or @mention is
   // never sent in part (part of one can tag another account).
-  return charLimit === null ? caption : truncateGraphemesAtWord(caption, charLimit, { ellipsis });
+  // R65: counted in UTF-16 units, as TikTok counts its title (platformLimits.ts).
+  return charLimit === null ? caption : truncateUtf16AtWord(caption, charLimit, { ellipsis });
 }
 
 /** Terminal/transient classification of a single TikTok publish-status poll. */

@@ -37,6 +37,9 @@ function composeCaption(base: string, website: string | undefined, hashtags: str
 function platformLength(text: string, platform: Platform): number {
   if (platform === "x") return xWeightedLength(removeXMentions(text));
   if (platform === "linkedin") return graphemeCount(text);
+  // R65: TikTok cuts by UTF-16 units, more than code points for an emoji, so
+  // the rule counts them too; otherwise a kept footer could still be cut.
+  if (PLATFORM_CAPTION_LIMITS[platform].unit === "utf16") return text.length;
   return [...text].length;
 }
 

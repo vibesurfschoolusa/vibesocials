@@ -24,8 +24,9 @@ describe("PLATFORM_CAPTION_LIMITS", () => {
     expect(PLATFORM_CAPTION_LIMITS.x).toEqual({ charLimit: 280, unit: "xWeight", ellipsis: "..." });
   });
 
-  it("sets TikTok's client-enforced limit to 2200 graphemes with no ellipsis", () => {
-    expect(PLATFORM_CAPTION_LIMITS.tiktok).toEqual({ charLimit: 2200, unit: "grapheme" });
+  // R65: TikTok's Direct Post reference counts the title "in UTF-16 runes".
+  it("sets TikTok's client-enforced limit to 2200 UTF-16 units with no ellipsis", () => {
+    expect(PLATFORM_CAPTION_LIMITS.tiktok).toEqual({ charLimit: 2200, unit: "utf16" });
     expect(PLATFORM_CAPTION_LIMITS.tiktok.ellipsis).toBeUndefined();
   });
 
@@ -89,7 +90,7 @@ describe("PLATFORM_CAPTION_LIMITS", () => {
   it("names every platform's unit", () => {
     expect(Object.fromEntries(Object.entries(PLATFORM_CAPTION_LIMITS).map(([p, l]) => [p, l.unit]))).toEqual({
       x: "xWeight",
-      tiktok: "grapheme",
+      tiktok: "utf16",
       youtube: "utf8Byte",
       instagram: "grapheme",
       linkedin: "grapheme",

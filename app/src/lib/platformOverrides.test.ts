@@ -544,6 +544,7 @@ describe("platformCaptionCounter and adaptMaxLength on Pinterest", () => {
 });
 
 // R53: TikTok's counter and Adapt room, pinned from main 632efda, with no hint.
+// R65: counted in UTF-16 units since, so each wave (2 units), the family (8) and the accent (e and its mark, 2) count more.
 describe("platformCaptionCounter on TikTok, unchanged by Pinterest's unit", () => {
   const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #waves", trackWebsiteLinks: true };
   const short = "Dawn patrol at Las Olas \u{1F30A} <3 café ".repeat(4).trim();
@@ -551,17 +552,17 @@ describe("platformCaptionCounter on TikTok, unchanged by Pinterest's unit", () =
 
   it("short, long, a family and an accent", () => {
     expect(platformCaptionCounter(short, "tiktok", user)).toEqual({
-      length: 189,
+      length: 193,
       max: 2200,
       over: false,
-      label: "189 / 2,200 incl. footer",
+      label: "193 / 2,200 incl. footer",
     });
     expect(platformCaptionCounter(long, "tiktok", user)).toEqual({ length: 3749, max: 2200, over: true, label: "3,749 / 2,200" });
     expect(platformCaptionCounter("é \u{1F468}‍\u{1F469}‍\u{1F467}", "tiktok", null)).toEqual({
-      length: 3,
+      length: 11,
       max: 2200,
       over: false,
-      label: "3 / 2,200",
+      label: "11 / 2,200",
     });
     expect(adaptMaxLength("tiktok", user)).toBe(2146);
   });

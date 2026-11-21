@@ -699,7 +699,8 @@ describe("buildPlatformPreview on the other platforms, unchanged by Pinterest's 
     const footer = "\n\nFor more info visit vibesurfschool.com\n\n#surf #waves";
     expect(buildPlatformPreview({ platform: "tiktok", caption: short, user })).toEqual({
       rendered: `${short}${footer}`,
-      charCount: 189,
+      // R65: UTF-16 units, so the four waves count 2 each.
+      charCount: 193,
       limit: 2200,
       truncated: false,
       willTruncate: false,

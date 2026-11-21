@@ -268,10 +268,11 @@ describe("buildCaptionWithFooter drops the footer before the caption is cut", ()
       expect(buildCaptionWithFooter("a".repeat(limit + 100), footer, platform)).toBe("a".repeat(limit + 100));
     });
 
-    it("counts an emoji by its code points, so the client never cuts into the footer", () => {
-      const surfer = String.fromCodePoint(0x1f3c4, 0x200d, 0x2642, 0xfe0f); // one grapheme, four code points
+    it("counts an emoji by its code points (TikTok: its UTF-16 units), so the client never cuts into the footer", () => {
+      const surfer = String.fromCodePoint(0x1f3c4, 0x200d, 0x2642, 0xfe0f); // one grapheme, four code points, five units
       const caption = surfer.repeat(Math.floor((limit - 54) / 4) + 1);
-      expect(buildCaptionWithFooter(caption, footer, platform)).toBe(`${caption}\n\n${website}`);
+      // R65: TikTok counts UTF-16 units, so this caption is over by itself and keeps no footer.
+      expect(buildCaptionWithFooter(caption, footer, platform)).toBe(platform === "tiktok" ? caption : `${caption}\n\n${website}`);
     });
   });
 
@@ -307,7 +308,8 @@ describe("buildCaptionWithFooter on TikTok counts UTF-16 units", () => {
   });
 
   it("the footer is dropped whole when only code points would let it fit", () => {
-    const caption = wave.repeat(1075); // 1,075 code points, 2,150 units
+    // 1,090 code points and 2,180 units: with the website line 2,220 units, but 1,130 code points.
+    const caption = wave.repeat(1090);
     expect(buildCaptionWithFooter(caption, plain, "tiktok")).toBe(caption);
   });
 
