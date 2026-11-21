@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
-import { useCaptionBox } from "./useCaptionBox";
+import { useCaptionBox, type AiRequest } from "./useCaptionBox";
 
 /**
  * R37 lead review: Create's caption requests outlive the render that started
@@ -189,5 +189,39 @@ describe("Create's caption box: a press and its late answer", () => {
     expect(latest.lastAiCaption).toBe("A described");
     await step(() => latest.forgetMediaCaption());
     expect(latest.caption).toBe("A edited, better");
+  });
+});
+
+describe("R65 pages-b L3: leaving the page lets go of every AI request", () => {
+  it("unmounted: every running request is let go and its fetch aborted", async () => {
+    const box = await mount();
+    let automatic!: AiRequest;
+    let improve!: AiRequest;
+    let description!: AiRequest;
+    await step(() => {
+      automatic = box.aiRequestStarted({ media: true, automatic: true });
+      improve = box.aiRequestStarted({ media: false, automatic: false, intoCaption: { press: box.pressed(null), overwrite: true } });
+      description = box.aiRequestStarted({ media: false, automatic: false, photo: fileA, descriptionAtPress: "" });
+    });
+    for (const request of [automatic, improve, description]) expect(request.live()).toBe(true);
+    await act(async () => root.unmount());
+
+    for (const request of [automatic, improve, description]) {
+      expect(request.live()).toBe(false);
+      expect(request.signal.aborted).toBe(true);
+    }
+    root = createRoot(container as unknown as HTMLElement);
+  });
+
+  it("still mounted: a running request stays live", async () => {
+    const box = await mount();
+    let request!: AiRequest;
+    await step(() => {
+      request = box.aiRequestStarted({ media: true, automatic: false });
+    });
+    await mount();
+    expect(request.live()).toBe(true);
+    expect(request.signal.aborted).toBe(false);
+    await step(() => request.done());
   });
 });

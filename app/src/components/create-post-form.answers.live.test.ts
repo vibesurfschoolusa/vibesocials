@@ -1144,3 +1144,92 @@ describe("the automatic caption's refusal says no caption was written", () => {
     expect(pageSays("No caption was written")).toBe(false);
   });
 });
+
+describe("R65 publishing-flow L3, pages-b L3: AI requests after the page was left", () => {
+  const pageSays = (text: string) => (body.textContent as string).includes(text);
+  const photo = () => new File(["a"], "a.jpg", { type: "image/jpeg" });
+  const video = () => new File(["v"], "v.mp4", { type: "video/mp4" });
+  const tooMany = () =>
+    Response.json(
+      { error: "Too many tries. Wait 4 minutes, then try again.", retryAfterSeconds: 230 },
+      { status: 429, headers: { "Retry-After": "230" } },
+    );
+  const TOO_MANY = "Too many tries. Wait 4 minutes, then try again.";
+  // The toasts are app-wide (app-shell.tsx): the provider stays, the page goes.
+  async function leaveForm() {
+    await act(async () => {
+      root.render(createElement(ToastProvider, null, null));
+    });
+    await settle();
+  }
+  const quiet = () => vi.spyOn(console, "error").mockImplementation(() => {});
+
+  it("an automatic caption refused after leaving: no toast", async () => {
+    const consoleError = quiet();
+    try {
+      await pick(photo());
+      await finishUploads();
+      expect(autoCaptionCalls()).toBe(1);
+      await leaveForm();
+      await answer("/api/posts/auto-caption", tooMany());
+
+      expect(pageSays(TOO_MANY)).toBe(false);
+      expect(pageSays("No caption was written")).toBe(false);
+      expect(signals[0]!.aborted).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("frames still being read at leaving: no caption request is sent", async () => {
+    frames.hold = true;
+    await pick(video());
+    await finishUploads();
+    expect(frames.waiting).toHaveLength(1);
+    await leaveForm();
+    await run(() => frames.waiting.splice(0).forEach((go) => go()));
+
+    expect(autoCaptionCalls()).toBe(0);
+  });
+
+  it("Improve pressed, then leaving: no toast", async () => {
+    const consoleError = quiet();
+    try {
+      await typeCaption("Surf lesson today");
+      await press("Improve caption");
+      await leaveForm();
+      await answer("/api/posts/enhance-caption", tooMany());
+
+      expect(pageSays(TOO_MANY)).toBe(false);
+      expect(signals[0]!.aborted).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("stays: an Improve failure while still on the page still toasts", async () => {
+    const consoleError = quiet();
+    try {
+      await typeCaption("Surf lesson today");
+      await press("Improve caption");
+      await answer("/api/posts/enhance-caption", tooMany());
+
+      expect(pageSays(TOO_MANY)).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("stays: an automatic caption refused while still on the page still toasts", async () => {
+    const consoleError = quiet();
+    try {
+      await pick(photo());
+      await finishUploads();
+      await answer("/api/posts/auto-caption", tooMany());
+
+      expect(pageSays(`No caption was written. ${TOO_MANY}`)).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+});

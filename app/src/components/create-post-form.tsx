@@ -2003,8 +2003,9 @@ function CreatePostFormInner({
 
       const blobInfo = await ensureUploaded(nextFile);
       // A newer pick replaced this one while it uploaded: its
-      // caption must not land on the newer photo.
-      const isStale = () => selection !== fileSelectionRef.current;
+      // caption must not land on the newer photo. R65 publishing-flow L3: nor
+      // is it asked for once the page is left, as the photo-set path does.
+      const isStale = () => selection !== fileSelectionRef.current || !mountedRef.current;
       if (isStale()) {
         return;
       }

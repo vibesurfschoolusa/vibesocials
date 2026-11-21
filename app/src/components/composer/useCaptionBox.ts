@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 
 import { captionAfterMediaChange } from "./attached-photos";
 
@@ -193,6 +193,10 @@ export function useCaptionBox() {
   const letGoAiRequests = useCallback((which: (kind: AiRequestKind) => boolean) => {
     for (const entry of [...runningRef.current]) if (which(entry.kind)) entry.letGo();
   }, []);
+
+  // R65 pages-b L3: leaving the page lets go of every request, so none is sent
+  // after it and none toasts on the next page (the toasts are app-wide).
+  useEffect(() => () => letGoAiRequests(() => true), [letGoAiRequests]);
 
   function setLastAiCaption(next: string | null) {
     lastAiRef.current = next;
