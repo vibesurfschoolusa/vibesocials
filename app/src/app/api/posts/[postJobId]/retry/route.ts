@@ -355,6 +355,9 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
             ? `${platformLabel(target.platform)} is already being retried or has gone out. Activity now shows where it stands.`
             : lostRaceText(candidates, leftOutSentence(leftOut, workspaceContext.role)),
         code: "NOTHING_TO_RETRY",
+        // R59 publishing-flow L2: as the other Retry all 409, so the card
+        // swaps Retry for the step the message names.
+        ...(leftOut.length > 0 ? { leftOut } : {}),
       },
       { status: 409 },
     );

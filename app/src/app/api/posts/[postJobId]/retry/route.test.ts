@@ -419,6 +419,49 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
+  // R59 publishing-flow L2: the lost race carries leftOut, in the shape of the
+  // other Retry all 409, so the card swaps Retry for the step the message names.
+  it("Retry all failed, race lost with a platform left out: the body carries leftOut", async () => {
+    postJobFindFirstMock.mockResolvedValue(
+      makeJob([
+        { platform: "instagram", status: "failed" },
+        { platform: "x", status: "failed" },
+        { platform: "facebook_page", status: "failed" },
+      ]),
+    );
+    connectionFindUniqueMock.mockImplementation(async ({ where }: { where: { workspaceId_platform: { platform: string } } }) =>
+      where.workspaceId_platform.platform === "facebook_page" ? null : { needsReconnect: false },
+    );
+    resultUpdateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error:
+        "Instagram and X are already being retried or have gone out. Activity now shows where it stands. Facebook Page left out: connect it in Settings.",
+      code: "NOTHING_TO_RETRY",
+      leftOut: [{ platform: "facebook_page", reason: "connect" }],
+    });
+  });
+
+  it("Retry all failed, race lost with nothing left out: the body is as before, without leftOut", async () => {
+    postJobFindFirstMock.mockResolvedValue(
+      makeJob([
+        { platform: "instagram", status: "failed" },
+        { platform: "tiktok", status: "failed" },
+      ]),
+    );
+    resultUpdateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+
+    expect(await res.json()).toEqual({
+      error: "Nothing to retry: none of this post's platforms has failed. Activity now shows where it stands.",
+      code: "NOTHING_TO_RETRY",
+    });
+  });
+
   it("Retry all failed, race lost with one platform included and one left out: the singular form", async () => {
     postJobFindFirstMock.mockResolvedValue(
       makeJob([
