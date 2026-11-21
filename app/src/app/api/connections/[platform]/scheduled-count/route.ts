@@ -18,9 +18,10 @@ interface PlatformRouteContext {
  * How many scheduled posts chose this platform, for the Disconnect dialog: at
  * publish time each of them gets a failed "not connected" result on it
  * (server/jobs/posting.ts CONNECTION_GONE). A Feed and Story post counts
- * once. R61 pages-a-2 L1: a post waiting for approval with a time counts
- * too (dashboard/summary's AWAITING_APPROVAL): it keeps its time and
- * platforms, and once approved it fails the same way. The answer stays
+ * once. R61 pages-a-2 L1: a post waiting for approval counts too
+ * (dashboard/summary's AWAITING_APPROVAL), with or without a time (R62
+ * new-customer L1: a held Publish now post has none): it keeps its platforms,
+ * and once approved it fails the same way. The answer stays
  * `{ count }`, so an open page keeps reading it. `workspaceId` is the workspace the Settings page was rendered for
  * (F3), so a stale tab never shows another workspace's number. Read-only and
  * member-readable, like GET /api/connections/[platform].
@@ -52,7 +53,6 @@ export async function GET(request: NextRequest, context: PlatformRouteContext) {
             status: { in: [...APPROVAL_DECIDABLE_STATUSES] },
             submittedForApprovalAt: { not: null },
             approvedAt: null,
-            scheduledFor: { not: null },
           },
         ],
         publishMetadata: { path: ["targetPlatforms"], array_contains: [platform] },
