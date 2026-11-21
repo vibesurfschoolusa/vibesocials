@@ -1567,6 +1567,15 @@ function CreatePostFormInner({
   const repeatDates = repeatOn
     ? repeatSchedule(new Date(scheduledForLocal), repeat as RepeatInterval, repeatCount)
     : [];
+  // R64 pages-b L1: performSubmit builds the request from the form as it was at
+  // the press, after the upload, and the success clears it, so an edit made while
+  // a Schedule or Save draft sends would be dropped unseen. Those fields lock
+  // until the send ends, and so does every other control that shapes the post
+  // (R64 fix review L1; the frozen platform settings named in the brief stay as they are).
+  // The file stays changeable, which stops the send (R63).
+  // Publish now's dialog covers the form while it sends. R65 review L1: each part
+  // takes it as its own disabled prop; nothing is wrapped around a part.
+  const sendLocksFields = uploadLoading && !confirmPublishOpen;
   // V1: the video the Cover control is for, and the source its frame is captured from.
   const coverVideo: { url: string; source: File | string } | null =
     reuseItem && reuseItem.mimeType.startsWith("video/")
@@ -1583,6 +1592,7 @@ function CreatePostFormInner({
       durationSec={videoDurationSec}
       value={coverChoice}
       onChange={(choice) => setCoverState({ videoUrl: coverVideo.url, choice })}
+      disabled={sendLocksFields}
     />
   ) : null;
   // Sent only for a selected platform with Story or Feed and Story chosen: a
@@ -2747,14 +2757,6 @@ function CreatePostFormInner({
     }
   }
 
-  // R64 pages-b L1: performSubmit builds the request from the form as it was at
-  // the press, after the upload, and the success clears it, so an edit made while
-  // a Schedule or Save draft sends would be dropped unseen. Those fields lock
-  // until the send ends, and so does every other control that shapes the post
-  // (R64 fix review L1; the frozen platform settings named in the brief stay as they are).
-  // The file stays changeable, which stops the send (R63).
-  // Publish now's dialog covers the form while it sends.
-  const sendLocksFields = uploadLoading && !confirmPublishOpen;
 
   // R65 new-customer L1: Enter in a field the lock then disables (Publish at,
   // alt text, a Google field) left focus on the page body for the whole send.
@@ -3147,7 +3149,7 @@ function CreatePostFormInner({
                   type="button"
                   onClick={handleDismissReuse}
                   disabled={sendLocksFields}
-                  className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+                  className="text-xs font-medium text-primary underline-offset-4 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Use a different file instead
                 </button>
@@ -3167,22 +3169,21 @@ function CreatePostFormInner({
                   className="max-h-64 w-full rounded-[var(--radius)] border border-border"
                 />
               ) : null}
-              <SendLock locked={sendLocksFields}>{coverPicker}</SendLock>
+              {coverPicker}
               <p className="text-xs text-muted-foreground">
                 {reuseItem.originalFilename} &middot; {formatBytes(reuseItem.sizeBytes)}
               </p>
               {reuseItem.mimeType.startsWith("image/") && (
-                <SendLock locked={sendLocksFields}>
-                  <PhotoDescriptionField
-                    id="post-alt-text"
-                    label="Describe this photo (alt text)"
-                    value={singleAltText}
-                    onChange={setSingleAltText}
-                    onWrite={() =>
-                      describeSinglePhoto(reusedItemBlob(reuseItem), reuseItem)
-                    }
-                  />
-                </SendLock>
+                <PhotoDescriptionField
+                  id="post-alt-text"
+                  label="Describe this photo (alt text)"
+                  value={singleAltText}
+                  onChange={setSingleAltText}
+                  onWrite={() =>
+                    describeSinglePhoto(reusedItemBlob(reuseItem), reuseItem)
+                  }
+                  disabled={sendLocksFields}
+                />
               )}
             </div>
           ) : reuseLoading ? (
@@ -3253,20 +3254,19 @@ function CreatePostFormInner({
                       className="max-h-64 w-full rounded-[var(--radius)] border border-border"
                     />
                   ) : null}
-                  <SendLock locked={sendLocksFields}>{coverPicker}</SendLock>
+                  {coverPicker}
                   <p className="text-xs text-muted-foreground">
                     {uploadFile.name} &middot; {formatBytes(uploadFile.size)}
                   </p>
                   {isImagePreview && (
-                    <SendLock locked={sendLocksFields}>
-                      <PhotoDescriptionField
-                        id="post-alt-text"
-                        label="Describe this photo (alt text)"
-                        value={singleAltText}
-                        onChange={setSingleAltText}
-                        onWrite={uploadedBlob ? () => describeSinglePhoto(uploadedBlob, uploadFile) : null}
-                      />
-                    </SendLock>
+                    <PhotoDescriptionField
+                      id="post-alt-text"
+                      label="Describe this photo (alt text)"
+                      value={singleAltText}
+                      onChange={setSingleAltText}
+                      onWrite={uploadedBlob ? () => describeSinglePhoto(uploadedBlob, uploadFile) : null}
+                      disabled={sendLocksFields}
+                    />
                   )}
                 </div>
               )}
@@ -3401,12 +3401,11 @@ function CreatePostFormInner({
           />
         )}
         {youtubeSelected && activeMimeType && (
-          <SendLock locked={sendLocksFields}>
-            <YouTubePostSettings
-              metadata={youtubeMetadata}
-              onChange={setYoutubeMetadata}
-            />
-          </SendLock>
+          <YouTubePostSettings
+            metadata={youtubeMetadata}
+            onChange={setYoutubeMetadata}
+            disabled={sendLocksFields}
+          />
         )}
         {googleOptionsShown && (
           <SendLock locked={sendLocksFields}>
@@ -3419,26 +3418,24 @@ function CreatePostFormInner({
           </SendLock>
         )}
         {selectedPlatforms.includes("instagram") && activeMimeType && (
-          <SendLock locked={sendLocksFields}>
-            <StoryPlacementSettings
-              platform="instagram"
-              choice={instagramChoice}
-              fileCount={attachedFileCount}
-              videoDurationSec={activeVideoDurationSec}
-              onChange={setInstagramPlacement}
-            />
-          </SendLock>
+          <StoryPlacementSettings
+            platform="instagram"
+            choice={instagramChoice}
+            fileCount={attachedFileCount}
+            videoDurationSec={activeVideoDurationSec}
+            onChange={setInstagramPlacement}
+            disabled={sendLocksFields}
+          />
         )}
         {selectedPlatforms.includes("facebook_page") && activeMimeType && (
-          <SendLock locked={sendLocksFields}>
-            <StoryPlacementSettings
-              platform="facebook_page"
-              choice={facebookChoice}
-              fileCount={attachedFileCount}
-              videoDurationSec={activeVideoDurationSec}
-              onChange={setFacebookPlacement}
-            />
-          </SendLock>
+          <StoryPlacementSettings
+            platform="facebook_page"
+            choice={facebookChoice}
+            fileCount={attachedFileCount}
+            videoDurationSec={activeVideoDurationSec}
+            onChange={setFacebookPlacement}
+            disabled={sendLocksFields}
+          />
         )}
 
         {/* Task 7 — per-post platform targeting: defaults to every connected

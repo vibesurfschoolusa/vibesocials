@@ -18,9 +18,11 @@ export const YOUTUBE_PRIVACY_LABELS: Record<YouTubePostMetadata["privacyStatus"]
 interface YouTubePostSettingsProps {
   metadata: YouTubePostMetadata;
   onChange: (metadata: YouTubePostMetadata) => void;
+  /** R65: Create's send lock (sendLocksFields). */
+  disabled?: boolean;
 }
 
-export function YouTubePostSettings({ metadata, onChange }: YouTubePostSettingsProps) {
+export function YouTubePostSettings({ metadata, onChange, disabled = false }: YouTubePostSettingsProps) {
   return (
     <Card className="space-y-3 p-4">
       <div className="border-b border-border pb-2">
@@ -32,6 +34,7 @@ export function YouTubePostSettings({ metadata, onChange }: YouTubePostSettingsP
         <Select
           id="youtube-privacy"
           value={metadata.privacyStatus}
+          disabled={disabled}
           onChange={(e) =>
             onChange({
               ...metadata,

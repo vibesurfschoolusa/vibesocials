@@ -18,6 +18,8 @@ interface VideoCoverPickerProps {
   durationSec: number | null;
   value: CoverChoice;
   onChange: (choice: CoverChoice) => void;
+  /** R65: Create's send lock (sendLocksFields), set on the picker's own fieldset. */
+  disabled?: boolean;
 }
 
 const OPTIONS: Array<{ kind: CoverChoice["kind"]; label: string }> = [
@@ -30,7 +32,7 @@ const OPTIONS: Array<{ kind: CoverChoice["kind"]; label: string }> = [
  * The Cover control under a video's preview (V1): the platforms' own cover,
  * a frame of the video, or an uploaded JPEG.
  */
-export function VideoCoverPicker({ videoUrl, durationSec, value, onChange }: VideoCoverPickerProps) {
+export function VideoCoverPicker({ videoUrl, durationSec, value, onChange, disabled = false }: VideoCoverPickerProps) {
   const frameRef = useRef<HTMLVideoElement>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   // R45 new-customer L2: the preview is made from the chosen file itself, so
@@ -77,7 +79,7 @@ export function VideoCoverPicker({ videoUrl, durationSec, value, onChange }: Vid
   const selected = value.kind === "default" && shownKind === "upload" ? "upload" : value.kind;
 
   return (
-    <fieldset className="space-y-2 rounded-[var(--radius)] border border-border p-3">
+    <fieldset disabled={disabled} className="space-y-2 rounded-[var(--radius)] border border-border p-3">
       <legend className="px-1 text-sm font-medium text-foreground">Cover</legend>
       <div className="flex flex-wrap gap-x-4 gap-y-2" role="radiogroup" aria-label="Video cover">
         {OPTIONS.map((option) => (

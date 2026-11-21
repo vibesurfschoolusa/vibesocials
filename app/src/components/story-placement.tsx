@@ -21,6 +21,8 @@ interface StoryPlacementSettingsProps {
   /** The chosen video's length once the browser has read it; null for a photo or unknown. */
   videoDurationSec: number | null;
   onChange: (choice: PlacementChoice) => void;
+  /** R65: Create's send lock (sendLocksFields), set on the card's own fieldset. */
+  disabled?: boolean;
 }
 
 const OPTIONS: { value: PlacementChoiceValue; label: string }[] = [
@@ -36,6 +38,7 @@ export function StoryPlacementSettings({
   fileCount,
   videoDurationSec,
   onChange,
+  disabled = false,
 }: StoryPlacementSettingsProps) {
   const label = platformLabel(platform);
   const note = placementNote(platform, choice, fileCount);
@@ -44,7 +47,7 @@ export function StoryPlacementSettings({
 
   return (
     <Card className="space-y-2 p-4">
-      <fieldset className="space-y-2">
+      <fieldset disabled={disabled} className="space-y-2">
         <legend className="text-sm font-semibold text-foreground">{label}: post to</legend>
         <div className="flex flex-wrap gap-2">
           {OPTIONS.map(({ value, label: optionLabel }) => {
