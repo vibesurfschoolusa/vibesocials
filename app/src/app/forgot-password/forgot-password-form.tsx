@@ -6,6 +6,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { focusAfterPress } from "@/lib/focusAfter";
 import { forgotPasswordOutcome } from "@/lib/forgotPasswordOutcome";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 
@@ -32,6 +33,8 @@ export function ForgotPasswordForm() {
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const emailRef = useRef<HTMLInputElement>(null);
+  const sendRef = useRef<HTMLButtonElement>(null);
+  const tryAgainRef = useRef<HTMLButtonElement>(null);
   // Set by Try again only, so the field is not focused on the first render.
   const focusEmail = useRef(false);
 
@@ -65,6 +68,9 @@ export function ForgotPasswordForm() {
     }
     const outcome = forgotPasswordOutcome(status, data);
     if (outcome.kind === "sent") {
+      // R55 pages-a L2: the confirmation replaces the form and its focused
+      // button; focus goes to the Try again button it names.
+      focusAfterPress(sendRef.current, () => tryAgainRef.current);
       setSubmitted(true);
     } else {
       setError(outcome.message);
@@ -85,7 +91,7 @@ export function ForgotPasswordForm() {
         ) : null}
       </div>
       {submitted ? (
-        <Button type="button" variant="outline" onClick={askAgain} className="mt-4 w-full">
+        <Button ref={tryAgainRef} type="button" variant="outline" onClick={askAgain} className="mt-4 w-full">
           Try again
         </Button>
       ) : (
@@ -105,7 +111,7 @@ export function ForgotPasswordForm() {
 
           {error ? <Alert variant="danger">{error}</Alert> : null}
 
-          <Button type="submit" loading={loading} className="w-full">
+          <Button ref={sendRef} type="submit" loading={loading} className="w-full">
             Send reset link
           </Button>
         </form>
