@@ -241,15 +241,21 @@ export type LimitSteps = "default" | "approval";
 /**
  * The closing sentence: for a day that is full (`day`; `workspaceDay` when the
  * count is this workspace's own posts, so the approver can free a slot in the
- * Queue) or for a post going out now (`reset`, the reset time).
+ * Queue), for a post going out now (`reset`, the reset time), or for a full
+ * day that is today (`today`, R56 publishing-flow L1): its count only goes up,
+ * so room comes back at the reset, when the slot has passed and Approve
+ * publishes at once.
  */
 function limitEnding(kind: "day" | "workspaceDay", steps: LimitSteps): string;
-function limitEnding(kind: "reset", steps: LimitSteps, resetText: string): string;
-function limitEnding(kind: "day" | "workspaceDay" | "reset", steps: LimitSteps, resetText = ""): string {
+function limitEnding(kind: "reset" | "today", steps: LimitSteps, resetText: string): string;
+function limitEnding(kind: "day" | "workspaceDay" | "reset" | "today", steps: LimitSteps, resetText = ""): string {
   switch (steps) {
     case "default":
       return kind === "reset" ? `Schedule this post for another day, or try again ${resetText}.` : "Pick another day.";
     case "approval":
+      if (kind === "today") {
+        return `Approve it again ${resetText}; it then publishes at once. Or reject it and ask the member to schedule it for another day.`;
+      }
       if (kind === "workspaceDay") {
         return "Cancel or move another post on that day, then approve again, or reject this one and ask the member to submit it for another day.";
       }
@@ -259,15 +265,24 @@ function limitEnding(kind: "day" | "workspaceDay" | "reset", steps: LimitSteps, 
   }
 }
 
+/**
+ * The ending for a full day given to a post: `today` when the counted day is
+ * today (UTC), which the caller knows from the day it counted.
+ */
+function fullDayEnding(kind: "day" | "workspaceDay", steps: LimitSteps, time: ResetTime, dayIsToday: boolean): string {
+  return dayIsToday ? limitEnding("today", steps, dailyLimitResetText(time)) : limitEnding(kind, steps);
+}
+
 export function dailyPostLimitMessage(
   limit: number,
   mode: DailyPostLimitMode,
   time: ResetTime = {},
   steps: LimitSteps = "default",
+  dayIsToday = false,
 ): string {
   return mode === "now"
     ? `This workspace has reached its limit of ${limit} ${countWord(limit, "post", "posts")} for today. ${limitEnding("reset", steps, dailyLimitResetText(time))}`
-    : `That day already has ${limit} ${countWord(limit, "post", "posts")}, which is this workspace's daily limit. ${limitEnding("workspaceDay", steps)}`;
+    : `That day already has ${limit} ${countWord(limit, "post", "posts")}, which is this workspace's daily limit. ${fullDayEnding("workspaceDay", steps, time, dayIsToday)}`;
 }
 
 export function xMonthlyLimitMessage(limit: number, now: Date): string {
@@ -546,6 +561,7 @@ export function ownerDailyPostLimitMessage(
   time: ReducedNoteTime = {},
   env: Record<string, string | undefined> = process.env,
   steps: LimitSteps = "default",
+  dayIsToday = false,
 ): string {
   const posts = `${limit} ${countWord(limit, "post", "posts")}`;
   const named = holder !== null && holder.coOwned && !holder.isViewer;
@@ -556,8 +572,8 @@ export function ownerDailyPostLimitMessage(
       : mode === "retry"
         ? `${who} has reached the limit of ${posts} a day across ${ownedWorkspaces(env, false)}, and retries count toward it. Retry ${dailyLimitResetText(time)}, or schedule the post again for another day.`
         : named
-          ? `${who} already has ${posts} that day across ${ownedWorkspaces(env, false)}, which is the daily limit for one person (retries count toward it). ${limitEnding("day", steps)}`
-          : `That day already has ${posts} across ${ownedWorkspaces(env, true, "owner")}, which is the daily limit for one person (retries count toward it). ${limitEnding("day", steps)}`;
+          ? `${who} already has ${posts} that day across ${ownedWorkspaces(env, false)}, which is the daily limit for one person (retries count toward it). ${fullDayEnding("day", steps, time, dayIsToday)}`
+          : `That day already has ${posts} across ${ownedWorkspaces(env, true, "owner")}, which is the daily limit for one person (retries count toward it). ${fullDayEnding("day", steps, time, dayIsToday)}`;
   return reduced ? `${sentence} ${reducedNote(reduced, holder, named, time)}` : sentence;
 }
 
@@ -626,6 +642,7 @@ export function serviceDailyPostLimitMessage(
   mode: CrossWorkspaceLimitMode,
   time: ResetTime = {},
   steps: LimitSteps = "default",
+  dayIsToday = false,
 ): string {
   if (mode === "now") {
     return `${PRODUCT_NAME} has reached its daily limit of posts for the whole service. ${limitEnding("reset", steps, dailyLimitResetText(time))}`;
@@ -633,7 +650,7 @@ export function serviceDailyPostLimitMessage(
   if (mode === "retry") {
     return `${PRODUCT_NAME} has reached its daily limit of posts for the whole service, and retries count toward it. Retry ${dailyLimitResetText(time)}.`;
   }
-  return `That day is full: ${PRODUCT_NAME} has reached its daily limit of posts for the whole service. ${limitEnding("day", steps)}`;
+  return `That day is full: ${PRODUCT_NAME} has reached its daily limit of posts for the whole service. ${fullDayEnding("day", steps, time, dayIsToday)}`;
 }
 
 /**
@@ -653,6 +670,7 @@ export function newAccountPoolMessage(
   mode: CrossWorkspaceLimitMode,
   time: ResetTime = {},
   steps: LimitSteps = "default",
+  dayIsToday = false,
 ): string {
   const posts = `${NEW_ACCOUNT_POOL_DAILY_LIMIT} ${countWord(NEW_ACCOUNT_POOL_DAILY_LIMIT, "post", "posts")}`;
   if (mode === "now") {
@@ -661,7 +679,7 @@ export function newAccountPoolMessage(
   if (mode === "retry") {
     return `${PRODUCT_NAME} has reached today's limit of ${posts} ${NEW_ACCOUNT_POOL_WHO}, and retries count toward it. Retry ${dailyLimitResetText(time)}. ${LEAVE_NEW_ACCOUNT_POOL}`;
   }
-  return `That day is full: ${PRODUCT_NAME} has reached the limit of ${posts} a day ${NEW_ACCOUNT_POOL_WHO}. ${limitEnding("day", steps)} ${LEAVE_NEW_ACCOUNT_POOL}`;
+  return `That day is full: ${PRODUCT_NAME} has reached the limit of ${posts} a day ${NEW_ACCOUNT_POOL_WHO}. ${fullDayEnding("day", steps, time, dayIsToday)} ${LEAVE_NEW_ACCOUNT_POOL}`;
 }
 
 /**

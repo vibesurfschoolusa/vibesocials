@@ -759,6 +759,8 @@ type CrossWorkspaceCheck = {
   viewerUserId?: string;
   /** R55 pages-a-3 L1: whose steps the refusal's sentence ends with; only the words change. */
   steps?: LimitSteps;
+  /** R56 publishing-flow L1: `day` is today (UTC), from checkDailyPostLimit; only the words change. */
+  dayIsToday?: boolean;
 };
 
 /**
@@ -832,7 +834,7 @@ async function refusalFor(
             ? { firstDayEnds: utcDayRange(owner.user.createdAt).end, timeZone: await viewerTimeZone(input.viewerUserId, db) }
             : {};
         return {
-          error: ownerDailyPostLimitMessage(limit, mode, reduced, holder, time, process.env, input.steps),
+          error: ownerDailyPostLimitMessage(limit, mode, reduced, holder, time, process.env, input.steps, input.dayIsToday),
           code: OWNER_DAILY_POST_LIMIT_CODE,
           ceiling: false,
         };
@@ -846,14 +848,14 @@ async function refusalFor(
   const pool = await poolRefusal({ who, day, unit, size: sending, now, db });
   if (pool === "new") {
     return {
-      error: atSend ? newAccountPoolAtSendMessage(now) : newAccountPoolMessage(mode, {}, input.steps),
+      error: atSend ? newAccountPoolAtSendMessage(now) : newAccountPoolMessage(mode, {}, input.steps, input.dayIsToday),
       code: SERVICE_DAILY_POST_LIMIT_CODE,
       ceiling: false,
     };
   }
   if (pool === "main" || pool === "ceiling") {
     return {
-      error: atSend ? serviceDailyPostLimitAtSendMessage(now) : serviceDailyPostLimitMessage(mode, {}, input.steps),
+      error: atSend ? serviceDailyPostLimitAtSendMessage(now) : serviceDailyPostLimitMessage(mode, {}, input.steps, input.dayIsToday),
       code: SERVICE_DAILY_POST_LIMIT_CODE,
       ceiling: pool === "ceiling",
     };

@@ -358,6 +358,29 @@ describe("new and unconfirmed accounts have a pool of their own", () => {
     );
   });
 
+  // R56 publishing-flow L1: the pools count runs already gone out, so a full
+  // pool for a slot later today never has room again that day.
+  it("steps: approval for a slot later today, with the pool full: the today steps", async () => {
+    workspace("ws-fresh", {}, [fresh("fresh-1")]);
+    workspace("ws-fresh-3", {}, [fresh("fresh-3")]);
+    for (let p = 1; p <= 5; p += 1) await due("ws-fresh", `f-${p}`);
+    const later = new Date("2026-11-14T20:00:00.000Z");
+    expect(
+      (
+        await crossWorkspacePostRefusal({
+          workspaceId: "ws-fresh-3",
+          workspace: {},
+          day: later,
+          mode: "schedule",
+          steps: "approval",
+          dayIsToday: true,
+        })
+      )?.error,
+    ).toBe(
+      `That day is full: Vibe Socials has reached the limit of 5 posts a day shared by accounts made today (UTC) or with an unconfirmed email address. Approve it again in 9 hours; it then publishes at once. Or reject it and ask the member to schedule it for another day. ${LEAVE_SMALL_POOL}`,
+    );
+  });
+
   it("a refused reservation (reserveFreeRuns, check now) ends with the approver's steps when asked", async () => {
     workspace("ws-fresh", {}, [fresh("fresh-1")]);
     workspace("ws-fresh-3", {}, [fresh("fresh-3")]);
@@ -485,6 +508,33 @@ describe("the per-person number", () => {
       (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now", steps: "approval" }))?.error,
     ).toBe(
       "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. Approve it again in 9 hours, or reject it and ask the member to schedule it for another day.",
+    );
+  });
+
+  it("steps: approval, per person on a future day: as now, and on a slot later today: the today steps", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    const future = new Date("2026-11-18T10:00:00Z");
+    scheduled("ws-1", 15, future);
+    expect(
+      (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: future, mode: "schedule", steps: "approval" }))?.error,
+    ).toBe(
+      "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Approve it again once that day has room, or reject it and ask the member to submit it for another day.",
+    );
+    const later = new Date("2026-11-14T20:00:00Z");
+    scheduled("ws-1", 15, later);
+    expect(
+      (
+        await crossWorkspacePostRefusal({
+          workspaceId: "ws-1",
+          workspace: {},
+          day: later,
+          mode: "schedule",
+          steps: "approval",
+          dayIsToday: true,
+        })
+      )?.error,
+    ).toBe(
+      "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Approve it again in 9 hours; it then publishes at once. Or reject it and ask the member to schedule it for another day.",
     );
   });
 

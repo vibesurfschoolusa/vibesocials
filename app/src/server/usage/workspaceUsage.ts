@@ -379,6 +379,8 @@ export async function checkDailyPostLimit(args: {
   try {
     const { name, limits, billing } = await loadWorkspace(workspaceId);
     const used = (await countPostsOnUtcDay(workspaceId, day, excludePostJobId)) + (args.alsoOnDay ?? 0);
+    // R56 publishing-flow L1: the day counted is today (UTC); only the sentence's ending reads it.
+    const dayIsToday = utcDayKey(day) === utcDayKey(new Date());
     // R5-security M1: then the limits a person cannot multiply by making
     // workspaces: their own total, and the service's cap. No email: the
     // refusal says what to do.
@@ -392,6 +394,7 @@ export async function checkDailyPostLimit(args: {
         alsoOnDay: args.runsAlsoOnDay ?? (await pairRunsAlso(mode, excludePostJobId, args.alsoOnDay)),
         viewerUserId: args.viewerUserId,
         ...(args.steps ? { steps: args.steps } : {}),
+        ...(dayIsToday ? { dayIsToday } : {}),
       });
     }
 
@@ -408,7 +411,7 @@ export async function checkDailyPostLimit(args: {
       resetsAt: null,
       day,
     });
-    return { error: dailyPostLimitMessage(limits.postsPerDay, mode, {}, args.steps), code: DAILY_POST_LIMIT_CODE };
+    return { error: dailyPostLimitMessage(limits.postsPerDay, mode, {}, args.steps, dayIsToday), code: DAILY_POST_LIMIT_CODE };
   } catch (error) {
     logger.error("[usage] Daily post limit check failed; allowing", { error, workspaceId });
     return null;

@@ -143,6 +143,62 @@ describe("checkDailyPostLimit", () => {
     });
   });
 
+  // R56 publishing-flow L1: for a slot later today the count includes posts
+  // already published or failed, so "Cancel or move another post on that day"
+  // names posts the Queue doesn't have, and room never comes back today.
+  describe("an approval at the limit: whether the counted day is today", () => {
+    const TODAY_STEPS =
+      "Approve it again in 9 hours; it then publishes at once. Or reject it and ask the member to schedule it for another day.";
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("a slot later today: the workspace limit ends with the today steps", async () => {
+      db.postJobCount.mockResolvedValue(20);
+      const refusal = await checkDailyPostLimit({
+        workspaceId: "ws-1",
+        day: new Date("2026-11-10T21:00:00.000Z"),
+        mode: "schedule",
+        steps: "approval",
+      });
+      expect(refusal).toEqual({
+        code: "WORKSPACE_DAILY_POST_LIMIT",
+        error: `That day already has 20 posts, which is this workspace's daily limit. ${TODAY_STEPS}`,
+      });
+    });
+
+    it("a future day: Cancel or move, as now", async () => {
+      db.postJobCount.mockResolvedValue(20);
+      const refusal = await checkDailyPostLimit({
+        workspaceId: "ws-1",
+        day: new Date("2026-11-11T09:00:00.000Z"),
+        mode: "schedule",
+        steps: "approval",
+      });
+      expect(refusal?.error).toBe(
+        "That day already has 20 posts, which is this workspace's daily limit. Cancel or move another post on that day, then approve again, or reject this one and ask the member to submit it for another day.",
+      );
+    });
+
+    it("under the limit, a slot later today tells the checks across workspaces so; another day doesn't", async () => {
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: new Date("2026-11-10T21:00:00.000Z"), mode: "schedule", steps: "approval" });
+      expect(crossWorkspaceMock).toHaveBeenLastCalledWith(expect.objectContaining({ steps: "approval", dayIsToday: true }));
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: new Date("2026-11-11T09:00:00.000Z"), mode: "schedule", steps: "approval" });
+      expect(crossWorkspaceMock.mock.lastCall?.[0]).not.toHaveProperty("dayIsToday");
+    });
+
+    it("the default sentence is unchanged for a slot later today", async () => {
+      db.postJobCount.mockResolvedValue(20);
+      const refusal = await checkDailyPostLimit({ workspaceId: "ws-1", day: new Date("2026-11-10T21:00:00.000Z"), mode: "schedule" });
+      expect(refusal?.error).toBe("That day already has 20 posts, which is this workspace's daily limit. Pick another day.");
+    });
+  });
+
   it("counts the workspace's non-draft, non-cancelled posts by scheduledFor, else createdAt, in the UTC day", async () => {
     await checkDailyPostLimit({ workspaceId: "ws-1", day: new Date("2026-11-12T22:00:00Z"), mode: "schedule" });
 

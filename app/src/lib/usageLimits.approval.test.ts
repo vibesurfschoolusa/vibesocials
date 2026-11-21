@@ -106,3 +106,54 @@ describe("each builder's approval form: the same facts, the approver's steps", (
     });
   });
 });
+
+// R56 publishing-flow L1: for a slot later today the count only goes up (the
+// pools count runs already gone out; the workspace's count includes posts
+// already published or failed), so "once that day has room" never comes true.
+// The caller says the counted day is today; the approver then reads when to
+// approve again, and that the post would then go out at once.
+const todaySteps = (reset: string) =>
+  `Approve it again ${reset}; it then publishes at once. Or reject it and ask the member to schedule it for another day.`;
+const today = {
+  wsSched: `That day already has 20 posts, which is this workspace's daily limit. ${todaySteps(RESET)}`,
+  ownSched: `That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). ${todaySteps(RESET)}`,
+  ownNamedSched: `Sam, an owner of this workspace, already has 15 posts that day across the workspaces they own, which is the daily limit for one person (retries count toward it). ${todaySteps(RESET)}`,
+  svcSched: `That day is full: Vibe Socials has reached its daily limit of posts for the whole service. ${todaySteps(RESET)}`,
+  poolSched: `That day is full: Vibe Socials has reached the limit of 5 posts a day shared by accounts made today (UTC) or with an unconfirmed email address. ${todaySteps(RESET)} ${NOTE}`,
+};
+
+describe("an approval for a slot later today: the reset ending, saying it then publishes at once", () => {
+  it("workspace", () => {
+    expect(dailyPostLimitMessage(20, "schedule", time, "approval", true)).toBe(today.wsSched);
+  });
+  it("per person, unnamed and named", () => {
+    expect(ownerDailyPostLimitMessage(15, "schedule", null, null, time, {}, "approval", true)).toBe(today.ownSched);
+    expect(ownerDailyPostLimitMessage(15, "schedule", null, holder, time, {}, "approval", true)).toBe(today.ownNamedSched);
+  });
+  it("service-wide and new-account pool", () => {
+    expect(serviceDailyPostLimitMessage("schedule", time, "approval", true)).toBe(today.svcSched);
+    expect(newAccountPoolMessage("schedule", time, "approval", true)).toBe(today.poolSched);
+  });
+  it("another day keeps the current endings", () => {
+    expect(dailyPostLimitMessage(20, "schedule", time, "approval", false)).toBe(approval.wsSched);
+    expect(ownerDailyPostLimitMessage(15, "schedule", null, null, time, {}, "approval", false)).toBe(approval.ownSched);
+    expect(serviceDailyPostLimitMessage("schedule", time, "approval", false)).toBe(approval.svcSched);
+    expect(newAccountPoolMessage("schedule", time, "approval", false)).toBe(approval.poolSched);
+  });
+  it("the default sentences and the now forms are byte-identical, today or not", () => {
+    expect(dailyPostLimitMessage(20, "schedule", time, "default", true)).toBe(original.wsSched);
+    expect(dailyPostLimitMessage(20, "now", time, "default", true)).toBe(original.wsNow);
+    expect(dailyPostLimitMessage(20, "now", time, "approval", true)).toBe(approval.wsNow);
+    expect(ownerDailyPostLimitMessage(15, "schedule", null, holder, time, {}, "default", true)).toBe(original.ownNamedSched);
+    expect(ownerDailyPostLimitMessage(15, "now", null, null, time, {}, "approval", true)).toBe(approval.ownNow);
+    expect(serviceDailyPostLimitMessage("schedule", time, "default", true)).toBe(original.svcSched);
+    expect(serviceDailyPostLimitMessage("now", time, "approval", true)).toBe(approval.svcNow);
+    expect(newAccountPoolMessage("schedule", time, "default", true)).toBe(original.poolSched);
+    expect(newAccountPoolMessage("now", time, "approval", true)).toBe(approval.poolNow);
+  });
+  it("a reset in the reader's zone is kept whole", () => {
+    const zoned = { now: time.now, timeZone: "America/New_York" };
+    const reset = dailyPostLimitMessage(20, "now", zoned).match(/try again (from .*)\.$/)![1]!;
+    expect(dailyPostLimitMessage(20, "schedule", zoned, "approval", true)).toContain(todaySteps(reset));
+  });
+});
