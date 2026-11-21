@@ -146,6 +146,12 @@ describe("truncateGraphemesAtWord", () => {
     expect(truncateGraphemesAtWord(`${family} ${family} ${family}`, 4)).toBe(`${family} ${family}`);
   });
 
+  // R62 review low 1: a word boundary more than 100 graphemes back is not looked for.
+  it("a space more than 100 graphemes before the limit keeps the plain grapheme cut", () => {
+    expect(truncateGraphemesAtWord(`ab ${"c".repeat(200)}`, 103)).toBe(`ab ${"c".repeat(100)}`);
+    expect(truncateGraphemesAtWord(`ab ${"c".repeat(200)}`, 102)).toBe("ab");
+  });
+
   it("reserves room for an ellipsis", () => {
     expect(truncateGraphemesAtWord("Dawn patrol #surfschool", 15, { ellipsis: "…" })).toBe("Dawn patrol…");
   });

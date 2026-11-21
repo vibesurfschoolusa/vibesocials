@@ -405,6 +405,14 @@ describe("computeInstagramCaption (2,200-character limit, 2026-11-01 audit)", ()
     expect(result).not.toContain("@surfer2");
   });
 
+  // R62 review low 1: a script written without spaces is cut by graphemes,
+  // not walked back to one early space.
+  it("a space-free script with one early space keeps 2,200 graphemes", () => {
+    const result = computeInstagramCaption(`見出し ${"本".repeat(3000)}`);
+    expect(result).toBe(`見出し ${"本".repeat(2196)}`);
+    expect(Array.from(new Intl.Segmenter().segment(result))).toHaveLength(2200);
+  });
+
   it("no space before the limit: the plain grapheme cut", () => {
     expect(computeInstagramCaption(`${"a".repeat(2300)} @surfer21`)).toBe("a".repeat(2200));
   });

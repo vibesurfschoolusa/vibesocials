@@ -1236,6 +1236,62 @@ describe("PATCH and DELETE /api/posts/[postJobId] - a Feed and Story card", () =
 
 // R31 pages L2: a write from a page drawn for another workspace, or from a tab
 // opened before the release (no id), acts on nothing.
+// R62 review low 2: an edit can no more leave X an empty text than the post
+// could be created so (lib/xTextRefusal.ts, shared with POST /api/posts).
+describe("PATCH /api/posts/[postJobId]: an X text post edited down to mentions", () => {
+  const X_EMPTY =
+    "X removes @mentions from posts sent through its API, so this post has no text left for X. Add some words, or leave X out.";
+  const textPost = {
+    status: "scheduled",
+    scheduledFor: new Date("2099-01-01T09:00:00.000Z"),
+    submittedForApprovalAt: null,
+    approvedAt: null,
+    baseCaption: "Lessons cancelled today",
+    perPlatformOverrides: null,
+    publishMetadata: { targetPlatforms: ["x", "linkedin"] },
+    mediaItem: null,
+    storyOfPostJobId: null,
+    clientApprovedAt: null,
+  };
+
+  it("refuses \"@surfshop @wavecafe\" with the POST sentence and writes nothing", async () => {
+    findFirstMock.mockResolvedValue(textPost);
+    const res = await PATCH(req({ baseCaption: "@surfshop @wavecafe" }), ctx("job-1"));
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: X_EMPTY });
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses an X override cut to mentions only", async () => {
+    findFirstMock.mockResolvedValue(textPost);
+    const res = await PATCH(req({ perPlatformOverrides: { x: "@surfshop" } }), ctx("job-1"));
+    expect(res.status).toBe(400);
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts an edit with words", async () => {
+    findFirstMock.mockResolvedValue(textPost);
+    updateManyMock.mockResolvedValue({ count: 1 });
+    const res = await PATCH(req({ baseCaption: "Thanks @surfshop for the boards" }), ctx("job-1"));
+    expect(res.status).toBe(200);
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts mentions only when the post does not go to X", async () => {
+    findFirstMock.mockResolvedValue({ ...textPost, publishMetadata: { targetPlatforms: ["linkedin"] } });
+    updateManyMock.mockResolvedValue({ count: 1 });
+    const res = await PATCH(req({ baseCaption: "@surfshop @wavecafe" }), ctx("job-1"));
+    expect(res.status).toBe(200);
+  });
+
+  it("leaves a post with a file as before", async () => {
+    findFirstMock.mockResolvedValue({ ...textPost, mediaItem: { baseCaption: "x", perPlatformOverrides: null } });
+    updateManyMock.mockResolvedValue({ count: 1 });
+    const res = await PATCH(req({ baseCaption: "@surfshop @wavecafe" }), ctx("job-1"));
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("PATCH /api/posts/[postJobId]: the page's workspace id", () => {
   it("an absent id is the 400 to reload the page, and no post is read", async () => {
     const res = await PATCH({ json: async () => ({ baseCaption: "New" }) } as unknown as NextRequest, ctx("job-1"));
