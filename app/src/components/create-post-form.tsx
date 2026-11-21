@@ -155,10 +155,12 @@ type PublishMode = "now" | "schedule" | "draft";
 /**
  * R43 new-customer L4, R44 L2: a failure of an automatic caption (written
  * when a file is added) says the caption wasn't written before its sentence,
- * except a lost answer, which can't say that (R44 review L1).
+ * except a lost answer, which can't say that (R44 review L1). R57
+ * publishing-flow L5: the sentence can start with a co-owner's name (#284),
+ * so its case is never changed.
  */
 export function automaticCaptionRefusedText(routeSentence: string): string {
-  return `No caption was written: ${routeSentence.charAt(0).toLowerCase()}${routeSentence.slice(1)}`;
+  return `No caption was written. ${routeSentence}`;
 }
 
 /**

@@ -63,12 +63,13 @@ export async function coverUploadFailedText(
  * R45 pages-a L4, L5: a route's own sentence after the page's lead-in ("No
  * caption was written: …"), as Create says it; null when the answer carried
  * no readable sentence. Used for the daily AI limit, whose sentence names
- * whose budget ran out and the real wait.
+ * whose budget ran out and the real wait. R57 pages-a L1: the sentence can
+ * start with a co-owner's name (#284), so its case is never changed and the
+ * lead-in is a sentence of its own.
  */
 export function routeSentenceAfter(leadIn: string, routeError: unknown): string | null {
   if (typeof routeError !== "string" || !routeError.trim()) return null;
-  const sentence = routeError.trim();
-  return `${leadIn}: ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}`;
+  return `${leadIn}. ${routeError.trim()}`;
 }
 
 /**

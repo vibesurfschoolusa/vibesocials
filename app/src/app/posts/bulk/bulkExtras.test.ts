@@ -349,7 +349,7 @@ describe("Add many: why Improve failed", () => {
       const result = await requestImprovedCaption("Keep me", "ws-1", vi.fn(async () => limit) as unknown as typeof fetch);
       expect(result).toEqual({
         ok: false,
-        error: `The caption was not improved: ${body.error.charAt(0).toLowerCase()}${body.error.slice(1)}`,
+        error: `The caption was not improved. ${body.error}`,
       });
     }
     expect(improveFailedText(429, "AI_WORKSPACE_DAILY_LIMIT")).not.toMatch(/workspace|owner|tomorrow|today/i);
