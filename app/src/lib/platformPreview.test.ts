@@ -214,6 +214,16 @@ describe("buildPlatformPreview", () => {
       expect(result.willTruncate).toBe(true);
     });
 
+    // R62 platform-clients L1: the preview cuts with the client's own function,
+    // at the last whole word, so it shows what is sent.
+    it("cuts at the last whole word, as computeInstagramCaption does", () => {
+      const caption = `${"a".repeat(2191)} @surfer21 #surfschool`;
+      const result = buildPlatformPreview({ platform: "instagram", caption });
+      expect(result.rendered).toBe("a".repeat(2191));
+      expect(result.rendered).toBe(computeInstagramCaption(caption));
+      expect(result.willTruncate).toBe(true);
+    });
+
     // R5-publishing L2: the footer goes whole, as at publish, instead of being
     // cut inside its link or a hashtag.
     it("drops the footer, not the caption, when caption + footer is over", () => {

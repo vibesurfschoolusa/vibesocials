@@ -395,6 +395,19 @@ describe("computeInstagramCaption (2,200-character limit, 2026-11-01 audit)", ()
     const result = computeInstagramCaption(family.repeat(2201));
     expect(result).toBe(family.repeat(2200));
   });
+
+  // R62 platform-clients L1: the cut is at the last whole word, so a #tag or
+  // @mention is never sent in part.
+  it("a cut inside \"@surfer21\": no \"@surfer2\" is sent", () => {
+    const caption = `${"a".repeat(2191)} @surfer21`; // the limit falls after "@surfer2"
+    const result = computeInstagramCaption(caption);
+    expect(result).toBe("a".repeat(2191));
+    expect(result).not.toContain("@surfer2");
+  });
+
+  it("no space before the limit: the plain grapheme cut", () => {
+    expect(computeInstagramCaption(`${"a".repeat(2300)} @surfer21`)).toBe("a".repeat(2200));
+  });
 });
 
 describe("instagramClient.publishVideo — caption limit", () => {
@@ -3020,6 +3033,38 @@ describe("instagramClient.publishVideo — hashtag and mention limits", () => {
     expect(result).toEqual({
       externalPostId: "media-1",
       note: "Instagram allows 30 hashtags in a post, so these were left out: #t31.",
+    });
+  });
+
+  // R62 platform-clients L1: the cut is at the last whole word, so the note
+  // names only tags that were written.
+  const fortyTags = Array.from({ length: 40 }, (_, i) => `#surfschool${i + 1}`).join(" ");
+  /** A caption whose 2,200 limit falls 4 characters into the tag named. */
+  const cutInside = (tag: string) => {
+    const at = fortyTags.indexOf(`${tag} `);
+    return `${"a".repeat(2200 - 4 - at - 1)} ${fortyTags}`;
+  };
+
+  it("the cut falls inside the 31st tag: no piece of it is sent or named", async () => {
+    const fetchMock = stubSingle();
+
+    const result = await single(cutInside("#surfschool31"));
+
+    const sent = new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("caption") ?? "";
+    expect(sent.endsWith(" #surfschool30")).toBe(true);
+    expect(result).toEqual({ externalPostId: "media-1" });
+  });
+
+  it("the cut falls inside the 32nd tag: the note names only the whole 31st", async () => {
+    const fetchMock = stubSingle();
+
+    const result = await single(cutInside("#surfschool32"));
+
+    const sent = new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("caption") ?? "";
+    expect(sent.endsWith(" #surfschool30")).toBe(true);
+    expect(result).toEqual({
+      externalPostId: "media-1",
+      note: "Instagram allows 30 hashtags in a post, so these were left out: #surfschool31.",
     });
   });
 

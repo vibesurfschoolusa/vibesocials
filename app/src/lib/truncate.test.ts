@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { textUnits, trimLinkTrailing, truncateGraphemes, truncateUnits } from "./truncate";
+import { textUnits, trimLinkTrailing, truncateGraphemes, truncateGraphemesAtWord, truncateUnits } from "./truncate";
 
 // Grapheme count via the same primitive the implementation uses, so assertions
 // about "<= max graphemes" are measured the way the helper measures.
@@ -120,6 +120,37 @@ describe("truncateGraphemes", () => {
 });
 
 // Fix round 1 (M4, M5): links are kept whole when a text is cut.
+// R62 platform-clients L1: Instagram's cut, never inside a #tag or @mention.
+describe("truncateGraphemesAtWord", () => {
+  it("returns text that fits unchanged", () => {
+    expect(truncateGraphemesAtWord("Dawn patrol #surf", 17)).toBe("Dawn patrol #surf");
+  });
+
+  it("cuts at the last whole word that fits, so a tag or mention is never split", () => {
+    expect(truncateGraphemesAtWord("Dawn patrol #surfschool", 15)).toBe("Dawn patrol");
+    expect(truncateGraphemesAtWord("Thanks @surfer21", 15)).toBe("Thanks");
+  });
+
+  it("keeps the whole cut when the limit falls on a space", () => {
+    expect(truncateGraphemesAtWord("Dawn patrol #surf", 11)).toBe("Dawn patrol");
+    expect(truncateGraphemesAtWord("Dawn\n\n#surf", 5)).toBe("Dawn");
+  });
+
+  it("with no space before the limit, keeps the plain grapheme cut", () => {
+    expect(truncateGraphemesAtWord("a".repeat(30), 20)).toBe("a".repeat(20));
+    expect(truncateGraphemesAtWord(`${"a".repeat(30)} b`, 20)).toBe("a".repeat(20));
+  });
+
+  it("counts graphemes, never splitting an emoji sequence", () => {
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+    expect(truncateGraphemesAtWord(`${family} ${family} ${family}`, 4)).toBe(`${family} ${family}`);
+  });
+
+  it("reserves room for an ellipsis", () => {
+    expect(truncateGraphemesAtWord("Dawn patrol #surfschool", 15, { ellipsis: "…" })).toBe("Dawn patrol…");
+  });
+});
+
 describe("textUnits", () => {
   it("splits text into graphemes and whole links", () => {
     const units = textUnits("Hi \u{1F30A} https://example.com/a?b=1. ok");
