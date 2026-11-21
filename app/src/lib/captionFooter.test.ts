@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { buildCaptionWithFooter } from "./captionFooter";
+import { buildPlatformPreview } from "./platformPreview";
+import { computeTikTokCaption } from "@/server/platforms/tiktokClient";
 
 describe("buildCaptionWithFooter", () => {
   it("returns the trimmed base caption alone when no footer fields are set", () => {
@@ -277,5 +279,49 @@ describe("buildCaptionWithFooter drops the footer before the caption is cut", ()
     const caption = "a".repeat(20_000);
     expect(buildCaptionWithFooter(caption, footer, "facebook_page")).toBe(`${caption}\n\n${website}\n\n#surf #miami`);
     expect(buildCaptionWithFooter(caption, footer, "youtube")).toBe(`${caption}\n\n${website}\n\n#surf #miami`);
+  });
+});
+
+// R65: TikTok counts UTF-16 units, so its footer rule counts them too. Text that
+// keeps its footer is then never cut by the client, so "For more info visit" is
+// never left without its link.
+describe("buildCaptionWithFooter on TikTok counts UTF-16 units", () => {
+  const tracked = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #miami", trackWebsiteLinks: true };
+  const plain = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #miami" };
+  const website = "For more info visit vibesurfschool.com";
+  const wave = "\u{1F30A}";
+
+  it("an emoji-heavy caption near 2,200 units: no website line without its link, and the preview equals what is sent", () => {
+    // 1,060 to 1,099 waves: the footer fits by code points but not by units.
+    for (let count = 1060; count < 1100; count += 1) {
+      const caption = `${wave} `.repeat(count / 2) + wave.repeat(count % 2);
+      for (const footer of [plain, tracked]) {
+        const full = buildCaptionWithFooter(caption, footer, "tiktok");
+        const sent = computeTikTokCaption(full);
+        expect(sent).toBe(full);
+        expect(sent).not.toMatch(/For more info visit\s*$/);
+        if (sent.includes("For more info visit")) expect(sent).toMatch(/For more info visit \S*vibesurfschool\.com/);
+        expect(buildPlatformPreview({ platform: "tiktok", caption, user: footer }).rendered).toBe(sent);
+      }
+    }
+  });
+
+  it("the footer is dropped whole when only code points would let it fit", () => {
+    const caption = wave.repeat(1075); // 1,075 code points, 2,150 units
+    expect(buildCaptionWithFooter(caption, plain, "tiktok")).toBe(caption);
+  });
+
+  it("plain ASCII with the footer: as before", () => {
+    expect(buildCaptionWithFooter("a".repeat(2146), plain, "tiktok")).toBe(`${"a".repeat(2146)}\n\n${website}\n\n#surf #miami`);
+    expect(buildCaptionWithFooter("a".repeat(2147), plain, "tiktok")).toBe(`${"a".repeat(2147)}\n\n${website}`);
+  });
+
+  it("the other platforms' footer rules: as before", () => {
+    const keep = (n: number) => `${wave.repeat(n)}\n\n${website}\n\n#surf #miami`;
+    // Instagram, Business Profile and Pinterest count code points; X weighs an emoji 2.
+    expect(buildCaptionWithFooter(wave.repeat(1075), plain, "instagram")).toBe(keep(1075));
+    expect(buildCaptionWithFooter(wave.repeat(1446), plain, "google_business_profile")).toBe(keep(1446));
+    expect(buildCaptionWithFooter(wave.repeat(746), plain, "pinterest")).toBe(keep(746));
+    expect(buildCaptionWithFooter(wave.repeat(115), plain, "x")).toBe(`${wave.repeat(115)}\n\n${website}`);
   });
 });

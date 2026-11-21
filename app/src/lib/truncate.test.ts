@@ -10,6 +10,7 @@ import {
   truncateKeepingLinksAtWord,
   truncateUnits,
   truncateUnitsAtWord,
+  truncateUtf16AtWord,
 } from "./truncate";
 
 // Grapheme count via the same primitive the implementation uses, so assertions
@@ -288,5 +289,53 @@ describe("trimLinkTrailing", () => {
       expect(trimLinkTrailing(edge)).toBe(edge.replace(OLD_LINK_TRAILING, ""));
     }
     expect(compared).toBeGreaterThan(300);
+  });
+});
+
+// R65 platform-clients (unconfirmed; TikTok's docs confirm it): TikTok counts its
+// title in UTF-16 units, so its cut counts them, at a whole word, never
+// splitting a grapheme or a surrogate pair.
+describe("truncateUtf16AtWord", () => {
+  const segments = (text: string) =>
+    [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map((s) => s.segment);
+
+  it("plain ASCII at the limit comes back unchanged", () => {
+    const text = "a".repeat(2200);
+    expect(truncateUtf16AtWord(text, 2200)).toBe(text);
+  });
+
+  it("2,150 graphemes with 100 emoji (2,250 units) is cut to 2,200 units or fewer, at a whole word", () => {
+    let text = "";
+    for (let i = 0; i < 100; i += 1) text += "\u{1F30A} ";
+    while (segments(text).length < 2150) text += "surf ";
+    text = text.trimEnd() + "s";
+    expect(segments(text)).toHaveLength(2150);
+    expect(text.length).toBeGreaterThan(2200);
+    const cut = truncateUtf16AtWord(text, 2200);
+    expect(cut.length).toBeLessThanOrEqual(2200);
+    expect(text.startsWith(cut)).toBe(true);
+    expect(text[cut.length]).toBe(" ");
+    expect(cut.endsWith("surf")).toBe(true);
+  });
+
+  it("never splits a surrogate pair or a joined family at the limit", () => {
+    for (const piece of ["\u{1F30A}", "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}", "\u{1F1FA}\u{1F1F8}", "e\u0301"]) {
+      for (const max of [9, 10, 11, 12, 13]) {
+        const cut = truncateUtf16AtWord(piece.repeat(20), max);
+        expect(cut.length).toBeLessThanOrEqual(max);
+        expect(cut.isWellFormed()).toBe(true);
+        expect(segments(cut).every((g) => g === piece)).toBe(true);
+      }
+    }
+  });
+
+  it("text with no space in the 100 graphemes before the limit keeps the plain unit cut", () => {
+    expect(truncateUtf16AtWord("\u{1F30A}".repeat(300), 201)).toBe("\u{1F30A}".repeat(100));
+  });
+
+  it("keeps room for an ellipsis, counted in units", () => {
+    const cut = truncateUtf16AtWord("surf waves ".repeat(30), 50, { ellipsis: "..." });
+    expect(cut.length).toBeLessThanOrEqual(50);
+    expect(cut).toMatch(/(surf|waves)\.\.\.$/);
   });
 });

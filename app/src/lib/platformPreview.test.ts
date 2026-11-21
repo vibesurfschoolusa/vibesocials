@@ -206,6 +206,26 @@ describe("buildPlatformPreview", () => {
     });
   });
 
+  // R65: TikTok counts UTF-16 units; the preview counts and cuts as the client does.
+  describe("TikTok counts UTF-16 units", () => {
+    it("an emoji-heavy caption: counted in units, and the preview equals what is sent", () => {
+      let caption = "";
+      for (let i = 0; i < 100; i += 1) caption += "\u{1F30A} ";
+      while ([...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(caption)].length < 2150) caption += "surf ";
+      caption = caption.trimEnd() + "s";
+      const result = buildPlatformPreview({ platform: "tiktok", caption });
+      expect(result.charCount).toBe(caption.length);
+      expect(result.willTruncate).toBe(true);
+      expect(result.rendered).toBe(computeTikTokCaption(caption));
+      expect(result.rendered.length).toBeLessThanOrEqual(2200);
+    });
+
+    it("plain ASCII at 2,200 is unchanged", () => {
+      const result = buildPlatformPreview({ platform: "tiktok", caption: "a".repeat(2200) });
+      expect(result).toMatchObject({ charCount: 2200, truncated: false, willTruncate: false });
+    });
+  });
+
   describe("Instagram (charLimit 2200, no ellipsis — 2026-11-01 audit)", () => {
     it("does not truncate a caption at or under 2200 graphemes", () => {
       const caption = "a".repeat(2200);

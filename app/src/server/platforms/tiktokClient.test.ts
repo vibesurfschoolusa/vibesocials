@@ -297,10 +297,29 @@ describe("computeTikTokCaption", () => {
     expect(computeTikTokCaption(caption)).toBe(truncateGraphemes(caption, 2200));
   });
 
-  it("matches the pre-refactor inline call byte-for-byte for emoji/ZWJ-heavy content over the limit", () => {
-    const caption = "😀👨‍👩‍👧🇺🇸".repeat(500);
+  // R65: TikTok counts its title in UTF-16 units ("maximum length is 2200 in
+  // UTF-16 runes"), so emoji/ZWJ-heavy content is cut by units, whole graphemes only.
+  it("cuts emoji/ZWJ-heavy content to 2,200 UTF-16 units, never inside a grapheme", () => {
+    const piece = "\u{1F600}\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u{1F1FA}\u{1F1F8}";
+    const caption = piece.repeat(500);
+    const result = computeTikTokCaption(caption);
+    expect(result.length).toBeLessThanOrEqual(2200);
+    expect(result.length).toBeGreaterThan(2200 - piece.length);
+    expect(result.isWellFormed()).toBe(true);
+    expect(result.length % piece.length).toBe(0);
+    expect(caption.startsWith(result)).toBe(true);
+  });
+
+  it("2,150 graphemes with 100 emoji (over 2,200 units) is cut to 2,200 units or fewer, at a whole word", () => {
+    let caption = "";
+    for (let i = 0; i < 100; i += 1) caption += "\u{1F30A} ";
+    while ([...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(caption)].length < 2150) caption += "surf ";
+    caption = caption.trimEnd() + "s";
     expect(caption.length).toBeGreaterThan(2200);
-    expect(computeTikTokCaption(caption)).toBe(truncateGraphemes(caption, 2200));
+    const result = computeTikTokCaption(caption);
+    expect(result.length).toBeLessThanOrEqual(2200);
+    expect(caption.startsWith(result)).toBe(true);
+    expect(caption[result.length]).toBe(" ");
   });
 });
 
