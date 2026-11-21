@@ -1619,6 +1619,102 @@ describe("publishToAllPlatforms - a result whose connection was removed after di
     });
   });
 
+  // R63 publishing-flow-2 L1: a connection the post does not go to has no row,
+  // and that is not an error; only a platform the post targets is.
+  describe("a connection with no result row", () => {
+    const noRowErrors = (errorLog: ReturnType<typeof vi.spyOn>) =>
+      errorLog.mock.calls
+        .filter((call) => call[0] === "[Inngest] No result record for platform")
+        .map((call) => (call[1] as { platform: Platform }).platform);
+
+    it("a photo post with YouTube connected logs no error", async () => {
+      setUpRun({ connections: ["instagram", "youtube"], results: [["instagram", { socialConnectionId: "conn-instagram" }]] });
+      db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null, mimeType: "image/jpeg" });
+      const errorLog = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+
+      await run();
+
+      expect(noRowErrors(errorLog)).toEqual([]);
+      errorLog.mockRestore();
+    });
+
+    it("a Story job logs no error for the platforms it skips", async () => {
+      setUpRun({
+        connections: ["instagram", "facebook_page", "x", "linkedin", "youtube", "tiktok"],
+        results: [
+          ["instagram", { socialConnectionId: "conn-instagram" }],
+          ["facebook_page", { socialConnectionId: "conn-facebook_page" }],
+        ],
+      });
+      db.postJobFindUnique.mockResolvedValue({
+        id: "job-1",
+        workspaceId: WORKSPACE.id,
+        publishMetadata: { targetPlatforms: ["instagram", "facebook_page"] },
+      });
+      db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null, mimeType: "image/jpeg" });
+      const errorLog = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+      const step = fakeStep();
+
+      await run(step);
+
+      expect(noRowErrors(errorLog)).toEqual([]);
+      expect(platformSteps(step)).toEqual(["run:publish-to-instagram", "run:publish-to-facebook_page"]);
+      errorLog.mockRestore();
+    });
+
+    it("a targeted platform with no row logs the error, as before", async () => {
+      setUpRun({ connections: ["instagram", "linkedin"], results: [["instagram", { socialConnectionId: "conn-instagram" }]] });
+      db.postJobFindUnique.mockResolvedValue({
+        id: "job-1",
+        workspaceId: WORKSPACE.id,
+        publishMetadata: { targetPlatforms: ["instagram", "linkedin"] },
+      });
+      const errorLog = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+      const step = fakeStep();
+
+      await run(step);
+
+      expect(noRowErrors(errorLog)).toEqual(["linkedin"]);
+      expect((step.outputs["fetch-data"] as { targetPlatforms?: unknown }).targetPlatforms).toEqual(["instagram", "linkedin"]);
+      errorLog.mockRestore();
+    });
+
+    it("memoizes no list when the post has none, so its output is as before", async () => {
+      setUpRun({ connections: ["x"], results: [["x", { socialConnectionId: "conn-x" }]] });
+      const step = fakeStep();
+
+      await run(step);
+
+      expect(step.outputs["fetch-data"]).not.toHaveProperty("targetPlatforms");
+    });
+
+    it("a fetch-data output memoized without the list: every connection that takes the post's kind, as now", async () => {
+      setUpRun({ connections: ["x", "linkedin", "youtube"], results: [["x", { socialConnectionId: "conn-x" }]] });
+      const step = stepReplaying({
+        "fetch-data": {
+          user: { id: "user-1" },
+          workspace: WORKSPACE,
+          mediaItem: null,
+          mediaItems: [],
+          socialConnections: [
+            { id: "conn-x", platform: "x" },
+            { id: "conn-linkedin", platform: "linkedin" },
+            { id: "conn-youtube", platform: "youtube" },
+          ],
+          resultRecords: [{ id: "result-x", platform: "x", socialConnectionId: "conn-x" }],
+        },
+      });
+      const errorLog = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+
+      await run(step);
+
+      // A text post: LinkedIn takes text, so its missing row is an error; YouTube does not.
+      expect(noRowErrors(errorLog)).toEqual(["linkedin"]);
+      expect(platformSteps(step)).toEqual(["run:publish-to-x"]);
+      errorLog.mockRestore();
+    });
+  });
+
   describe("every connection removed", () => {
     it.each([
       ["with result rows", [["x", { socialConnectionId: null }], ["linkedin", { socialConnectionId: null }]] as Array<[Platform, Partial<StoredResult>]>],
