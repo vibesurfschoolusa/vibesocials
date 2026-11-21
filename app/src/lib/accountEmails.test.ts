@@ -70,6 +70,19 @@ describe("buildPasswordResetEmail", () => {
   });
 });
 
+// R55 new-customer L1, pages-a L1: a new request cancels the unused link
+// before it, so the email says only the newest one works.
+describe("buildPasswordResetEmail: the newest link", () => {
+  const LINE = "If you asked more than once, only the link in the newest email works.";
+  it("carries the line in both the text and the html", () => {
+    const { html, text } = buildPasswordResetEmail({ to: "user@example.com", rawToken: RAW_TOKEN, baseUrl: BASE_URL });
+    expect(text).toContain(LINE);
+    expect(html).toContain(LINE);
+    expect(countOccurrences(text, LINE)).toBe(1);
+    expect(countOccurrences(html, LINE)).toBe(1);
+  });
+});
+
 describe("buildVerifyEmail", () => {
   it("uses a sentence-case subject", () => {
     const { subject } = buildVerifyEmail({

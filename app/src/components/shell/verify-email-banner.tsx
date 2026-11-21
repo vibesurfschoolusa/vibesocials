@@ -117,7 +117,9 @@ export function VerifyEmailBanner({ suppressed = false }: { suppressed?: boolean
     try {
       const response = await fetchOrNoAnswer("/api/auth/resend-verification", { method: "POST" });
       if (response.ok) {
-        success("Verification email sent.");
+        // R55 new-customer L1: the route answers 200 only once the email went,
+        // and each resend cancels the unused link before it.
+        success("Verification email sent. If you have more than one, open the newest: only its link works.");
       } else {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         error(data?.error ?? "Couldn't send the verification email. Please try again.");

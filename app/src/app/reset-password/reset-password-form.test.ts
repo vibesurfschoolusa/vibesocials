@@ -25,6 +25,17 @@ describe("DeadLinkCard", () => {
   });
 });
 
+// R55 new-customer L1, pages-a L1: a newer request cancels an older link, so
+// the card says to open the newest email, arriving or after a submit.
+describe("DeadLinkCard: the newest email", () => {
+  it("says to open the newest email in both states", () => {
+    for (const afterSubmit of [true, false]) {
+      const html = renderToStaticMarkup(createElement(DeadLinkCard, { afterSubmit }));
+      expect(html).toContain("If you asked for a link more than once, open the newest email.");
+    }
+  });
+});
+
 // R28 NN2 (pages L6, new-customer L4): "Password updated" replaced the form
 // with a success line that appeared already filled. The status region is in
 // the card from the first render of the form, and only its text changes.

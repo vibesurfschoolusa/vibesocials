@@ -95,7 +95,7 @@ export function buildPasswordResetEmail(opts: BuildAccountEmailOptions): Account
     actionLabel: "Reset your password",
     path: "/reset-password",
     expiryNote:
-      "This link expires in 60 minutes. If you didn't request a password reset, you can safely ignore this email — your password won't change.",
+      "This link expires in 60 minutes. If you asked more than once, only the link in the newest email works. If you didn't request a password reset, you can safely ignore this email — your password won't change.",
   });
   return { subject, html, text };
 }

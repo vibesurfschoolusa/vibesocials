@@ -44,7 +44,7 @@ export function DeadLinkCard({ afterSubmit }: { afterSubmit: boolean }) {
         </Alert>
       ) : null}
       <p className="text-sm text-muted-foreground">
-        Request a new link to reset your password.
+        Request a new link to reset your password. If you asked for a link more than once, open the newest email.
       </p>
       <Link
         href="/forgot-password"

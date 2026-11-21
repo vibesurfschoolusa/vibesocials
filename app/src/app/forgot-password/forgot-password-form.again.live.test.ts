@@ -17,7 +17,7 @@ import { installKeeperOnFakePage } from "@/lib/focusKeeperDom.testkit";
 import { ForgotPasswordForm } from "./forgot-password-form";
 
 const CONFIRMATION =
-  "If an account exists for that address, a reset link is on its way. If it doesn't arrive in a few minutes, check your spam folder, then press Try again.";
+  "If an account exists for that address, a reset link is on its way. If it doesn't arrive in a few minutes, check your spam folder, then press Try again. If you get more than one email, use the newest one: only its link works.";
 const TOO_MANY = "Too many requests. Please wait a few minutes and try again.";
 const GENERIC = "Something went wrong. Please try again.";
 
@@ -114,6 +114,21 @@ describe("Forgot password: the confirmation and Try again", () => {
     expect(pageText()).not.toMatch(/we sent/i);
     expect(field()).toBeNull();
     expect(tryAgain()).not.toBeNull();
+  });
+
+  // R55 new-customer L1, pages-a L1: each request cancels the unused link
+  // before it, so the confirmation says only the newest email's link works,
+  // the same sentence for every address.
+  it("the confirmation names the newest-email rule, the same for any address", async () => {
+    fetchMock.mockReturnValueOnce(ok()).mockReturnValueOnce(ok());
+    await type("someone@example.test");
+    await send();
+    const first = status().textContent as string;
+    expect(first).toContain("If you get more than one email, use the newest one: only its link works.");
+    await pressTryAgain();
+    await type("nobody@example.test");
+    await send();
+    expect(status().textContent).toBe(first);
   });
 
   it("Try again brings the form back with the address kept, focus on the address field", async () => {

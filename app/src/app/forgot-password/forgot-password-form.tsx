@@ -13,9 +13,11 @@ import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
  * R54 pages-a L3: the route answers the same whether or not an email went out,
  * so the confirmation never says a link was sent; it says what to do if none
  * arrives. Its button names the one below it exactly.
+ * R55 new-customer L1: each request cancels the unused link before it, so
+ * only the newest email's link works.
  */
 const CONFIRMATION =
-  "If an account exists for that address, a reset link is on its way. If it doesn't arrive in a few minutes, check your spam folder, then press Try again.";
+  "If an account exists for that address, a reset link is on its way. If it doesn't arrive in a few minutes, check your spam folder, then press Try again. If you get more than one email, use the newest one: only its link works.";
 
 /**
  * Request-a-reset form. Deliberately reveals NOTHING about whether the address
