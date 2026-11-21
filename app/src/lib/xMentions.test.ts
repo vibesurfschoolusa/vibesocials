@@ -45,15 +45,34 @@ describe("removeXMentions", () => {
     );
   });
 
-  it("keeps a dotted Instagram-style handle whole in running text", () => {
-    expect(removeXMentions("Hi @vibesurfschool.za and @heinrich_.schroder!")).toBe(
-      "Hi vibesurfschool.za and heinrich_.schroder!",
-    );
+  // R59 fix review L2: a bare dotted name that X would count as a link keeps
+  // only the part before its first dot, so the post never carries a link.
+  it.each([
+    ["Surf with @vibesurfschool.za", "Surf with vibesurfschool"],
+    ["Coached by @kai.surf today", "Coached by kai today"],
+    ["Ask @surf.co!", "Ask surf!"],
+  ])("%s: a name that would be a link keeps the part before its first dot", (text, expected) => {
+    expect(removeXMentions(text)).toBe(expected);
   });
 
-  it("removes a footer line of mentions alone, with its whitespace", () => {
-    expect(removeXMentions("Line one @a\n@b @c\n\n\n\nLine two")).toBe("Line one a\n\nLine two");
+  it("keeps a dotted name whole when it would not be a link", () => {
+    expect(removeXMentions("Hi @heinrich_.schroder!")).toBe("Hi heinrich_.schroder!");
+  });
+
+  // R59 fix review L3: the footer is a paragraph of its own.
+  it("a mentions-only line inside a paragraph with text is running text", () => {
+    expect(removeXMentions("Line one @a\n@b @c\n\n\n\nLine two")).toBe("Line one a\nb c\n\nLine two");
+    expect(removeXMentions("Photos by:\n@kai @mia\n\nBook now")).toBe("Photos by:\nkai mia\n\nBook now");
+    expect(removeXMentions("Our coaches:\n- @kai\n- @mia")).toBe("Our coaches:\n- kai\n- mia");
+  });
+
+  it("removes a footer paragraph of mentions alone, with its whitespace", () => {
     expect(removeXMentions("Great day out\n\n  @kai @mia.surf  ")).toBe("Great day out");
+    expect(removeXMentions("@kai @mia\n\nGreat day out")).toBe("Great day out");
+  });
+
+  it("a footer paragraph of several tag lines loses every mention", () => {
+    expect(removeXMentions("Great day\n\n#surf #florida\n@kai @mia")).toBe("Great day\n\n#surf #florida");
   });
 
   it("on a footer line of hashtags and mentions, removes the mentions whole", () => {
@@ -70,7 +89,7 @@ describe("removeXMentions", () => {
   });
 
   it("keeps CRLF line ends on a footer line", () => {
-    expect(removeXMentions("#surf @kai\r\nGreat day")).toBe("#surf\r\nGreat day");
+    expect(removeXMentions("Great day\r\n\r\n#surf @kai\r\n#fl")).toBe("Great day\r\n\r\n#surf\r\n#fl");
   });
 
   it("in running text, the name stays and counts on X", () => {

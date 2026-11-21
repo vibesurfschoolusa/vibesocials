@@ -1,25 +1,26 @@
 import { hashtagsIn } from "@/lib/hashtags";
+import { X_LINK_WEIGHT, xWeightedLength } from "@/lib/xWeightedLength";
 
 const MENTION = /(^|[\s([{])@([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)/g;
 const MENTION_TOKEN = /^@[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*[,;]*$/;
 // Characters people put between footer tags: "#surf · @kai | @mia, @ana".
 const SEPARATOR_TOKEN = /^[·•|,;/–—-]+$/;
+// Longer than X's link weight, so the padded name weighs X_LINK_WEIGHT only
+// when X counts it as a link.
+const LINK_PROBE = `${"a".repeat(X_LINK_WEIGHT + 7)}.`;
 
 function isHashtagToken(token: string): boolean {
   const bare = token.replace(/[,;]+$/, "");
   return hashtagsIn(bare)[0]?.[0] === bare;
 }
 
-/**
- * A footer-style line: mentions and hashtags alone, with whitespace and
- * separators between them, and at least one mention. Any other word makes it
- * running text.
- */
+function tokensOf(line: string): string[] {
+  return line.split(/\s+/).filter(Boolean);
+}
+
+/** A line made only of mentions, hashtags and the separators between them. */
 function isTagLine(tokens: readonly string[]): boolean {
-  return (
-    tokens.some((token) => MENTION_TOKEN.test(token)) &&
-    tokens.every((token) => MENTION_TOKEN.test(token) || isHashtagToken(token) || SEPARATOR_TOKEN.test(token))
-  );
+  return tokens.every((token) => MENTION_TOKEN.test(token) || isHashtagToken(token) || SEPARATOR_TOKEN.test(token));
 }
 
 /** The footer line without its mentions; separators are kept only between two hashtags. */
@@ -39,10 +40,28 @@ function withoutMentions(tokens: readonly string[]): string {
   return kept.join(" ").replace(/[,;]+$/, "");
 }
 
-function removeLineMentions(line: string): string {
-  const tokens = line.split(/\s+/).filter(Boolean);
-  if (isTagLine(tokens)) return withoutMentions(tokens) + (line.endsWith("\r") ? "\r" : "");
-  return line.replace(MENTION, "$1$2");
+/**
+ * The name a mention in running text leaves. R59 fix review L2: a dotted name
+ * that X would count as a link ("vibesurfschool.za", "surf.co") keeps only the
+ * part before its first dot, so the post never carries a link nobody wrote.
+ * The test is xWeightedLength's own, on the name behind a long label.
+ */
+function bareName(name: string): string {
+  if (!name.includes(".")) return name;
+  return xWeightedLength(LINK_PROBE + name) === X_LINK_WEIGHT ? name.slice(0, name.indexOf(".")) : name;
+}
+
+function inRunningText(line: string): string {
+  return line.replace(MENTION, (_whole, before: string, name: string) => before + bareName(name));
+}
+
+/** One paragraph's lines: a footer paragraph loses its mentions whole, any other only their "@". */
+function paragraphWithoutMentions(lines: readonly string[]): string[] {
+  const tokens = lines.map(tokensOf);
+  const isFooter =
+    tokens.some((line) => line.some((token) => MENTION_TOKEN.test(token))) && tokens.every(isTagLine);
+  if (!isFooter) return lines.map(inRunningText);
+  return lines.map((line, index) => withoutMentions(tokens[index]) + (line.endsWith("\r") ? "\r" : ""));
 }
 
 /**
@@ -62,16 +81,30 @@ function removeLineMentions(line: string): string {
  *
  * R59 new-customer-2 L2: deleting a handle from a sentence left "surf with ."
  * on a client's public post. In running text only the "@" goes ("with
- * vibesurfschool."), which X doesn't read as a mention. Whole handles go only
- * on a line of mentions and hashtags alone, like the caption footer, and that
- * line's hashtags stay. The spaces and empty lines a removal leaves behind are
+ * vibesurfschool"), which X doesn't read as a mention. Whole handles go only
+ * in the footer: a paragraph of its own (between blank lines, or at the start
+ * or end) whose every line is mentions, hashtags and separators alone. Its
+ * hashtags stay. The spaces and empty lines a removal leaves behind are
  * tidied; everything else stays as written.
  */
 export function removeXMentions(text: string): string {
   if (!text.includes("@")) return text;
-  return text
-    .split("\n")
-    .map(removeLineMentions)
+  const out: string[] = [];
+  let paragraph: string[] = [];
+  const flush = () => {
+    out.push(...paragraphWithoutMentions(paragraph));
+    paragraph = [];
+  };
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") {
+      flush();
+      out.push(line);
+    } else {
+      paragraph.push(line);
+    }
+  }
+  flush();
+  return out
     .join("\n")
     .replace(/[ \t]{2,}/g, " ")
     .replace(/[ \t]+$/gm, "")
