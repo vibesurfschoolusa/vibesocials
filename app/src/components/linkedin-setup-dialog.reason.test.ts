@@ -31,10 +31,18 @@ vi.mock("@/components/ui/dialog", () => {
   };
 });
 
-import { LINKEDIN_PAGE_NOT_FOUND, LinkedInSetupDialog, latestTry } from "./linkedin-setup-dialog";
+import {
+  LINKEDIN_LOOKUP_FAILED,
+  LINKEDIN_PAGE_NOT_FOUND,
+  LinkedInSetupDialog,
+  latestTry,
+} from "./linkedin-setup-dialog";
 
 const NOT_FOUND_TEXT =
   "LinkedIn didn't find that page. Check the page's URL (it looks like linkedin.com/company/your-page) and try again. If it still isn't found, write to us at hello@vibesocials.wtf.";
+
+const LOOKUP_FAILED_TEXT =
+  "We couldn't look up that page on LinkedIn just now. Try again in a few minutes. If it keeps happening, write to us at hello@vibesocials.wtf.";
 
 const KEY = "linkedin-setup-address";
 
@@ -116,6 +124,49 @@ describe("LinkedInSetupDialog: why it came back", () => {
   it("closed (no linkedin_setup) and reopened on a first try: no stale reason", () => {
     expect(rendered("")).toBe("");
     expect(decoded(rendered("linkedin_setup=true"))).not.toContain("didn't find that page");
+  });
+});
+
+// R54 platform-clients L1: a lookup LinkedIn refused or didn't answer is not a
+// wrong address; the dialog says LinkedIn failed, and keeps what was typed.
+describe("LinkedInSetupDialog: when LinkedIn didn't answer the lookup", () => {
+  it("the sentence says what happened, when to try again, and where to write", () => {
+    expect(LINKEDIN_LOOKUP_FAILED).toBe(LOOKUP_FAILED_TEXT);
+  });
+
+  it("lookup_failed: its own reason, as an alert, with the address kept and no not-found claim", () => {
+    const html = decoded(rendered("linkedin_setup=lookup_failed", "linkedin.com/company/acme-surf"));
+    expect(html).toContain(LOOKUP_FAILED_TEXT);
+    expect(html).toMatch(/role="alert"[^]*couldn't look up that page/);
+    expect(html).not.toContain("didn't find that page");
+    expect(html).toMatch(/id="vanity-name"[^>]*value="linkedin.com\/company\/acme-surf"/);
+  });
+
+  it("not_found is unchanged: its own reason, not the lookup one", () => {
+    const html = decoded(rendered("linkedin_setup=not_found", "acme-surff"));
+    expect(html).toContain(NOT_FOUND_TEXT);
+    expect(html).not.toContain("couldn't look up that page");
+  });
+
+  it("lookup_failed with nothing kept (a later try ended the stored copy): no reason, an empty field", () => {
+    const html = decoded(rendered("linkedin_setup=lookup_failed"));
+    expect(html).not.toContain("couldn't look up that page");
+    expect(html).toMatch(/id="vanity-name"[^>]*value=""/);
+  });
+
+  it("blocked storage: the address's reason, and an empty field", () => {
+    const html = decoded(rendered("linkedin_setup=lookup_failed", blocked));
+    expect(html).toContain(LOOKUP_FAILED_TEXT);
+    expect(html).toMatch(/id="vanity-name"[^>]*value=""/);
+  });
+
+  it("a first try is blank, and so is a reload of a first try after a failed one", () => {
+    expect(decoded(rendered("linkedin_setup=true", "acme-surf"))).not.toContain("couldn't look up that page");
+    const storage = fakeStorage("acme-surf");
+    expect(latestTry("lookup_failed", () => storage)).toEqual({ reason: true, address: "acme-surf" });
+    expect(latestTry("true", () => storage)).toEqual({ reason: false, address: "" });
+    expect(latestTry("true", () => storage)).toEqual({ reason: false, address: "" });
+    expect(latestTry("lookup_failed", () => storage)).toEqual({ reason: false, address: "" });
   });
 });
 

@@ -26,10 +26,21 @@ const noSubscription = () => () => {};
 /** The callback's answer when the page address from this dialog found nothing. */
 const NOT_FOUND = "not_found";
 
+/**
+ * R54 platform-clients L1: the callback's answer when LinkedIn refused or
+ * didn't answer the lookup of that address, which says nothing about the address.
+ */
+const LOOKUP_FAILED = "lookup_failed";
+
+/** The callback's answers to a try with a page address: each has its reason. */
+const isAddressReturn = (setup: string | null) => setup === NOT_FOUND || setup === LOOKUP_FAILED;
+
 export const LINKEDIN_PAGE_NOT_FOUND = `LinkedIn didn't find that page. Check the page's URL (it looks like linkedin.com/company/your-page) and try again. If it still isn't found, write to us at ${SUPPORT_EMAIL}.`;
 
-// The address typed before leaving for LinkedIn, so a not-found return can
-// show what was tried. Only a convenience: blocked storage leaves the field empty.
+export const LINKEDIN_LOOKUP_FAILED = `We couldn't look up that page on LinkedIn just now. Try again in a few minutes. If it keeps happening, write to us at ${SUPPORT_EMAIL}.`;
+
+// The address typed before leaving for LinkedIn, so a not-found or
+// lookup-failed return can show what was tried. Only a convenience: blocked storage leaves the field empty.
 const ADDRESS_KEY = "linkedin-setup-address";
 
 type StoredAddress = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -38,22 +49,22 @@ const browserStorage = (): StoredAddress => window.sessionStorage;
 /**
  * R53 fix review L2: the reason and the kept address belong to the latest try.
  * Back to an old not_found after a later try connected showed both, while the
- * row said Connected. So any load that isn't a not_found return (a success, a
- * choice, an error, a first try) ends the stored copy, and a not_found return
- * shows the reason only while the copy is there. Unreadable storage can't
- * tell, so there the address's not_found is trusted, with an empty field.
+ * row said Connected. So any load that isn't a not_found or lookup_failed
+ * return (a success, a choice, an error, a first try) ends the stored copy,
+ * and such a return shows the reason only while the copy is there. Unreadable
+ * storage can't tell, so there the address's answer is trusted, with an empty field.
  */
 export function latestTry(setup: string | null, storage: () => StoredAddress): { reason: boolean; address: string } {
   try {
     const kept = storage();
-    if (setup !== NOT_FOUND) {
+    if (!isAddressReturn(setup)) {
       kept.removeItem(ADDRESS_KEY);
       return { reason: false, address: "" };
     }
     const address = kept.getItem(ADDRESS_KEY);
     return { reason: address !== null, address: address ?? "" };
   } catch {
-    return { reason: setup === NOT_FOUND, address: "" };
+    return { reason: isAddressReturn(setup), address: "" };
   }
 }
 
@@ -74,7 +85,8 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
   const hydrated = useSyncExternalStore(noSubscription, () => true, () => false);
   const setup = searchParams.get("linkedin_setup");
   const notFound = setup === NOT_FOUND;
-  const showSetup = hydrated && (setup === "true" || notFound);
+  const addressReturn = isAddressReturn(setup);
+  const showSetup = hydrated && (setup === "true" || addressReturn);
 
   // latestTry is idempotent, so reading it for both states is the same answer.
   const [vanityName, setVanityName] = useState(() => latestTry(setup, browserStorage).address);
@@ -88,12 +100,12 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
     () =>
       onReturnFromCache(window, () => {
         setIsConnecting(false);
-        if (!notFound) return;
+        if (!addressReturn) return;
         const latest = latestTry(setup, browserStorage);
         setReasonShown(latest.reason);
         setVanityName(latest.address);
       }),
-    [notFound, setup],
+    [addressReturn, setup],
   );
 
   // Closing clears the trigger query param (?linkedin_setup=) so the dialog
@@ -159,7 +171,9 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
         </DialogDescription>
       </DialogHeader>
       <DialogBody className="flex flex-col gap-5">
-        {notFound && reasonShown && <Alert variant="danger">{LINKEDIN_PAGE_NOT_FOUND}</Alert>}
+        {addressReturn && reasonShown && (
+          <Alert variant="danger">{notFound ? LINKEDIN_PAGE_NOT_FOUND : LINKEDIN_LOOKUP_FAILED}</Alert>
+        )}
         <Alert variant="info" title="Company pages only">
           This app posts to LinkedIn company pages, not personal profiles. The LinkedIn account
           signed in to this browser is the one being connected, and it must be an administrator
