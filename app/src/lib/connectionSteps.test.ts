@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { connectionStepSentence, stepForCode, stepsForRows } from "./connectionSteps";
+import { connectionStepSentence, stepForCode, stepsForRows, stepVerb } from "./connectionSteps";
 
 describe("stepForCode: the failed row's code names the step", () => {
   it("CONNECTION_GONE is connect, RECONNECT_REQUIRED is reconnect, anything else none", () => {
@@ -151,5 +151,25 @@ describe("connectionStepSentence: nothing went out, Activity lists the platforms
     expect(connectionStepSentence({ form: "activityEmail", steps: ["connect"] }, "owner")).toBe(
       "Connect them in Settings; Activity shows which.",
     );
+  });
+});
+
+describe("the Activity card's pieces (R59 follow-up)", () => {
+  it("a Retry all refusal that lists no platform names what the card asked for", () => {
+    const sentence = { form: "retry", platforms: [], unnamed: "the failed platforms" } as const;
+    expect(connectionStepSentence({ ...sentence, step: "connect" }, "owner")).toBe(
+      "Connect the failed platforms in Settings, then retry.",
+    );
+    expect(connectionStepSentence({ ...sentence, step: "reconnect" }, "member")).toBe(
+      "The workspace owner can reconnect the failed platforms; then retry.",
+    );
+    expect(connectionStepSentence({ form: "retry", platforms: ["x"], unnamed: "unused", step: "reconnect" }, "owner")).toBe(
+      "Reconnect X in Settings before retrying.",
+    );
+  });
+
+  it("the step's verb, for a sentence whose Settings is a link", () => {
+    expect(stepVerb("connect")).toBe("Connect");
+    expect(stepVerb("reconnect")).toBe("Reconnect");
   });
 });

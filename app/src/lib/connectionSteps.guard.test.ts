@@ -51,8 +51,6 @@ function stepTexts(fileName: string, source: string): string[] {
   return textsOf(fileName, source).filter((text) => STEP.test(text) && !CODE.test(text) && !NOT_SHOWN.test(text));
 }
 
-const CARD_OWNER = "AT2 owns the card; the same words as the helper's retry and row forms, to move into it";
-
 /**
  * The publish path, and the step texts each file may still hold, with why. An
  * entry no longer in its file fails too, so the list stays true.
@@ -107,12 +105,6 @@ const PUBLISH_PATH: Record<string, Record<string, string>> = {
   "app/api/posts/[postJobId]/pairRule.ts": {},
   "app/api/posts/[postJobId]/retry/route.ts": {},
   "components/activity/post-job-card.tsx": {
-    "The workspace owner can connect ${}; then retry.": CARD_OWNER,
-    "Connect ${} in Settings, then retry.": CARD_OWNER,
-    "The workspace owner can reconnect ${}; then retry.": CARD_OWNER,
-    "Reconnect ${} in Settings before retrying.": CARD_OWNER,
-    Connect: CARD_OWNER,
-    Reconnect: CARD_OWNER,
     "You're offline, so the retry of ${} wasn't sent. Reconnect, then retry again.":
       "the reader's own network, not a platform's connection",
   },
@@ -136,6 +128,13 @@ describe("the guard itself", () => {
     const planted = `${readFileSync(path.join(SRC, file), "utf8")}\nexport const PLANTED = "Reconnect X in Settings, then retry.";\n`;
     const found = stepTexts(file, planted).filter((text) => !(text in PUBLISH_PATH[file]));
     expect(found).toEqual(["Reconnect X in Settings, then retry."]);
+  });
+
+  it("fails when the Activity card words its own Connect step again", () => {
+    const file = "components/activity/post-job-card.tsx";
+    const planted = `${readFileSync(path.join(SRC, file), "utf8")}\nexport const planted = (which: string) => \`Connect \${which} in Settings, then retry.\`;\n`;
+    const found = stepTexts(file, planted).filter((text) => !(text in PUBLISH_PATH[file]));
+    expect(found).toEqual(["Connect ${} in Settings, then retry."]);
   });
 
   it("finds a step word handed in before the platform, then the retry", () => {

@@ -674,6 +674,26 @@ describe("PostJobCard - what a member reads", () => {
     );
   });
 
+  // R59 follow-up: the card's steps come from lib/connectionSteps.ts, word for word as before.
+  it("the toast fallback with no reason and no platform listed names the card's label, as Reconnect", () => {
+    expect(reconnectRefusalToast("owner", [], "the failed platforms", undefined)).toBe(
+      "Reconnect the failed platforms in Settings before retrying.",
+    );
+    expect(reconnectRefusalToast("member", [], "the failed platforms", undefined)).toBe(
+      "The workspace owner can reconnect the failed platforms; then retry.",
+    );
+    expect(reconnectRefusalToast("owner", [], "the failed platforms", undefined, "connect")).toBe(
+      "Connect the failed platforms in Settings, then retry.",
+    );
+  });
+
+  it("the owner's step keeps the Settings link, with the verb and platform before it", () => {
+    for (const [step, verb] of [["connect", "Connect"], ["reconnect", "Reconnect"]] as const) {
+      const owner = renderToStaticMarkup(createElement(ReconnectStep, { platform: "x", role: "owner", step })).replace(/<!-- -->/g, "");
+      expect(owner).toMatch(new RegExp(`>${verb} X in <a [^>]*href="/settings[^"]*"[^>]*>Settings</a></span>$`));
+    }
+  });
+
   // R58 pages-a-4 L1: a platform with no connection is connected, not reconnected.
   it("the step for no connection: Connect with a Settings link for an owner, the owner's step for a member", () => {
     const owner = renderToStaticMarkup(
