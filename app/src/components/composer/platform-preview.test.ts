@@ -228,3 +228,12 @@ describe("PlatformPreviewList count line on the other platforms, unchanged by Pi
     expect(lines(platform, long)).toEqual(longLines.map(line));
   });
 });
+
+// R57 publishing-flow-2 L2: the preview shows the ticked platforms only.
+describe("PlatformPreviewList heading", () => {
+  it("says each platform the post goes to, not each connected one", () => {
+    const html = render();
+    expect(html).toContain("How this post will look on each platform it goes to.");
+    expect(html).not.toContain("connected platform");
+  });
+});

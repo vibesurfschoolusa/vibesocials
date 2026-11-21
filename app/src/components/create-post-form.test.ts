@@ -25,6 +25,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   automaticCaptionRefusedText,
+  submittedBanner,
   buildTextPostBody,
   captionsAfterReuseDismissed,
   CreatePostFormSkeleton,
@@ -2098,5 +2099,53 @@ describe("automaticCaptionRefusedText keeps the route sentence's case", () => {
     expect(automaticCaptionRefusedText("This workspace has reached today's AI limit. It resets in 1 hour.")).toBe(
       "No caption was written. This workspace has reached today's AI limit. It resets in 1 hour.",
     );
+  });
+});
+
+// R57 publishing-flow-2 L1, L2: the banner after Post counts a series, and
+// Post now names the platforms chosen, not every connected one.
+describe("submittedBanner", () => {
+  it("a series of 4, scheduled", () => {
+    expect(submittedBanner({ mode: "schedule", awaitingApproval: false, seriesCount: 4 })).toEqual({
+      title: "Posts scheduled",
+      text: "4 posts scheduled. We'll publish each one at its own time. Edit or cancel them from the Queue until then.",
+    });
+  });
+
+  it("a series held for approval", () => {
+    expect(submittedBanner({ mode: "schedule", awaitingApproval: true, seriesCount: 4 })).toEqual({
+      title: "Sent for approval",
+      text: "4 posts sent for approval. An owner will review each one before anything publishes. You can follow their status in the Queue.",
+    });
+  });
+
+  it("a single scheduled or held post, and a draft, as before", () => {
+    for (const seriesCount of [null, 1]) {
+      expect(submittedBanner({ mode: "schedule", awaitingApproval: false, seriesCount })).toEqual({
+        title: "Post scheduled",
+        text: "We'll publish this at the time you chose. Edit or cancel it from the Queue until then.",
+      });
+      expect(submittedBanner({ mode: "schedule", awaitingApproval: true, seriesCount })).toEqual({
+        title: "Sent for approval",
+        text: "An owner will review it before anything publishes. You can follow its status in the Queue.",
+      });
+    }
+    expect(submittedBanner({ mode: "draft", awaitingApproval: false, seriesCount: null })).toEqual({
+      title: "Draft saved",
+      text: "Your draft is saved. Publish or schedule it any time from the Queue.",
+    });
+  });
+
+  it("Post now: the platforms chosen", () => {
+    expect(submittedBanner({ mode: "now", awaitingApproval: false, seriesCount: null })).toEqual({
+      title: "Post queued",
+      text: "We're publishing to the platforms you chose. Per-platform results appear in Activity.",
+    });
+  });
+
+  it("the banner takes its words and the series count from here", () => {
+    const source = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+    expect(source).toContain("submittedBanner({ mode: submittedMode, awaitingApproval, seriesCount: submittedSeriesCount })");
+    expect(source).toMatch(/setSubmittedSeriesCount\(/);
   });
 });
