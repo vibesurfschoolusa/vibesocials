@@ -1709,14 +1709,17 @@ export function QueueView({
           <Alert variant="danger" title="Couldn't load your queue">
             <LoadError message={error} onRetry={handleReload} />
           </Alert>
-        ) : (!jobs || jobs.length === 0) && view === "list" ? (
+        ) : (!jobs || jobs.length === 0) && nextCursor === null && view === "list" ? (
+          // R60 client-journey-2 L1: only on the last page. Cancel, Delete and
+          // the like remove cards locally, so an emptied first page may still
+          // have older posts after it (Media's rule).
           <EmptyState
             icon={<CalendarClock />}
             title="Nothing queued"
             description="Schedule a post or save a draft from the composer and it'll show up here."
             action={<QueueEmptyActions addManyIncluded={addManyIncluded} />}
           />
-        ) : !jobs || jobs.length === 0 ? (
+        ) : (!jobs || jobs.length === 0) && nextCursor === null ? (
           // N3: an empty Queue's calendar still shows the month to plan in.
           <QueueCalendar
             jobs={[]}
@@ -1737,6 +1740,9 @@ export function QueueView({
                 onReload={reloadSilently}
                 workspaceId={workspaceId}
               />
+            ) : (cards ?? []).length === 0 ? (
+              // R60 client-journey-2 L1: every card on this page was removed; Load more is below.
+              <p className="text-center text-sm text-muted-foreground">Older posts may be on the next page.</p>
             ) : (
               <div className="space-y-3">
                 {(cards ?? []).map((card) => (
