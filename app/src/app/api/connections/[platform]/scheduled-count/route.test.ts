@@ -59,9 +59,9 @@ describe("GET /api/connections/[platform]/scheduled-count", () => {
     });
   });
 
-  // R61 pages-a-2 L1: a post held for approval keeps its time and platforms,
-  // and fails on the platform once approved, so it is counted too, by
-  // dashboard/summary's AWAITING_APPROVAL rule with a time set.
+  // R61 pages-a-2 L1: a post held for approval keeps its platforms, and fails
+  // on the platform once approved, so it is counted too, by dashboard/summary's
+  // AWAITING_APPROVAL rule, with or without a time (R62 new-customer L1).
   describe("posts waiting for approval", () => {
     type Row = {
       id: string;
@@ -113,8 +113,23 @@ describe("GET /api/connections/[platform]/scheduled-count", () => {
       expect(await countOf([row("d", { submittedForApprovalAt: at, approvedAt: at })])).toBe(0);
     });
 
-    it("a draft never submitted is not counted, and a held post without a time is not", async () => {
-      expect(await countOf([row("plain", { scheduledFor: at }), row("held-no-time", { submittedForApprovalAt: at })])).toBe(0);
+    it("a draft never submitted is not counted", async () => {
+      expect(await countOf([row("plain", { scheduledFor: at })])).toBe(0);
+    });
+
+    // R62 new-customer L1: a member's held Publish now post has no time, and
+    // once approved it fails on a disconnected platform all the same.
+    it("a held Publish now post with no time is counted", async () => {
+      expect(await countOf([row("held-no-time", { submittedForApprovalAt: at })])).toBe(1);
+    });
+
+    it("a held Feed and Story pair counts once", async () => {
+      expect(
+        await countOf([
+          row("feed", { submittedForApprovalAt: at }),
+          row("story", { submittedForApprovalAt: at, storyOfPostJobId: "feed" }),
+        ]),
+      ).toBe(1);
     });
   });
 
