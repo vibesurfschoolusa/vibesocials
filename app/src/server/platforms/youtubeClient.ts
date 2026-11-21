@@ -231,6 +231,14 @@ export function computeYouTubeTitle(
  */
 const YOUTUBE_TAGS_MAX_CHARS = 500;
 
+/**
+ * R58 platform-clients L1: Instagram's hashtag rule (instagramClient.ts), so
+ * accented tags (#niños) are kept whole. A tag starts the text or follows a
+ * character that cannot be part of a word, so "site.com/#book", "C#" and
+ * "&#39;" are not tags.
+ */
+const HASHTAG_PATTERN = /(?<![\p{L}\p{N}_&#])#[\p{L}\p{N}_]+/gu;
+
 function fitYouTubeTags(tags: readonly string[]): string[] {
   const kept: string[] = [];
   let used = 0;
@@ -258,7 +266,7 @@ export function buildYouTubeVideoResource(ctx: PublishContext): {
   const { caption } = ctx;
 
   // Hashtags in the caption become tags, as many as fit YouTube's 500 characters.
-  const hashtagMatches = caption.match(/#[\w]+/g) || [];
+  const hashtagMatches = caption.match(HASHTAG_PATTERN) || [];
   const tags = fitYouTubeTags(hashtagMatches.map((tag) => tag.substring(1))); // Remove # prefix
 
   // YouTube video metadata: the post's base caption for the title (no

@@ -2463,6 +2463,32 @@ describe("buildYouTubeVideoResource — text YouTube accepts", () => {
     expect(resourceFor({ caption: "No tags" }).snippet.tags).toBeUndefined();
   });
 
+  // R58 platform-clients L1: the same hashtag rule as Instagram, so accented
+  // tags are kept whole and a #fragment inside a link or word is not a tag.
+  it("keeps accented tags whole", () => {
+    expect(resourceFor({ caption: "Clases para niños #niños #café #ÉcoleSurf #surf" }).snippet.tags).toEqual([
+      "niños",
+      "café",
+      "ÉcoleSurf",
+      "surf",
+    ]);
+  });
+
+  it("does not take a #fragment inside a link or a word as a tag", () => {
+    expect(resourceFor({ caption: "Book at https://site.com/page#book or issue#4, C# and &#39; #waves" }).snippet.tags).toEqual([
+      "waves",
+    ]);
+    expect(resourceFor({ caption: "Book at site.com#book" }).snippet.tags).toBeUndefined();
+  });
+
+  it("fits accented tags to the 500-character limit too", () => {
+    // 60 tags of 11 characters ("olaséxito01".."olaséxito60"): 41 fit, as with ASCII tags.
+    const names = Array.from({ length: 60 }, (_, i) => `olaséxito${String(i + 1).padStart(2, "0")}`);
+    const { tags } = resourceFor({ caption: `Olas ${names.map((name) => `#${name}`).join(" ")}` }).snippet;
+    expect(tags).toEqual(names.slice(0, 41));
+    expect(tags!.join(",").length).toBeLessThanOrEqual(500);
+  });
+
   it("goes up private when the post has no YouTube choice", () => {
     expect(resourceFor({}).status.privacyStatus).toBe("private");
     expect(resourceFor({ youtubeMetadata: { privacyStatus: "unlisted" } }).status.privacyStatus).toBe("unlisted");
