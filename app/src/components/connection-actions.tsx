@@ -327,7 +327,11 @@ export function ConnectionActions({
     window.open(TIKTOK_LOGOUT_URL, "_blank", "noopener,noreferrer");
     setSwitching(false);
     setSwitchOpen(false);
-    toast.success("TikTok disconnected. Log out in the new tab, then click Connect.");
+    // R65 new-customer-2: a tab opened after an await can be blocked, and with
+    // noopener window.open returns null either way, so name the address too.
+    toast.success(
+      "TikTok disconnected. Log out of TikTok in the new tab, or at tiktok.com/logout if no tab opened, then click Connect.",
+    );
     router.refresh();
   }
 
