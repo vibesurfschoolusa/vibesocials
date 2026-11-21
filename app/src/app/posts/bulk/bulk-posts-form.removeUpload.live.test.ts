@@ -192,4 +192,33 @@ describe("Add many: a removed row stops its upload", () => {
     expect(rows()).toHaveLength(1);
     expect(container.textContent).not.toContain("Uploading");
   }, 10_000);
+
+  // R62 lead follow-up: leaving the page stops the upload, and the queue stops with it.
+  it("leaving the page mid-upload: the upload is aborted, quietly, and no other row starts", async () => {
+    stall.add("leaving");
+    await mountWith([photo("leaving"), photo("waiting")]);
+    expect(uploadsOf("leaving")).toHaveLength(1);
+
+    await act(async () => root.unmount());
+    root = createRoot(container as unknown as HTMLElement);
+    await settle();
+
+    expect(uploadsOf("leaving")[0]!.signal?.aborted).toBe(true);
+    expect(uploadsOf("waiting")).toHaveLength(0);
+    expect(consoleError).not.toHaveBeenCalled();
+  }, 10_000);
+
+  it("leaving the page while a file is prepared: no upload token is asked for after", async () => {
+    holdPreparation.add("prep.jpg");
+    await mountWith([photo("prep")]);
+    expect(preparing.has("prep.jpg")).toBe(true);
+
+    await act(async () => root.unmount());
+    root = createRoot(container as unknown as HTMLElement);
+    await act(async () => preparing.get("prep.jpg")!());
+    await settle();
+
+    expect(uploadsOf("prep")).toHaveLength(0);
+    expect(consoleError).not.toHaveBeenCalled();
+  }, 10_000);
 });

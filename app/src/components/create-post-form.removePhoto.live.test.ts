@@ -81,6 +81,11 @@ async function run(step: () => unknown) {
 
 const pageSays = (text: string) => (body.textContent as string).includes(text);
 const pick = (...files: File[]) => run(() => props(byId("post-media")).onChange({ target: { files } }));
+function buttonTexted(text: string, within: FakeNode = container): FakeNode {
+  const hit = find(within, (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() === text);
+  if (!hit) throw new Error(`no button ${text}`);
+  return hit;
+}
 function buttonLabelled(label: string): FakeNode {
   const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.["aria-label"] === label);
   if (!hit) throw new Error(`no button ${label}`);
@@ -178,5 +183,49 @@ describe("Create: a photo removed while it uploads", () => {
       expect(sent.signal?.aborted).toBe(false);
     }
     expect(pageSays("didn't upload")).toBe(false);
+  }, 10_000);
+
+  // R62 lead follow-up: the same class, closed for Remove all and for leaving the page.
+  it("Remove all while photos upload: every upload is aborted, and none is left running", async () => {
+    stall.add("left");
+    stall.add("right");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await pick(photo("left"), photo("right"));
+      expect(uploads).toHaveLength(1);
+
+      await run(() => props(buttonTexted("Remove all")).onClick());
+      const dialog = find(body, (n) => n.attributes?.role === "dialog");
+      if (!dialog) throw new Error("no Remove all dialog");
+      await run(() => props(buttonTexted("Remove all", dialog)).onClick());
+
+      // The second photo either never started or was aborted too: nothing is still sending.
+      expect(uploads.length).toBeGreaterThan(0);
+      for (const sent of uploads) expect(sent.signal?.aborted).toBe(true);
+      expect(pageSays("aborted")).toBe(false);
+      expect(pageSays("didn't upload")).toBe(false);
+      expect(consoleError.mock.calls.some((call) => /upload|abort/i.test(call.map(String).join(" ")))).toBe(false);
+    } finally {
+      consoleError.mockRestore();
+    }
+  }, 10_000);
+
+  it("leaving the page mid-upload: the upload is aborted and nothing runs after", async () => {
+    stall.add("gone");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await pick(photo("gone"), photo("never"));
+      expect(uploadsOf("gone")).toHaveLength(1);
+
+      await act(async () => root.unmount());
+      root = createRoot(container as unknown as HTMLElement);
+      await settle();
+
+      expect(uploadsOf("gone")[0]!.signal?.aborted).toBe(true);
+      expect(uploadsOf("never")).toHaveLength(0);
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
   }, 10_000);
 });
