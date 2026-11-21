@@ -13,6 +13,13 @@ export const X_TEXT_EMPTY_MESSAGE =
   "X removes @mentions from posts sent through its API, so this post has no text left for X. Add some words, or leave X out.";
 
 /**
+ * R63 pages-a L1: the Queue's Edit dialog can't change the platforms, so PATCH
+ * names what that dialog can do and the way to post without X.
+ */
+export const X_TEXT_EMPTY_EDIT_MESSAGE =
+  "X removes @mentions from posts sent through its API, so this post would have no text for X. Add some words to the caption or to X's own caption. To post without X, cancel this post and create it again without X.";
+
+/**
  * The refusal for a post without a photo whose X text would be empty, or null.
  * Shared by POST /api/posts and PATCH /api/posts/[postJobId], so the two can't
  * disagree. The text is built as publishing builds it: the X override (an empty
@@ -26,15 +33,18 @@ export async function xTextEmptyRefusal(args: {
   xOverride: string | null | undefined;
   workspace: CaptionFooterUser & { id: string };
   targetPlatforms: readonly Platform[] | undefined;
+  /** PATCH's sentence instead of POST's. */
+  editing?: boolean;
 }): Promise<string | null> {
   const { targetPlatforms, workspace } = args;
+  const message = args.editing ? X_TEXT_EMPTY_EDIT_MESSAGE : X_TEXT_EMPTY_MESSAGE;
   if (targetPlatforms && !targetPlatforms.includes("x")) return null;
   const caption = args.xOverride ? args.xOverride : args.baseCaption;
   if (removeXMentions(buildCaptionWithFooter(caption, workspace, "x")).trim()) return null;
-  if (targetPlatforms) return X_TEXT_EMPTY_MESSAGE;
+  if (targetPlatforms) return message;
   const xConnection = await prisma.socialConnection.findFirst({
     where: { workspaceId: workspace.id, platform: "x" },
     select: { id: true },
   });
-  return xConnection ? X_TEXT_EMPTY_MESSAGE : null;
+  return xConnection ? message : null;
 }

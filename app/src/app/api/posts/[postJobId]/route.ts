@@ -290,17 +290,28 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
 
   // R62 review low 2: an edit can no more leave X an empty text than POST could
   // create one. Only a post without a photo (no media item; a file still goes
-  // to X), only when a caption changes, against the platforms it was made for.
-  if (existing.mediaItem === null && (body.baseCaption !== undefined || body.perPlatformOverrides !== undefined)) {
+  // to X), against the platforms it was made for. R63 pages-a L1: only when the
+  // text X would get changes, since Edit sends the caption on every save and a
+  // mentions-only post stored before this check must still be reschedulable.
+  if (existing.mediaItem === null) {
     const storedOverrides = existing.perPlatformOverrides as Partial<Record<Platform, string>> | null;
     const stored = existing.publishMetadata as { targetPlatforms?: Platform[] } | null;
-    const xRefusal = await xTextEmptyRefusal({
-      baseCaption: typeof body.baseCaption === "string" ? body.baseCaption : (existing.baseCaption ?? ""),
-      xOverride: perPlatformOverrides !== undefined ? perPlatformOverrides?.x : storedOverrides?.x,
-      workspace: workspaceContext.workspace,
-      targetPlatforms: stored?.targetPlatforms?.length ? stored.targetPlatforms : undefined,
-    });
-    if (xRefusal) return NextResponse.json({ error: xRefusal }, { status: 400 });
+    const storedBase = existing.baseCaption ?? "";
+    const baseCaption = typeof body.baseCaption === "string" ? body.baseCaption : storedBase;
+    const xOverride = perPlatformOverrides !== undefined ? perPlatformOverrides?.x : storedOverrides?.x;
+    // An empty override falls back to the main caption, as publishing does.
+    const xSourceNow = storedOverrides?.x ? storedOverrides.x : storedBase;
+    const xSourceAfter = xOverride ? xOverride : baseCaption;
+    if (xSourceAfter !== xSourceNow) {
+      const xRefusal = await xTextEmptyRefusal({
+        baseCaption,
+        xOverride,
+        workspace: workspaceContext.workspace,
+        targetPlatforms: stored?.targetPlatforms?.length ? stored.targetPlatforms : undefined,
+        editing: true,
+      });
+      if (xRefusal) return NextResponse.json({ error: xRefusal }, { status: 400 });
+    }
   }
 
   if (Object.keys(data).length === 0) {
