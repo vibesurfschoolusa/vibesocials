@@ -1189,8 +1189,9 @@ describe("choosing which account to connect", () => {
       // after an address LinkedIn couldn't find, so every try looped unexplained.
       // R54 platform-clients L1: only LinkedIn's own "no such page" is not_found.
       const aclRefused = () => json({ status: 403, message: "Not enough permissions" }, 403);
-      const setupAfter = async (hint: string, lookup: (url: string) => Response | null) => {
-        useProvider(linkedinProvider([], { acl: aclRefused, extra: lookup }));
+      const aclRefusedAnd = (lookup: (url: string) => Response | null) =>
+        linkedinProvider([], { acl: aclRefused, extra: lookup });
+      const setupAfter = async (hint: string) => {
         const res = await linkedinGET(callbackRequest("linkedin", vanityState(hint)));
         expect(location(res).pathname).toBe("/settings");
         return location(res).searchParams.get("linkedin_setup");
@@ -1202,16 +1203,14 @@ describe("choosing which account to connect", () => {
       };
 
       it("organizationAcls refused and the vanity name found nothing (a 200 with no elements): not_found", async () => {
-        expect(
-          await setupAfter("acme-surff", (url) => (url === vanityLookup ? json({ elements: [] }) : null)),
-        ).toBe("not_found");
+        useProvider(aclRefusedAnd((url) => (url === vanityLookup ? json({ elements: [] }) : null)));
+        expect(await setupAfter("acme-surff")).toBe("not_found");
         expectNoConnectionWrites();
       });
 
       it("organizationAcls refused and the numeric id is a 404: not_found", async () => {
-        expect(
-          await setupAfter("777", (url) => (url === idLookup ? json({ message: "Not found" }, 404) : null)),
-        ).toBe("not_found");
+        useProvider(aclRefusedAnd((url) => (url === idLookup ? json({ message: "Not found" }, 404) : null)));
+        expect(await setupAfter("777")).toBe("not_found");
         expectNoConnectionWrites();
       });
 
@@ -1221,7 +1220,8 @@ describe("choosing which account to connect", () => {
         ["a 500", () => json({ message: "Internal error" }, 500)],
         ["a timeout", timedOut],
       ])("organizationAcls refused and the vanity name lookup got %s: lookup_failed", async (_kind, answer) => {
-        expect(await setupAfter("acme-surff", (url) => (url === vanityLookup ? answer() : null))).toBe("lookup_failed");
+        useProvider(aclRefusedAnd((url) => (url === vanityLookup ? answer() : null)));
+        expect(await setupAfter("acme-surff")).toBe("lookup_failed");
         expectNoConnectionWrites();
       });
 
@@ -1229,7 +1229,8 @@ describe("choosing which account to connect", () => {
         ["a 403", () => json({ message: "Not enough permissions" }, 403)],
         ["a 500", () => json({ message: "Internal error" }, 500)],
       ])("organizationAcls refused and the numeric id lookup got %s: lookup_failed", async (_kind, answer) => {
-        expect(await setupAfter("777", (url) => (url === idLookup ? answer() : null))).toBe("lookup_failed");
+        useProvider(aclRefusedAnd((url) => (url === idLookup ? answer() : null)));
+        expect(await setupAfter("777")).toBe("lookup_failed");
         expectNoConnectionWrites();
       });
 
