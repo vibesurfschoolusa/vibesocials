@@ -296,6 +296,21 @@ describe("the guard catches", () => {
     expect(handWrittenLostRaces(handler)).not.toEqual([]);
   });
 
+  it("a 409 from a top-of-file function helper, returned after the publish claim", () => {
+    const file = `function lost() {
+  return NextResponse.json({ error: "Someone else got there first." }, { status: 409 });
+}
+export async function POST() {
+  const result = await applyToPair({
+    write: async (db, row) =>
+      (await db.postJob.updateMany({ where: { id: row.id, status: { in: ["draft", "scheduled"] }, updatedAt: row.updatedAt }, data: {} })).count === 1,
+  });
+  if (!result.ok) return lost();
+  return NextResponse.json({ ok: true });
+}`;
+    expect(handWrittenLostRaces(handlersOf(file).get("POST")!, [], file)).not.toEqual([]);
+  });
+
   it("a lost-race sentence kept as a module constant", () => {
     const file = `const DRAFT_GONE = "This draft can no longer be scheduled.";
 export async function POST() {
