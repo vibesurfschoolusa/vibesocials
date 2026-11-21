@@ -943,7 +943,12 @@ describe("POST /api/posts/[postJobId]/approval — daily post limit (usage limit
     const res = await POST(req({ decision: "approve" }), ctx("job-1"));
 
     expect(res.status).toBe(429);
-    await expect(res.json()).resolves.toEqual({ error: SCHEDULE_SENTENCE, code: "WORKSPACE_DAILY_POST_LIMIT" });
+    // R55 pages-a-3 L1: the card has no day picker, so the steps are the approver's.
+    await expect(res.json()).resolves.toEqual({
+      error:
+        "That day already has 20 posts, which is this workspace's daily limit. Cancel or move another post on that day, then approve again. Or reject this one and ask the member to submit it for another day.",
+      code: "WORKSPACE_DAILY_POST_LIMIT",
+    });
     expect(updateManyMock).not.toHaveBeenCalled();
   });
 
@@ -966,7 +971,11 @@ describe("POST /api/posts/[postJobId]/approval — daily post limit (usage limit
     const res = await POST(req({ decision: "approve" }), ctx("job-1"));
 
     expect(res.status).toBe(429);
-    await expect(res.json()).resolves.toEqual({ error: NOW_SENTENCE, code: "WORKSPACE_DAILY_POST_LIMIT" });
+    await expect(res.json()).resolves.toEqual({
+      error:
+        "This workspace has reached its limit of 20 posts for today. Approve it again tomorrow, or reject it and ask the member to schedule it for another day.",
+      code: "WORKSPACE_DAILY_POST_LIMIT",
+    });
     expect(updateManyMock).not.toHaveBeenCalled();
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
@@ -1406,7 +1415,11 @@ describe("POST /api/posts/[postJobId]/approval - reserved before the claim", () 
     const res = await POST(req({ decision: "approve" }), ctx("job-1"));
 
     expect(res.status).toBe(429);
-    await expect(res.json()).resolves.toEqual(FULL);
+    await expect(res.json()).resolves.toEqual({
+      error:
+        "Vibe Socials has reached its daily limit of posts for the whole service. Approve it again tomorrow, or reject it and ask the member to schedule it for another day.",
+      code: "SERVICE_DAILY_POST_LIMIT",
+    });
     expect(reserveSendNowMock).toHaveBeenCalledWith({ workspaceId: "ws-1", postJobIds: ["job-1"], viewerUserId: "user-1" });
     expect(updateManyMock).not.toHaveBeenCalled();
     expect(sendEmailMock).not.toHaveBeenCalled();
