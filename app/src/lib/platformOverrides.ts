@@ -6,6 +6,7 @@ import { pinterestDescriptionLength } from "@/lib/pinterestApi";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { buildPlatformPreview, unitCountText } from "@/lib/platformPreview";
 import { PLATFORM_ORDER } from "@/lib/platforms";
+import { removeXMentions } from "@/lib/xMentions";
 import { xWeightedLength } from "@/lib/xWeightedLength";
 import { youtubeDescriptionLength } from "@/lib/youtubeDescription";
 
@@ -102,9 +103,17 @@ function platformLength(text: string, platform: Platform): number {
   return [...graphemeSegmenter.segment(text)].length;
 }
 
-/** Length of the footer the app appends to every caption (0 when there is none). */
+/**
+ * Length of the footer as this platform gets it (0 when there is none). X never
+ * receives @-mentions (lib/xMentions.ts), so they take no room there. The
+ * footer is built with no platform, so tracking tags never shrink the room.
+ * One stand-in character is measured with it because removeXMentions trims,
+ * which would drop the blank line between the caption and the footer.
+ */
 function footerLength(footer: CaptionFooterUser | null | undefined, platform: Platform): number {
-  return platformLength(buildCaptionWithFooter("", footer ?? {}), platform);
+  let text = buildCaptionWithFooter("a", footer ?? {});
+  if (platform === "x") text = removeXMentions(text);
+  return platformLength(text, platform) - platformLength("a", platform);
 }
 
 /** Room for the caption on this platform once the footer is added, or null when it has no limit. */

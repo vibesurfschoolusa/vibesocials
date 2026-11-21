@@ -211,6 +211,39 @@ describe("adaptMaxLength", () => {
   });
 });
 
+// R57 pages-a-4 L1: X never receives the footer's @-mentions (lib/xMentions.ts),
+// so they take no room from the caption "Adapt for X" asks for.
+describe("adaptMaxLength with @-mentions in the footer", () => {
+  const handles = Array.from({ length: 8 }, (_, i) => `@surfspot_account${i}`).join(" ");
+  const footer = { companyWebsite: "a.co", defaultHashtags: `#surf ${handles}` };
+
+  it("on X, gives the room the X counter shows", () => {
+    const room = adaptMaxLength("x", footer)!;
+    const counter = platformCaptionCounter("a".repeat(room), "x", footer);
+    expect(counter.length).toBe(280);
+    expect(counter.over).toBe(false);
+    expect(counter.label).toBe("280 / 280 incl. footer");
+  });
+
+  it("on Facebook, is unchanged: no limit", () => {
+    expect(adaptMaxLength("facebook_page", footer)).toBeUndefined();
+  });
+
+  it("on platforms that keep mentions, still counts them", () => {
+    const footerText = buildCaptionWithFooter("", footer);
+    expect(adaptMaxLength("instagram", footer)).toBe(2200 - footerText.length);
+  });
+
+  it("gives the same room with tracking tags on as off", () => {
+    expect(adaptMaxLength("x", { ...footer, trackWebsiteLinks: true })).toBe(adaptMaxLength("x", footer));
+  });
+
+  it("with no footer, is the full limit", () => {
+    expect(adaptMaxLength("x", null)).toBe(280);
+    expect(adaptMaxLength("x", {})).toBe(280);
+  });
+});
+
 describe("applyAdaptedCaption", () => {
   it("fills the platform's caption while it reads as at the press", () => {
     expect(applyAdaptedCaption({ x: "old", linkedin: "keep" }, "x", "new", "old")).toEqual({
