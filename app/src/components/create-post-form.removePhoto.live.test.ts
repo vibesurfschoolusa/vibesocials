@@ -228,4 +228,43 @@ describe("Create: a photo removed while it uploads", () => {
       consoleError.mockRestore();
     }
   }, 10_000);
+
+  // R62 lead follow-up: the single video or photo, ensureUploaded's path.
+  it("one file: removing it mid-upload aborts the upload, quietly", async () => {
+    stall.add("solo");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await pick(photo("solo"));
+      expect(uploadsOf("solo")).toHaveLength(1);
+      expect(uploadsOf("solo")[0]!.signal?.aborted).toBe(false);
+
+      await pick();
+
+      expect(uploadsOf("solo")[0]!.signal?.aborted).toBe(true);
+      expect(pageSays("aborted")).toBe(false);
+      expect(pageSays("Failed to prepare media")).toBe(false);
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  }, 10_000);
+
+  it("one file: leaving the page mid-upload aborts it, and nothing runs after", async () => {
+    stall.add("video");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await pick(new File(["v"], "video.mp4", { type: "video/mp4" }));
+      expect(uploadsOf("video")).toHaveLength(1);
+
+      await act(async () => root.unmount());
+      root = createRoot(container as unknown as HTMLElement);
+      await settle();
+
+      expect(uploadsOf("video")[0]!.signal?.aborted).toBe(true);
+      expect(pageSays("aborted")).toBe(false);
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  }, 10_000);
 });
