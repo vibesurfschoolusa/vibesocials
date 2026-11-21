@@ -300,8 +300,10 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     const baseCaption = typeof body.baseCaption === "string" ? body.baseCaption : storedBase;
     const xOverride = perPlatformOverrides !== undefined ? perPlatformOverrides?.x : storedOverrides?.x;
     // An empty override falls back to the main caption, as publishing does.
-    const xSourceNow = storedOverrides?.x ? storedOverrides.x : storedBase;
-    const xSourceAfter = xOverride ? xOverride : baseCaption;
+    // Trimmed, as publishing sends it: Edit sends the caption trimmed, so a
+    // stored trailing space or newline is not a change.
+    const xSourceNow = (storedOverrides?.x ? storedOverrides.x : storedBase).trim();
+    const xSourceAfter = (xOverride ? xOverride : baseCaption).trim();
     if (xSourceAfter !== xSourceNow) {
       const xRefusal = await xTextEmptyRefusal({
         baseCaption,
