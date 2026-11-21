@@ -328,6 +328,16 @@ describe("AttachedPhotos", () => {
     expect(html).toContain("1 of 3");
   });
 
+  it("names the photo on Retry and keeps its visible text", () => {
+    const html = render([
+      photo("a", { status: "failed", blob: null, error: "No." }),
+      photo("b", { status: "failed", blob: null, error: "No." }),
+    ]);
+    expect(html).toContain('aria-label="Retry photo 1"');
+    expect(html).toContain('aria-label="Retry photo 2"');
+    expect(html.match(/>Retry</g)).toHaveLength(2);
+  });
+
   it("marks photos still being prepared, and shows no upload bar for them", () => {
     const html = render([photo("a", { status: "preparing", blob: null }), photo("b", { status: "preparing", blob: null })]);
     expect(html.match(/>Preparing</g)).toHaveLength(2);
@@ -609,6 +619,12 @@ describe("PhotoDescriptionField", () => {
     expect(html).toContain("Write it for me");
   });
 
+  it("names the photo on the AI button and keeps its visible text", () => {
+    const html = render("");
+    expect(html).toContain('aria-label="Write it for me: Describe this photo (alt text)"');
+    expect(html).toMatch(/>(<svg[^]*?<\/svg>)?Write it for me<\/button>/);
+  });
+
   it("disables the AI button until the photo has uploaded", () => {
     expect(render("", false)).toMatch(/<button[^>]*disabled=""[^>]*>[^]*Write it for me/);
   });
@@ -630,12 +646,13 @@ describe("AttachedPhotos - descriptions", () => {
         onDescribe: noop,
       }),
     );
-    expect(html.match(/Photo \d: describe this photo \(alt text\)/g)).toEqual([
-      "Photo 1: describe this photo (alt text)",
-      "Photo 2: describe this photo (alt text)",
+    expect(html.match(/>Photo \d: describe this photo \(alt text\)/g)).toEqual([
+      ">Photo 1: describe this photo (alt text)",
+      ">Photo 2: describe this photo (alt text)",
     ]);
     expect(html).toContain('value="A dog."');
-    expect(html.match(/Write it for me/g)).toHaveLength(2);
+    expect(html.match(/Write it for me</g)).toHaveLength(2);
+    expect(html).toContain('aria-label="Write it for me: Photo 2: describe this photo (alt text)"');
   });
 });
 

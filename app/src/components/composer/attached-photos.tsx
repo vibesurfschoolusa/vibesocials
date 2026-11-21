@@ -193,7 +193,14 @@ export function PhotoDescriptionField({
           aria-describedby={`${id}-count`}
           className="h-9"
         />
-        <Button type="button" variant="outline" size="sm" onClick={write} loading={writing} disabled={!onWrite}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={write}
+          aria-label={`Write it for me: ${label}`}
+          loading={writing} disabled={!onWrite}
+        >
           {!writing && <Sparkles className="h-4 w-4" aria-hidden />}
           Write it for me
         </Button>
@@ -559,6 +566,7 @@ function PhotoTile({
           <button
             type="button"
             onClick={onRetry}
+            aria-label={`Retry photo ${position}`}
             className="text-xs font-medium text-primary underline-offset-4 hover:underline"
           >
             Retry
