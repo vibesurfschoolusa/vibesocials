@@ -38,16 +38,56 @@ describe("Pinterest reads whose body never ends", () => {
     await expect(after15s(listPinterestBoards("pin-token"))).resolves.toBeNull();
   });
 
-  it("a later boards page ends the list with what was read", async () => {
+  it("a later boards page that never ends answers null, never a partial list (R65 L1)", async () => {
     const fetchMock = vi.fn((input: string | URL, init?: RequestInit) =>
       new URL(String(input)).searchParams.get("bookmark")
         ? bodyNeverEnds(input, init)
         : Promise.resolve(Response.json({ items: [{ id: "b1", name: "Board", privacy: "PUBLIC" }], bookmark: "next" })),
     );
     vi.stubGlobal("fetch", fetchMock);
-    await expect(after15s(listPinterestBoards("pin-token"))).resolves.toEqual([
-      { id: "b1", name: "Board", privacy: "PUBLIC" },
-    ]);
+    await expect(after15s(listPinterestBoards("pin-token"))).resolves.toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+/** R65 L1: like Meta's and LinkedIn's lists, a later page that fails fails the whole list. */
+describe("Pinterest boards: never a partial list", () => {
+  const page1 = { items: [{ id: "b1", name: "Board", privacy: "PUBLIC" }], bookmark: "next" };
+  const page2 = { items: [{ id: "b2", name: "Group", privacy: "PUBLIC" }], bookmark: null };
+
+  it("page 2 answers 503: null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL) =>
+        Promise.resolve(
+          new URL(String(input)).searchParams.get("bookmark")
+            ? new Response("busy", { status: 503 })
+            : Response.json(page1),
+        ),
+      ),
+    );
+    await expect(listPinterestBoards("pin-token")).resolves.toBeNull();
+  });
+
+  it("page 2 throws: null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL) =>
+        new URL(String(input)).searchParams.get("bookmark")
+          ? Promise.reject(new TypeError("fetch failed"))
+          : Promise.resolve(Response.json(page1)),
+      ),
+    );
+    await expect(listPinterestBoards("pin-token")).resolves.toBeNull();
+  });
+
+  it("every page succeeds: the full list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL) =>
+        Promise.resolve(Response.json(new URL(String(input)).searchParams.get("bookmark") ? page2 : page1)),
+      ),
+    );
+    await expect(listPinterestBoards("pin-token")).resolves.toEqual([...page1.items, ...page2.items]);
   });
 });
