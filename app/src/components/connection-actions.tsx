@@ -191,10 +191,12 @@ export async function requestDisconnect(
  */
 export function switchScheduledSentence(platform: string): string {
   const label = platformLabel(platform as Platform);
-  // R63 client-journey L2: a new Google account has no location, and its posts fail until one is chosen.
-  const once =
-    platform === "google_business_profile" ? "once you sign in and choose its location" : "once you finish signing in";
-  return `Scheduled posts, and posts waiting for approval, that chose ${label} go to the new account ${once}. If you stop before then, they fail on ${label} until you connect an account again.`;
+  // R63 client-journey L2: a new Google account has no location, and its posts fail until one is
+  // chosen (R64 client-journey L1: connecting again alone does not fix that).
+  const gbp = platform === "google_business_profile";
+  const once = gbp ? "once you sign in and choose its location" : "once you finish signing in";
+  const until = gbp ? "until an account is connected and its location chosen" : "until you connect an account again";
+  return `Scheduled posts, and posts waiting for approval, that chose ${label} go to the new account ${once}. If you stop before then, they fail on ${label} ${until}.`;
 }
 
 export function switchDescription(platform: string): string {
