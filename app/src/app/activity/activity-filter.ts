@@ -22,7 +22,7 @@ export function activityEmptyState(filter: ActivityFilter): {
   showCreate: boolean;
 } {
   if (filter === "problems") {
-    return { title: "Nothing went wrong. Every post went out.", description: null, showCreate: false };
+    return { title: "No post has had a problem.", description: null, showCreate: false };
   }
   return {
     title: "No posts yet",

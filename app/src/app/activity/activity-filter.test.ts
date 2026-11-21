@@ -23,17 +23,22 @@ describe("activityFilterHref", () => {
 });
 
 describe("activityEmptyState", () => {
-  it("says nothing went wrong, with no create button, on the problems tab", () => {
+  it("says no post has had a problem, with no create button, on the problems tab", () => {
+    // R56 L1: "Every post went out." was false for an owner with only
+    // scheduled posts, drafts, or none at all.
     expect(activityEmptyState("problems")).toEqual({
-      title: "Nothing went wrong. Every post went out.",
+      title: "No post has had a problem.",
       description: null,
       showCreate: false,
     });
   });
 
   it("keeps the first-post empty state on all posts", () => {
-    const empty = activityEmptyState("all");
-    expect(empty.title).toBe("No posts yet");
-    expect(empty.showCreate).toBe(true);
+    expect(activityEmptyState("all")).toEqual({
+      title: "No posts yet",
+      description:
+        "When you publish a post, it'll appear here with a per-platform breakdown of what succeeded and what failed.",
+      showCreate: true,
+    });
   });
 });
