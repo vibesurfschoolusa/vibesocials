@@ -265,7 +265,10 @@ export function BulkPostRow({
         ) : null}
 
         <div className="flex flex-col gap-1">
-          <Label htmlFor={captionId}>Caption</Label>
+          {/* R59 pages-a L2: every row has these fields, so each one's name adds the row's. */}
+          <Label htmlFor={captionId}>
+            Caption<span className="sr-only">, {rowName}</span>
+          </Label>
           <Textarea
             ref={(field) => {
               captionRef.current = field;
@@ -326,7 +329,9 @@ export function BulkPostRow({
 
         {isPhoto ? (
           <div className="flex flex-col gap-1">
-            <Label htmlFor={altId}>Photo description (alt text)</Label>
+            <Label htmlFor={altId}>
+              Photo description (alt text)<span className="sr-only">, {rowName}</span>
+            </Label>
             <Input
               ref={altFieldRef}
               id={altId}
@@ -403,7 +408,9 @@ export function BulkPostRow({
           </div>
         ) : (
           <div className="flex flex-col gap-1">
-            <Label htmlFor={whenId}>Date and time</Label>
+            <Label htmlFor={whenId}>
+              Date and time<span className="sr-only">, {rowName}</span>
+            </Label>
             <Input
               id={whenId}
               type="datetime-local"

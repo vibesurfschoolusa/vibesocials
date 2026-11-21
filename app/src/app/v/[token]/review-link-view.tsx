@@ -496,7 +496,10 @@ export function ReviewPostCard({
                 void decide({ decision: "change", note }, sendRef.current);
               }}
             >
-              <Label htmlFor={`note-${post.id}`}>What would you like changed?</Label>
+              {/* R59 pages-a L2: several cards' boxes can be open, so each one's name says its post. */}
+              <Label htmlFor={`note-${post.id}`}>
+                What would you like changed?<span className="sr-only"> &quot;{cardName}&quot;</span>
+              </Label>
               <Textarea
                 ref={noteRef}
                 id={`note-${post.id}`}

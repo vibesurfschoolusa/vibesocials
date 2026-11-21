@@ -484,3 +484,32 @@ describe("Add many row: per-row buttons name their file", () => {
     expect(button(html, "Send again")).toContain('aria-label="Send again 1. a.jpg"');
   });
 });
+
+// R59 pages-a L2: with 20 rows, a screen reader's field list read 20 identical
+// "Caption" boxes. Each field's name adds the row's name as hidden text; the
+// visible label is unchanged and the name starts with it.
+describe("Add many row: field names", () => {
+  const labels = (html: string) =>
+    [...html.matchAll(/<label[^>]*>((?:(?!<\/label>).)*)<\/label>/g)].map((m) => ({
+      name: m[1].replace(/<[^>]+>/g, ""),
+      visible: m[1].replace(/<span class="sr-only">(?:(?!<\/span>).)*<\/span>/g, "").replace(/<[^>]+>/g, ""),
+    }));
+  const fields = (html: string) =>
+    labels(html).filter((label) => ["Caption", "Photo description (alt text)", "Date and time"].includes(label.visible));
+
+  it("each field is named with its row; the visible label is as before", () => {
+    const html = render(row({ fileName: "IMG_0001.JPG" }), { index: 1, count: 2 });
+    expect(fields(html)).toEqual([
+      { visible: "Caption", name: "Caption, 2. IMG_0001.JPG" },
+      { visible: "Photo description (alt text)", name: "Photo description (alt text), 2. IMG_0001.JPG" },
+      { visible: "Date and time", name: "Date and time, 2. IMG_0001.JPG" },
+    ]);
+  });
+
+  it("two rows give different field names", () => {
+    const first = fields(render(row({ id: "r1", fileName: "IMG_0001.JPG" }), { index: 0, count: 2 })).map((f) => f.name);
+    const second = fields(render(row({ id: "r2", fileName: "IMG_0001.JPG" }), { index: 1, count: 2 })).map((f) => f.name);
+    expect(first).toHaveLength(3);
+    for (const name of first) expect(second).not.toContain(name);
+  });
+});

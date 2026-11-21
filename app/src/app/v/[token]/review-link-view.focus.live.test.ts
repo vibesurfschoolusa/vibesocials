@@ -314,6 +314,28 @@ describe("/v: a card decision's 429", () => {
     expect(props(noteBox()!).value).toBe(NOTE);
   });
 
+  // R59 pages-a L2: with two change boxes open, each one's name says which post it is for.
+  it("two open change boxes have different names that start with the visible label", async () => {
+    fetchMock.mockReturnValueOnce(listed("a", "b"));
+    await open();
+    await press(buttons("Ask for a change")[0]);
+    await press(buttons("Ask for a change")[0]);
+    const labels = all((n) => n.nodeName === "LABEL");
+    const names = labels.map((n) => String(n.textContent));
+    expect(names).toHaveLength(2);
+    for (const name of names) expect(name.startsWith("What would you like changed?")).toBe(true);
+    expect(names[0]).not.toBe(names[1]);
+    expect(names[0]).toContain("Post a");
+    expect(names[1]).toContain("Post b");
+    const visible = labels.map((n) =>
+      n.childNodes
+        .filter((c) => !(c.attributes?.class ?? "").includes("sr-only"))
+        .map((c) => String(c.textContent))
+        .join(""),
+    );
+    expect(visible).toEqual(["What would you like changed?", "What would you like changed?"]);
+  });
+
   // R41 second look: an approved card's Ask for a change must not reopen old text.
   it("a Looks good that went clears the kept note too", async () => {
     stored.set("vs-review-note:tok:a", NOTE);
