@@ -73,6 +73,14 @@ export const INVITE_MAYBE_MADE_MESSAGE = answerLostText(
   "Reload this page and check Invite link before you send a link.",
 );
 
+/**
+ * What a made invite link says. R58 new-customer-2 L1: making one turns the
+ * old one off (invites/route.ts), so a replace says to send the new one.
+ */
+export function inviteCreatedText(replaced: boolean): string {
+  return replaced ? "New invite link created. The old link no longer works, so send this one instead." : "Invite link created.";
+}
+
 /** What a failed Create invite link says, from the answer it got. */
 export function inviteFailureText(status: number, data: { error?: unknown } | null): string {
   return answerFailureText(status, data, INVITE_MAYBE_MADE_MESSAGE, "Couldn't create an invite link. Reload the page and try again.");
@@ -878,6 +886,7 @@ function OwnerView({
 
   const createInvite = useCallback(async (event?: MouseEvent<HTMLElement>) => {
     const pressed = event?.currentTarget ?? null;
+    const replaced = invite !== null;
     setInviteBusy(true);
     try {
       const response = await fetchOrNoAnswer("/api/workspaces/invites", {
@@ -896,14 +905,14 @@ function OwnerView({
       focusAfterPress(pressed, () => copyInviteRef.current);
       setFreshUrl(data.url);
       setInvite({ expiresAt: data.expiresAt, createdAt: new Date().toISOString() });
-      toast.success("Invite link created.");
+      toast.success(inviteCreatedText(replaced));
     } catch (error) {
       const text = confirmFailureText(error, INVITE_MAYBE_MADE_MESSAGE);
       if (text) toast.error(text);
     } finally {
       setInviteBusy(false);
     }
-  }, [toast, workspaceId]);
+  }, [invite, toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure (the
   // error is already surfaced via toast here).
@@ -1236,7 +1245,7 @@ function OwnerView({
             ) : (
               <p className="text-sm text-muted-foreground">
                 Link created {formatDate(invite.createdAt)} — for security it can&apos;t be shown
-                again. Revoke it and create a new one if you&apos;ve lost it.
+                again. If you&apos;ve lost it, create a new one. That turns this one off.
               </p>
             )}
             <p className="text-xs text-muted-foreground">

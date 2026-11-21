@@ -14,6 +14,7 @@ import {
   INVITE_MAYBE_MADE_MESSAGE,
   LEAVE_MAYBE_LEFT_MESSAGE,
   leaveBlockedText,
+  inviteCreatedText,
   inviteFailureText,
   MAKE_MEMBER_BLOCKED_TITLE,
   makeMemberBlockedTitle,
@@ -107,6 +108,30 @@ describe("Team section invite link field", () => {
   it("is labelled", () => {
     const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
     expect(source).toMatch(/<Input\s+readOnly\s+value=\{freshUrl\}\s+aria-label="New invite link"/);
+  });
+});
+
+// R58 new-customer-2 L1: a new link turns the old one off (invites/route.ts),
+// so the toast and the note say so.
+describe("Team section: a new invite link replaces the old one", () => {
+  const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+
+  it("replacing a link: the toast says the old link no longer works", () => {
+    expect(inviteCreatedText(true)).toBe("New invite link created. The old link no longer works, so send this one instead.");
+  });
+
+  it("a first link: the toast is as before", () => {
+    expect(inviteCreatedText(false)).toBe("Invite link created.");
+  });
+
+  it("the toast is chosen by whether a link was showing before the press", () => {
+    expect(source).toContain("const replaced = invite !== null;");
+    expect(source).toContain("toast.success(inviteCreatedText(replaced));");
+  });
+
+  it("the note says a new link turns this one off, with no revoke step", () => {
+    expect(source).toMatch(/If you&apos;ve lost it, create a new one\. That turns this one off\./);
+    expect(source).not.toContain("Revoke it and create a new one");
   });
 });
 
