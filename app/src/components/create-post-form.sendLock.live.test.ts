@@ -223,25 +223,6 @@ function tomorrowNoon(): string {
   return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T12:00`;
 }
 
-function platformBox(name: string): FakeNode {
-  const label = find(
-    container,
-    (n) => n.nodeName === "LABEL" && (n.textContent as string).trim().startsWith(name) && find(n, (c) => c.nodeName === "INPUT") !== null,
-  );
-  const box = label ? find(label, (n) => n.nodeName === "INPUT") : null;
-  if (!box) throw new Error(`no ${name} checkbox`);
-  return box;
-}
-
-/** X's "Different caption" switch. */
-function xSwitch(): FakeNode {
-  const hit = findAll(container, (n) => n.attributes?.role === "switch").find((n) =>
-    String(n.attributes?.["aria-labelledby"] ?? "").includes("-x-"),
-  );
-  if (!hit) throw new Error("no X switch");
-  return hit;
-}
-
 const isDisabled = (node: FakeNode) => props(node).disabled === (true as never);
 
 async function pressSchedule() {
@@ -260,13 +241,6 @@ async function pressPublishAndConfirm() {
   if (!confirm) throw new Error("no confirm button");
   await run(() => props(confirm).onClick());
 }
-async function leaveForm() {
-  await act(async () => {
-    root.render(createElement(ToastProvider, null, null));
-  });
-  await settle();
-}
-
 /** Disabled itself, or inside a disabled fieldset (which disables every control in it). */
 function locked(node: FakeNode): boolean {
   for (let at: FakeNode | null = node; at; at = at.parentNode) {
@@ -280,12 +254,15 @@ function labelled(label: string): FakeNode {
   if (!hit) throw new Error(`no ${label}`);
   return hit;
 }
-const radiosNamed = (prefix: string) =>
-  findAll(container, (n) => n.nodeName === "INPUT" && n.attributes?.type === "radio" && String(n.attributes?.name ?? "").startsWith(prefix));
-function storyRadios(platform: "instagram" | "facebook_page"): FakeNode[] {
-  const all = findAll(container, (n) => n.nodeName === "INPUT" && n.attributes?.type === "radio" && String(n.attributes?.name ?? "").includes(platform));
+function storyRadios(platform: "Instagram" | "Facebook Page"): FakeNode[] {
+  const legend = find(container, (n) => n.nodeName === "LEGEND" && n.textContent === `${platform}: post to`);
+  const all = legend?.parentNode ? findAll(legend.parentNode, (n) => n.nodeName === "INPUT") : [];
   if (all.length === 0) throw new Error(`no ${platform} placement`);
   return all;
+}
+function coverControls(): FakeNode[] {
+  const group = find(container, (n) => n.attributes?.role === "radiogroup" && n.attributes?.["aria-label"] === "Video cover");
+  return group ? findAll(group, (n) => n.nodeName === "INPUT") : [];
 }
 function googleBoxButton(): FakeNode {
   const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.["aria-controls"] === "google-post-box-settings");
@@ -330,10 +307,10 @@ describe("Create: a waiting Schedule locks every control that shapes the post (R
       [
         ["Repeat", () => [byId("post-repeat")]],
         ["Repeat count", () => [byId("post-repeat-count")]],
-        ["Instagram placement", () => storyRadios("instagram")],
-        ["Facebook placement", () => storyRadios("facebook_page")],
+        ["Instagram placement", () => storyRadios("Instagram")],
+        ["Facebook placement", () => storyRadios("Facebook Page")],
         ["YouTube privacy", () => [byId("youtube-privacy")]],
-        ["Cover", () => radiosNamed("").filter((n) => !String(n.attributes?.name).includes("instagram") && !String(n.attributes?.name).includes("facebook_page"))],
+        ["Cover", coverControls],
         ["When to publish", whenButtons],
       ],
       async () => {
@@ -342,6 +319,23 @@ describe("Create: a waiting Schedule locks every control that shapes the post (R
         expect(posted).toHaveLength(1);
       },
     );
+  }, 15_000);
+
+  it("Publish now (its dialog): the controls behind it are as before", async () => {
+    stall.add("vid4");
+    await typeCaption("Surf lesson today");
+    await pick(video("vid4"));
+    await pressPublishAndConfirm();
+    expect(posted).toHaveLength(0);
+
+    for (const node of [...storyRadios("Instagram"), ...coverControls(), ...whenButtons(), byId("youtube-privacy")]) {
+      expect(locked(node)).toBe(false);
+    }
+    await act(async () => release.get(uploadsOf("vid4")[0]!.key)!());
+    await settle();
+    expect(posted).toHaveLength(1);
+    expect(pageSays(UNEXPECTED)).toBe(false);
+    expect(captionNow()).toBe("");
   }, 15_000);
 
   it("a photo: Improve caption, Caption from media, the alt text and its Write button, and the Google box", async () => {

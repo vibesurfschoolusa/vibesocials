@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useEffect, useEffectEvent, useMemo, useRef, Suspense } from "react";
+import { useCallback, useState, useEffect, useEffectEvent, useMemo, useRef, Suspense, type ReactNode } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
@@ -2749,7 +2749,9 @@ function CreatePostFormInner({
   // R64 pages-b L1: performSubmit builds the request from the form as it was at
   // the press, after the upload, and the success clears it, so an edit made while
   // a Schedule or Save draft sends would be dropped unseen. Those fields lock
-  // until the send ends; the file stays changeable, which stops the send (R63).
+  // until the send ends, and so does every other control that shapes the post
+  // (R64 fix review L1; TikTok's settings are frozen code and stay as they are).
+  // The file stays changeable, which stops the send (R63).
   // Publish now's dialog covers the form while it sends.
   const sendLocksFields = uploadLoading && !confirmPublishOpen;
 
@@ -3140,20 +3142,22 @@ function CreatePostFormInner({
                   className="max-h-64 w-full rounded-[var(--radius)] border border-border"
                 />
               ) : null}
-              {coverPicker}
+              <SendLock locked={sendLocksFields}>{coverPicker}</SendLock>
               <p className="text-xs text-muted-foreground">
                 {reuseItem.originalFilename} &middot; {formatBytes(reuseItem.sizeBytes)}
               </p>
               {reuseItem.mimeType.startsWith("image/") && (
-                <PhotoDescriptionField
-                  id="post-alt-text"
-                  label="Describe this photo (alt text)"
-                  value={singleAltText}
-                  onChange={setSingleAltText}
-                  onWrite={() =>
-                    describeSinglePhoto(reusedItemBlob(reuseItem), reuseItem)
-                  }
-                />
+                <SendLock locked={sendLocksFields}>
+                  <PhotoDescriptionField
+                    id="post-alt-text"
+                    label="Describe this photo (alt text)"
+                    value={singleAltText}
+                    onChange={setSingleAltText}
+                    onWrite={() =>
+                      describeSinglePhoto(reusedItemBlob(reuseItem), reuseItem)
+                    }
+                  />
+                </SendLock>
               )}
             </div>
           ) : reuseLoading ? (
@@ -3193,16 +3197,18 @@ function CreatePostFormInner({
               )}
 
               {photoSet.length > 0 && (
-                <AttachedPhotos
-                  photos={photoSet}
-                  onRemove={removeAttachedPhoto}
-                  onMove={moveAttachedPhoto}
-                  onRetry={retryAttachedPhoto}
-                  onRemoveAll={removeAllPhotos}
-                  removeAllClearsCaption={removeAllClearsTheCaption}
-                  onDescribe={(key, text) => changePhotoSet((prev) => patchPhoto(prev, key, { altText: text }))}
-                  writeDescription={writePhotoDescription}
-                />
+                <SendLock locked={sendLocksFields}>
+                  <AttachedPhotos
+                    photos={photoSet}
+                    onRemove={removeAttachedPhoto}
+                    onMove={moveAttachedPhoto}
+                    onRetry={retryAttachedPhoto}
+                    onRemoveAll={removeAllPhotos}
+                    removeAllClearsCaption={removeAllClearsTheCaption}
+                    onDescribe={(key, text) => changePhotoSet((prev) => patchPhoto(prev, key, { altText: text }))}
+                    writeDescription={writePhotoDescription}
+                  />
+                </SendLock>
               )}
               <PreparingPhotosStatus photos={photoSet} />
 
@@ -3223,18 +3229,20 @@ function CreatePostFormInner({
                       className="max-h-64 w-full rounded-[var(--radius)] border border-border"
                     />
                   ) : null}
-                  {coverPicker}
+                  <SendLock locked={sendLocksFields}>{coverPicker}</SendLock>
                   <p className="text-xs text-muted-foreground">
                     {uploadFile.name} &middot; {formatBytes(uploadFile.size)}
                   </p>
                   {isImagePreview && (
-                    <PhotoDescriptionField
-                      id="post-alt-text"
-                      label="Describe this photo (alt text)"
-                      value={singleAltText}
-                      onChange={setSingleAltText}
-                      onWrite={uploadedBlob ? () => describeSinglePhoto(uploadedBlob, uploadFile) : null}
-                    />
+                    <SendLock locked={sendLocksFields}>
+                      <PhotoDescriptionField
+                        id="post-alt-text"
+                        label="Describe this photo (alt text)"
+                        value={singleAltText}
+                        onChange={setSingleAltText}
+                        onWrite={uploadedBlob ? () => describeSinglePhoto(uploadedBlob, uploadFile) : null}
+                      />
+                    </SendLock>
                   )}
                 </div>
               )}
@@ -3308,7 +3316,7 @@ function CreatePostFormInner({
                   })
                 }
                 loading={autoCaptionLoading}
-                disabled={!captionSource.blob}
+                disabled={!captionSource.blob || sendLocksFields}
               >
                 {!autoCaptionLoading && <Sparkles className="h-4 w-4" aria-hidden />}
                 Caption from media
@@ -3319,7 +3327,7 @@ function CreatePostFormInner({
                 size="sm"
                 onClick={handleEnhanceCaption}
                 loading={enhancingCaption}
-                disabled={!uploadCaption.trim()}
+                disabled={!uploadCaption.trim() || sendLocksFields}
               >
                 {!enhancingCaption && <Sparkles className="h-4 w-4" aria-hidden />}
                 Improve caption
@@ -3369,36 +3377,44 @@ function CreatePostFormInner({
           />
         )}
         {youtubeSelected && activeMimeType && (
-          <YouTubePostSettings
-            metadata={youtubeMetadata}
-            onChange={setYoutubeMetadata}
-          />
+          <SendLock locked={sendLocksFields}>
+            <YouTubePostSettings
+              metadata={youtubeMetadata}
+              onChange={setYoutubeMetadata}
+            />
+          </SendLock>
         )}
         {googleOptionsShown && (
-          <GooglePostBox
-            metadata={googleMetadata}
-            onChange={setGoogleMetadata}
-            open={googleBoxOpen}
-            onOpenChange={setGoogleBoxOpen}
-          />
+          <SendLock locked={sendLocksFields}>
+            <GooglePostBox
+              metadata={googleMetadata}
+              onChange={setGoogleMetadata}
+              open={googleBoxOpen}
+              onOpenChange={setGoogleBoxOpen}
+            />
+          </SendLock>
         )}
         {selectedPlatforms.includes("instagram") && activeMimeType && (
-          <StoryPlacementSettings
-            platform="instagram"
-            choice={instagramChoice}
-            fileCount={attachedFileCount}
-            videoDurationSec={activeVideoDurationSec}
-            onChange={setInstagramPlacement}
-          />
+          <SendLock locked={sendLocksFields}>
+            <StoryPlacementSettings
+              platform="instagram"
+              choice={instagramChoice}
+              fileCount={attachedFileCount}
+              videoDurationSec={activeVideoDurationSec}
+              onChange={setInstagramPlacement}
+            />
+          </SendLock>
         )}
         {selectedPlatforms.includes("facebook_page") && activeMimeType && (
-          <StoryPlacementSettings
-            platform="facebook_page"
-            choice={facebookChoice}
-            fileCount={attachedFileCount}
-            videoDurationSec={activeVideoDurationSec}
-            onChange={setFacebookPlacement}
-          />
+          <SendLock locked={sendLocksFields}>
+            <StoryPlacementSettings
+              platform="facebook_page"
+              choice={facebookChoice}
+              fileCount={attachedFileCount}
+              videoDurationSec={activeVideoDurationSec}
+              onChange={setFacebookPlacement}
+            />
+          </SendLock>
         )}
 
         {/* Task 7 — per-post platform targeting: defaults to every connected
@@ -3501,6 +3517,7 @@ function CreatePostFormInner({
                   key={mode}
                   type="button"
                   aria-pressed={publishMode === mode}
+                  disabled={sendLocksFields}
                   onClick={() => setPublishMode(mode)}
                   className={cn(
                     "rounded-[calc(var(--radius)-0.125rem)] px-3 py-1.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
@@ -3552,6 +3569,7 @@ function CreatePostFormInner({
                 count={repeatCount}
                 onCountChange={setRepeatCount}
                 storyChosen={storyChosen}
+                locked={sendLocksFields}
                 dates={repeatDates}
                 cautionNote={pageView.repeatNote}
               />
@@ -3683,12 +3701,27 @@ const REPEAT_CHOICES: [RepeatInterval | "none", string][] = [
  * Repeat (brief 11), under the schedule time: how often and how many posts in
  * total, then the dates that will be created, in the viewer's zone.
  */
+/**
+ * R64 fix review L1: locks the controls of a part with no disabled prop of its
+ * own while a send waits (sendLocksFields). A disabled fieldset disables every
+ * control inside it; `contents` keeps it out of the layout.
+ */
+function SendLock({ locked, children }: { locked: boolean; children: ReactNode }) {
+  return (
+    <fieldset disabled={locked} className="contents">
+      {children}
+    </fieldset>
+  );
+}
+
 function RepeatControls(props: {
   repeat: RepeatInterval | "none";
   onRepeatChange: (repeat: RepeatInterval | "none") => void;
   count: number;
   onCountChange: (count: number) => void;
   storyChosen: boolean;
+  /** R64 fix review L1: a waiting send (sendLocksFields). */
+  locked: boolean;
   dates: Date[];
   /** The caution under Repeat (repeatCautionNote), or null. */
   cautionNote: string | null;
@@ -3701,7 +3734,7 @@ function RepeatControls(props: {
       <Select
         id="post-repeat"
         value={storyChosen ? "none" : repeat}
-        disabled={storyChosen}
+        disabled={storyChosen || props.locked}
         onChange={(event) => props.onRepeatChange(event.target.value as RepeatInterval | "none")}
       >
         {REPEAT_CHOICES.map(([value, label]) => (
@@ -3717,6 +3750,7 @@ function RepeatControls(props: {
           <Select
             id="post-repeat-count"
             value={String(count)}
+            disabled={props.locked}
             onChange={(event) => props.onCountChange(Number(event.target.value))}
           >
             {Array.from({ length: REPEAT_MAX_COUNT - REPEAT_MIN_COUNT + 1 }, (_, i) => i + REPEAT_MIN_COUNT).map(
