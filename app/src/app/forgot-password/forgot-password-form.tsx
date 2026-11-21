@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { forgotPasswordOutcome } from "@/lib/forgotPasswordOutcome";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+
+/**
+ * R54 pages-a L3: the route answers the same whether or not an email went out,
+ * so the confirmation never says a link was sent; it says what to do if none
+ * arrives. Its button names the one below it exactly.
+ */
+const CONFIRMATION =
+  "If an account exists for that address, a reset link is on its way. If it doesn't arrive in a few minutes, check your spam folder, then press Try again.";
 
 /**
  * Request-a-reset form. Deliberately reveals NOTHING about whether the address
@@ -21,6 +29,20 @@ export function ForgotPasswordForm() {
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+  // Set by Try again only, so the field is not focused on the first render.
+  const focusEmail = useRef(false);
+
+  useEffect(() => {
+    if (submitted || !focusEmail.current) return;
+    focusEmail.current = false;
+    emailRef.current?.focus();
+  }, [submitted]);
+
+  function askAgain() {
+    focusEmail.current = true;
+    setSubmitted(false);
+  }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -56,11 +78,15 @@ export function ForgotPasswordForm() {
       <div role="status" className="empty:sr-only">
         {submitted ? (
           <Alert variant="success" role={undefined}>
-            If an account exists for that address, we sent a reset link.
+            {CONFIRMATION}
           </Alert>
         ) : null}
       </div>
-      {submitted ? null : (
+      {submitted ? (
+        <Button type="button" variant="outline" onClick={askAgain} className="mt-4 w-full">
+          Try again
+        </Button>
+      ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="email">Email</Label>
@@ -69,6 +95,7 @@ export function ForgotPasswordForm() {
               type="email"
               autoComplete="email"
               required
+              ref={emailRef}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />

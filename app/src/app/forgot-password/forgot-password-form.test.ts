@@ -20,7 +20,8 @@ describe("Forgot password form", () => {
   it("the confirmation sits inside that region", () => {
     const region = source.indexOf('<div role="status" className="empty:sr-only">');
     expect(region).toBeGreaterThan(-1);
-    expect(source.indexOf("If an account exists for that address, we sent a reset link.")).toBeGreaterThan(region);
+    expect(source.indexOf("CONFIRMATION")).toBeGreaterThan(-1);
+    expect(source.indexOf("{CONFIRMATION}")).toBeGreaterThan(region);
     expect(source).not.toMatch(/if \(submitted\) \{\s+return \(/);
   });
 
