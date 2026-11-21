@@ -69,7 +69,7 @@ const POOL_TODAY = `Approve it again ${RESET}; it then publishes at once. Or rej
 
 const freeWs = (day: string) => `If another post here is still scheduled for ${day}, cancel or move it, then approve again.`;
 const freeYou = (day: string) =>
-  `If you have another post still scheduled for ${day}, in any workspace you own, cancel or move it, then approve again.`;
+  `If you have another post still scheduled for ${day}, in any of those workspaces, cancel or move it, then approve again.`;
 const freeSam = (day: string) => `If Sam has another post still scheduled for ${day}, they can cancel or move it to make room.`;
 const freeOwner = (day: string) =>
   `If this workspace's owner has another post still scheduled for ${day}, they can cancel or move it to make room.`;
@@ -128,6 +128,30 @@ describe("approval endings, one rule: per person, the reader is the spent owner"
   it("publish now", () => expect(own("now", viewer)).toBe(approval.youNow));
 });
 
+// R57 second look: the per-person number counts only the owner's workspaces the
+// limit applies to (with billing on, those not yet paid for), so the step points
+// back at the workspaces the sentence names rather than at every one they own.
+describe("approval endings, one rule: the spent owner's step names only the workspaces that count", () => {
+  const STEP = "If you have another post still scheduled for that day, in any of those workspaces, cancel or move it, then approve again.";
+  it("billing off: every workspace they own", () => {
+    const text = ownerDailyPostLimitMessage(15, "schedule", null, viewer, time, {}, "approval");
+    expect(text).toContain(`across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). ${STEP}`);
+  });
+  it("billing on: their workspaces not yet paid for", () => {
+    const text = ownerDailyPostLimitMessage(15, "schedule", null, viewer, time, { BILLING_ENABLED: "true" }, "approval");
+    expect(text).toContain(`across this workspace's owner's workspaces not yet paid for, which is the daily limit for one person (retries count toward it). ${STEP}`);
+    const now = ownerDailyPostLimitMessage(15, "now", null, viewer, time, { BILLING_ENABLED: "true" }, "approval");
+    expect(now).toContain("across their workspaces not yet paid for, and retries count toward it. If you have another post still scheduled for today, in any of those workspaces,");
+  });
+  it("never claims every workspace they own", () => {
+    for (const env of [{}, { BILLING_ENABLED: "true" }]) {
+      for (const mode of ["now", "schedule"] as const) {
+        expect(ownerDailyPostLimitMessage(15, mode, null, viewer, time, env, "approval")).not.toMatch(/in any workspace you own/);
+      }
+    }
+  });
+});
+
 describe("approval endings, one rule: per person, a named co-owner", () => {
   it("today", () => expect(own("schedule", holder, true)).toBe(approval.samToday));
   it("a future day", () => expect(own("schedule", holder)).toBe(approval.samFuture));
@@ -170,7 +194,7 @@ describe("approval endings, one rule: what holds across every case", () => {
   });
   it("a reduced per-person number keeps its note after the ending", () => {
     expect(ownerDailyPostLimitMessage(5, "schedule", "unconfirmed", viewer, time, {}, "approval")).toMatch(
-      /in any workspace you own, cancel or move it, then approve again\. Or approve it again once that day has room, .*\. The limit is 15 once you confirm your email address\.$/,
+      /in any of those workspaces, cancel or move it, then approve again\. Or approve it again once that day has room, .*\. The limit is 15 once you confirm your email address\.$/,
     );
   });
   it("the default sentences stay byte-identical, today or not", () => {

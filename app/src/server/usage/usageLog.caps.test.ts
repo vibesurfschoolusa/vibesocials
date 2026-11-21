@@ -376,7 +376,7 @@ describe("new and unconfirmed accounts have a pool of their own", () => {
         ?.error,
     ).toContain(
       // R57 fix review: the reader is the spent owner, so the step is theirs.
-      "If you have another post still scheduled for today, in any workspace you own, cancel or move it, then approve again. Or approve it again from Saturday, 7:00 PM EST (00:00 UTC), or reject it",
+      "If you have another post still scheduled for today, in any of those workspaces, cancel or move it, then approve again. Or approve it again from Saturday, 7:00 PM EST (00:00 UTC), or reject it",
     );
   });
 

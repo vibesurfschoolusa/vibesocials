@@ -262,14 +262,16 @@ type LimitWhen = "now" | "today" | "future";
  * The workspace limit counts this workspace's posts; the per-person number
  * counts one owner's posts across their workspaces, so it is the reader's step
  * only when they are that owner. Posts still scheduled may not exist, so the
- * step is a condition.
+ * step is a condition. "Those workspaces" points back at the ones the
+ * sentence names (R57 second look): with billing on a paid workspace's posts
+ * don't count, so cancelling one there frees nothing.
  */
 function freeSlotStep(count: LimitCount, day: "today" | "that day"): string | null {
   if (count.kind === "pool") return null;
   if (count.kind === "workspace") return `If another post here is still scheduled for ${day}, cancel or move it, then approve again.`;
   const holder = count.holder;
   if (holder?.isViewer) {
-    return `If you have another post still scheduled for ${day}, in any workspace you own, cancel or move it, then approve again.`;
+    return `If you have another post still scheduled for ${day}, in any of those workspaces, cancel or move it, then approve again.`;
   }
   const who = holder?.coOwned ? holder.name : "this workspace's owner";
   return `If ${who} has another post still scheduled for ${day}, they can cancel or move it to make room.`;
