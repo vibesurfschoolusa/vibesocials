@@ -318,14 +318,27 @@ describe("POST /api/auth/change-email/confirm", () => {
     expect(deliverAccountEmailMock).not.toHaveBeenCalled();
   });
 
-  it("says so when another account took the address meanwhile", async () => {
+  // R65 pages-a-2 L1: the page's only control is "Go to Settings", so the sentence names the step.
+  it("says so when another account took the address meanwhile, and how to use another address", async () => {
     userUpdateMock.mockRejectedValue(Object.assign(new Error("unique"), { code: "P2002" }));
     const response = await POST(request({ token: "raw-token" }));
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({
-      error: "Another Vibe Socials account now signs in with this address, so your email is unchanged.",
+      error:
+        "Another Vibe Socials account now signs in with this address, so your email is unchanged. To use another address, ask for the change again in Settings, Account.",
     });
     expect(deliverAccountEmailMock).not.toHaveBeenCalled();
+  });
+
+  // R65 pages-a-2 L1: only the P2002 sentence changed; the other refusals are pinned by their own tests.
+  it("an unexpected failure of the update: the 500 sentence as before", async () => {
+    userUpdateMock.mockRejectedValue(Object.assign(new Error("boom"), { code: "P2034" }));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = await POST(request({ token: "raw-token" }));
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "Something went wrong on our side. Your email is unchanged, and this link still works. Please try again in a minute.",
+    });
   });
 
   // R6-security M1: an open undo window keeps the previous address free for it.
