@@ -1787,6 +1787,11 @@ async function publishMultipart(args: {
     if (remainingMs(deadline) < LINKEDIN_POST_MIN_WINDOW_MS) return await pause(null);
     const postId = await createPost(accessToken, authorUrn, caption, connection, current.data.video, true, deadline);
     console.log("[LinkedIn] Publish successful", { postId });
+    // R60 platform-clients-2 L2: this path asks for no thumbnail, so a chosen
+    // cover is never set; the post says so, with the whole-file path's notes.
+    if (ctx.cover) {
+      return { externalPostId: postId, note: ctx.cover.imageUrl ? LINKEDIN_COVER_REFUSED_NOTE : LINKEDIN_COVER_FRAME_ONLY_NOTE };
+    }
     return { externalPostId: postId };
   } catch (error) {
     if (isRateLimitedError(error)) {
