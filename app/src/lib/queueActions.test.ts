@@ -178,6 +178,30 @@ describe("publishConfirmCopy", () => {
       );
     }
   });
+  // R59 publishing-flow L3: the dialog labels a Story as the card does.
+  it("a Story-only Instagram post: Instagram (Story)", () => {
+    expect(publishConfirmCopy("publish", ["instagram"], ["instagram"]).description).toBe(
+      "It will be sent to Instagram (Story) right away instead of waiting.",
+    );
+  });
+  it("a post with a feed platform and a Story platform: the Story one says Story", () => {
+    expect(publishConfirmCopy("publish", ["instagram", "facebook_page"], ["facebook_page"]).description).toBe(
+      "It will be sent to Instagram and Facebook Page (Story) right away instead of waiting.",
+    );
+  });
+  it("no targets but a Story choice: your connected platforms, with the Story named", () => {
+    expect(publishConfirmCopy("publish", null, ["instagram"]).description).toBe(
+      "It will be sent to your connected platforms (Instagram as a Story) right away instead of waiting.",
+    );
+  });
+  it("no Story: as before", () => {
+    expect(publishConfirmCopy("publish", ["instagram", "x"], []).description).toBe(
+      "It will be sent to Instagram and X right away instead of waiting.",
+    );
+    expect(publishConfirmCopy("publish", null, []).description).toBe(
+      "It will be sent to your connected platforms right away instead of waiting.",
+    );
+  });
   it("submit kind says the post is held for review", () => {
     expect(publishConfirmCopy("submit")).toEqual({
       title: "Submit for approval?",

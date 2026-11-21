@@ -1584,7 +1584,11 @@ export function QueueView({
     toast.success(withPairNote(outcome.message, data));
   }, [applyAnswer, load, publishKind, publishTarget, showRefusal, toast, workspaceId]);
 
-  const publishCopy = publishConfirmCopy(publishKind, publishTarget?.publish?.targetPlatforms ?? null);
+  const publishCopy = publishConfirmCopy(
+    publishKind,
+    publishTarget?.publish?.targetPlatforms ?? null,
+    publishTarget?.storyPlatforms ?? [],
+  );
   // R3-client-journey M1: on a Feed and Story card the Story goes with it.
   const publishLine = publishTarget ? pairDialogLine(publishTarget, publishKind) : null;
 

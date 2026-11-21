@@ -59,7 +59,11 @@ function draft(id: string, caption: string, targetPlatforms: Platform[] | null):
 const fetchMock = vi.fn(async (input: unknown) => {
   if (String(input).startsWith("/api/posts")) {
     return Response.json({
-      jobs: [draft("job-a", "Instagram only", ["instagram"]), draft("job-b", "No targets", null)],
+      jobs: [
+        draft("job-a", "Instagram only", ["instagram"]),
+        draft("job-b", "No targets", null),
+        { ...draft("job-c", "Instagram Story", ["instagram"]), storyPlatforms: ["instagram"] },
+      ],
       workspaceId: "ws-1",
       workspaceMemberCount: 1,
       workspaceRole: "owner",
@@ -147,6 +151,13 @@ describe("Queue: the Publish now dialog names the post's platforms", () => {
     await mount();
     await pressPublish("Instagram only");
     expect(dialogText()).toContain("It will be sent to Instagram right away instead of waiting.");
+  }, 10_000);
+
+  // R59 publishing-flow L3: the dialog says Story, as the card does.
+  it("a Story-only Instagram draft: the dialog says Instagram (Story)", async () => {
+    await mount();
+    await pressPublish("Instagram Story");
+    expect(dialogText()).toContain("It will be sent to Instagram (Story) right away instead of waiting.");
   }, 10_000);
 
   it("a draft with no targets: your connected platforms", async () => {

@@ -4,9 +4,9 @@ import { dispatchFailedText } from "./composerSubmitOutcome";
 import { isRouteAnswer } from "./postSubmitFailure";
 import { fetchOrNoAnswer, isNoAnswer } from "./requestNoAnswer";
 import type { Platform } from "@prisma/client";
-import { platformLabel } from "./platforms";
 import type { PostJobDTO } from "./postsDto";
 import { POST_GONE_TEXT } from "./postMovedOn";
+import { storyChoiceSuffix, storyPlatformLabel } from "./storyPlacement";
 import { localDateTimeToUtcIso, SCHEDULED_TIME_TOO_SOON_MESSAGE, toDateTimeLocalValue } from "./scheduling";
 import { INVALID_WORKSPACE_ID_CODE, MISSING_WORKSPACE_ID_CODE, WORKSPACE_CHANGED_CODE } from "./workspaceChanged";
 
@@ -115,11 +115,13 @@ export function queueStatusBadge(job: JobFacts): { label: string; tone: QueueBad
  * Copy for the card's confirm dialog, by what the primary action does.
  * R58 publishing-flow L3: a draft can target some platforms only, so the
  * dialog names the ones the post lists; "connected" is only for a post with
- * no targets, which goes to every connected platform.
+ * no targets, which goes to every connected platform. R59 publishing-flow L3:
+ * a Story is labelled as the card labels it (storyPlatformLabel, storyChoiceSuffix).
  */
 export function publishConfirmCopy(
   kind: QueuePrimaryAction["kind"],
   targets: readonly Platform[] | null = null,
+  storyPlatforms: readonly Platform[] = [],
 ): {
   title: string;
   description: string;
@@ -134,15 +136,15 @@ export function publishConfirmCopy(
   }
   return {
     title: "Publish this post now?",
-    description: `It will be sent to ${targetNames(targets)} right away instead of waiting.`,
+    description: `It will be sent to ${targetNames(targets, storyPlatforms)} right away instead of waiting.`,
     confirmText: "Publish now",
   };
 }
 
-/** "Instagram", "Instagram and X", "Instagram, X and LinkedIn"; no targets: every connected platform. */
-function targetNames(targets: readonly Platform[] | null): string {
-  if (!targets?.length) return "your connected platforms";
-  const labels = targets.map(platformLabel);
+/** "Instagram", "Instagram (Story) and X", "Instagram, X and LinkedIn"; no targets: every connected platform. */
+function targetNames(targets: readonly Platform[] | null, storyPlatforms: readonly Platform[]): string {
+  if (!targets?.length) return `your connected platforms${storyChoiceSuffix(storyPlatforms)}`;
+  const labels = targets.map((platform) => storyPlatformLabel(platform, storyPlatforms));
   return labels.length === 1 ? labels[0] : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
 }
 
