@@ -114,6 +114,8 @@ export function UploadFileRow({
         role="progressbar"
         aria-label={`${rowName} progress`}
         aria-valuenow={Math.round(progress)}
+        // R60 pages-a-2 L1: a failed bar is drawn full; it is read as its status, not 100%.
+        aria-valuetext={failed ? statusText(item, maybe) : undefined}
         aria-valuemin={0}
         aria-valuemax={100}
         className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
