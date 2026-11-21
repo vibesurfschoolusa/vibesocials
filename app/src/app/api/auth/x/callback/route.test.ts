@@ -338,6 +338,30 @@ describe("X OAuth callback: a link's handshake without the link's cookie", () =>
     expect(handshakeDeleteMock).toHaveBeenCalledWith({ where: { token: "req-token" } });
   });
 
+  // R56 client-journey L1: the start's clean-up now keeps a link's row a day
+  // past its expiry, so a client back after 30 minutes still finds it here.
+  it("a link handshake expired 30 minutes ago: /c without the cookie, the link's own page with it", async () => {
+    const expiresAt = new Date(Date.now() - 30 * 60 * 1000);
+    handshakeFindUniqueMock.mockResolvedValue(linkHandshake({ expiresAt }));
+    expectReopenPage(await GET(callbackRequest()));
+
+    vi.stubEnv("X_CALLBACK_URL", `${ORIGIN}/api/auth/x/callback`);
+    vi.stubEnv("TOKEN_ENCRYPTION_KEY", Buffer.alloc(32, 7).toString("base64"));
+    linkFindUniqueMock.mockResolvedValue({
+      id: "link-1",
+      workspaceId: WORKSPACE,
+      createdById: STARTER,
+      platforms: ["x"],
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      revokedAt: null,
+      workspace: { name: "Surf Co", pausedAt: null, pausedReason: null },
+    });
+    handshakeFindUniqueMock.mockResolvedValue(linkHandshake({ expiresAt }));
+    const withLink = location(await GET(withCookie()));
+    expect(withLink.pathname).toBe(`/c/${LINK_TOKEN}`);
+    expect(withLink.searchParams.get("error")).toBe("x_session_expired");
+  });
+
   it("a denied return for a link handshake: the /c reopen page", async () => {
     handshakeFindUniqueMock.mockResolvedValue(linkHandshake());
 

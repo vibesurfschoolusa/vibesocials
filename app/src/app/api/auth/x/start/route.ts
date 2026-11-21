@@ -34,6 +34,8 @@ function generateOAuthSignature(
 }
 
 const HANDSHAKE_TTL_MS = 10 * 60 * 1000;
+/** How long past its expiry a client link's handshake is kept for the callback. */
+const LINK_HANDSHAKE_KEPT_MS = 24 * 60 * 60 * 1000;
 
 export async function GET(request: Request) {
   // X's OAuth 1.0a dance has no app-controlled `state` param — request-token
@@ -123,10 +125,20 @@ export async function GET(request: Request) {
     }
 
     const now = new Date();
-    // Opportunistic cleanup of expired handshakes (~every start).
+    // Opportunistic cleanup of expired handshakes (about one start in ten).
+    // R56 client-journey L1: a client link's row is kept a day past its
+    // expiry, so a client whose X sign-in took longer than 10 minutes still
+    // gets the callback's /c reopen page rather than /settings or /login.
     if (Math.random() < 0.1) {
       void prisma.oAuthHandshake
-        .deleteMany({ where: { expiresAt: { lt: now } } })
+        .deleteMany({
+          where: {
+            OR: [
+              { connectLinkId: null, expiresAt: { lt: now } },
+              { connectLinkId: { not: null }, expiresAt: { lt: new Date(now.getTime() - LINK_HANDSHAKE_KEPT_MS) } },
+            ],
+          },
+        })
         .catch(() => {});
     }
 
