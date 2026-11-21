@@ -3711,7 +3711,7 @@ class SingleUploadAbortedError extends Error {
  */
 export function singleUploadStoppedText(stop: SingleUploadStop, pressLabel: string): string {
   return stop === "changed"
-    ? `You changed the file while the post was sending, so nothing was posted. Press ${pressLabel} again to post the new file.`
+    ? `You changed the file while the post was sending, so nothing was posted. Press ${pressLabel} again with the new file.`
     : "You removed the file while the post was sending, so nothing was posted.";
 }
 
