@@ -157,11 +157,6 @@ export function pickAfterSave(name: string, from: SavePlace, ok: boolean): strin
 }
 
 /**
- * The line under "Maps business location": the saved location by its Google
- * name, else (R26 new-customer L1: an Advanced save has no name) by what was
- * saved, else the first step.
- */
-/**
  * R56 fix review: the business name the route saved, from Google's list (its
  * answer's connection.metadata.locationTitle). A save from the Advanced field
  * sends none, and this form mounts with no key, so router.refresh() keeps its
@@ -182,6 +177,11 @@ export function savedToastText(title: string | null): string {
   return title ? `Saved. Posts will go to ${title} on Google Maps.` : "Saved. Future posts will use this Maps location.";
 }
 
+/**
+ * The line under "Maps business location": the saved location by its Google
+ * name, else (R26 new-customer L1: an Advanced save has no name) by what was
+ * saved, else the first step.
+ */
 export function savedLocationLine(title: string | null, name: string | null): string {
   if (title) return `Posting to ${title}. Press Fetch locations from Google to choose another.`;
   const saved = name?.trim();
