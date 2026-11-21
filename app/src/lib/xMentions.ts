@@ -2,7 +2,10 @@ import { hashtagsIn } from "@/lib/hashtags";
 import { textUnits } from "@/lib/truncate";
 import { countsAsLink } from "@/lib/xWeightedLength";
 
-const MENTION = /(^|[\s([{])@([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)/g;
+// R60 platform-clients L2: as twitter-text, a mention starts after any character
+// outside [A-Za-z0-9_!#$%&*@＠], so ".@kai", "—@ana" and "📸@kai" are mentions
+// on X too, and "info@surf.com" is not.
+const MENTION = /(?<![A-Za-z0-9_!#$%&*@＠])@([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)/g;
 const MENTION_TOKEN = /^@[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*[,;]*$/;
 // Characters people put between footer tags: "#surf · @kai | @mia, @ana".
 const SEPARATOR_TOKEN = /^[·•|,;/–—-]+$/;
@@ -44,18 +47,17 @@ function withoutMentions(tokens: readonly string[]): string {
  * part before its first dot, so the post never carries a link nobody wrote.
  * The test is the X count's own (countsAsLink), so the count and the cut
  * agree: a capitalised ending ("kai.Surf") is not a link (G1), and an ending
- * off X's list (".pro") is not cut.
+ * off X's list (".pro") is not cut. R60 platform-clients L3: any link inside
+ * the name counts, as the X count weighs "kai.surf" in "kai.surf_co" as one.
  */
 function bareName(name: string): string {
   if (!name.includes(".")) return name;
-  const units = textUnits(name);
-  const [unit] = units;
-  const isLink = units.length === 1 && unit.link !== null && countsAsLink(unit.link, unit.text);
-  return isLink ? name.slice(0, name.indexOf(".")) : name;
+  const hasLink = textUnits(name).some((unit) => unit.link !== null && countsAsLink(unit.link, unit.text));
+  return hasLink ? name.slice(0, name.indexOf(".")) : name;
 }
 
 function inRunningText(line: string): string {
-  return line.replace(MENTION, (_whole, before: string, name: string) => before + bareName(name));
+  return line.replace(MENTION, (_whole, name: string) => bareName(name));
 }
 
 /** One paragraph's lines: a footer paragraph loses its mentions whole, any other only their "@". */
@@ -77,8 +79,8 @@ function paragraphWithoutMentions(lines: readonly string[]): string[] {
  * (live post, 2026-11-08), because the caption footer tags many accounts.
  * Only the X text changes: other platforms keep their mentions.
  *
- * A mention is an `@` at the start of the text or after whitespace or an
- * opening bracket, followed by a handle; dotted Instagram-style handles
+ * A mention is an `@` at the start of the text or after any character but a
+ * letter, digit or one of `_!#$%&*@＠`, followed by a handle; dotted Instagram-style handles
  * (`@vibesurfschool.za`) count as one. An email address (`info@example.com`)
  * is not a mention and is kept.
  *
