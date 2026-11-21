@@ -1363,9 +1363,9 @@ describe("Create's AI buttons and connections line", () => {
   const source = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
   it("Caption from media and Improve caption are loading, not disabled, while busy", () => {
     expect(source).toContain(
-      "loading={autoCaptionLoading}\n                disabled={!captionSource.blob}",
+      "loading={autoCaptionLoading}\n                disabled={!captionSource.blob || sendLocksFields}",
     );
-    expect(source).toContain("loading={enhancingCaption}\n                disabled={!uploadCaption.trim()}");
+    expect(source).toContain("loading={enhancingCaption}\n                disabled={!uploadCaption.trim() || sendLocksFields}");
   });
   it("the connections line falls back to the hook's sentence", () => {
     expect(source).toContain("{connectionsError ?? CONNECTIONS_FAILED_TEXT}");
@@ -1792,7 +1792,7 @@ describe("Caption from media for a file reused from Media", () => {
     const start = raw.indexOf("const captionSource = captionFromMediaSource(");
     expect(start).toBeGreaterThan(-1);
     expect(raw).toMatch(/blobOverride: captionSource\.blob \?\? undefined,\s+fileOverride: captionSource\.file,/);
-    expect(raw).toContain("disabled={!captionSource.blob}");
+    expect(raw).toContain("disabled={!captionSource.blob || sendLocksFields}");
   });
 
   // R37 pages L1: the item loads whatever Create shows (the form, "Connect a

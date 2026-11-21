@@ -714,7 +714,8 @@ describe("PreparingPhotosStatus", () => {
 
   it("Create draws it outside the attached set, so it is there before the first pick", () => {
     const form = readFileSync(new URL("../create-post-form.tsx", import.meta.url), "utf8");
-    expect(form).toMatch(/\{photoSet\.length > 0 && \(\s*<AttachedPhotos[^]*?\/>\s*\)\}\s*<PreparingPhotosStatus photos=\{photoSet\} \/>/);
+    // R64 fix review L1: the set sits in the send lock; the status stays outside it.
+    expect(form).toMatch(/\{photoSet\.length > 0 && \(\s*<SendLock locked=\{sendLocksFields\}>\s*<AttachedPhotos[^]*?\/>\s*<\/SendLock>\s*\)\}\s*<PreparingPhotosStatus photos=\{photoSet\} \/>/);
     const own = readFileSync(new URL("./attached-photos.tsx", import.meta.url), "utf8");
     expect(own).not.toMatch(/\{preparing && \(/);
   });
