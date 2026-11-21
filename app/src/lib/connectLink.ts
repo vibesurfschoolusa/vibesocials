@@ -4,7 +4,9 @@ import {
   causeMessage,
   googlePermissionMessage,
   isGooglePermissionCode,
+  pressAgain,
   reconnectFailedText,
+  signInButton,
   signInLeft,
   type ShownControl,
 } from "@/lib/oauthResult";
@@ -172,6 +174,21 @@ export const VISITOR_CAUSES: ReadonlySet<string> = new Set([
   "youtube_no_channel",
 ]);
 
+/**
+ * R55 platform-clients L1: a link flow never sends a page hint, so on /c the
+ * callback's linkedin_setup (any value) means organizationAcls gave no answer
+ * (a 403, 429, 5xx or timeout); an empty list is linkedin_no_admin_pages. A
+ * retry may work, so the row's button comes first and the owner route last.
+ */
+function linkedinPagesUnreadMessage(shown: ShownControl): string {
+  const button = signInButton(shown);
+  const parts = ["LinkedIn didn't tell us which pages this account manages."];
+  if (button) parts.push(`${pressAgain("Press", button)} in a few minutes.`);
+  if (shown !== "connect") parts.push("Your existing connection is unchanged.");
+  if (button) parts.push("If it keeps happening, tell the person who sent you this link.");
+  return parts.join(" ");
+}
+
 export type ConnectLinkResult = { variant: "success" | "danger"; message: string };
 
 /**
@@ -191,7 +208,7 @@ export function describeConnectLinkResult(
   const success = query.get("success");
 
   if (!error && query.get("linkedin_setup")) {
-    return { variant: "danger", message: causeMessage(LINKEDIN_NO_PAGE_CODE, shown ? shown("linkedin") : "connect", "press")! };
+    return { variant: "danger", message: linkedinPagesUnreadMessage(shown ? shown("linkedin") : "connect") };
   }
 
   if (error) {

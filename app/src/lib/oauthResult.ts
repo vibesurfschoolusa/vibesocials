@@ -135,7 +135,7 @@ function capitalized(sentence: string): string {
 }
 
 /** The step that tries the sign-in once more: "Click Connect again", "Click Reconnect". */
-function pressAgain(press: string, button: "Connect" | "Reconnect"): string {
+export function pressAgain(press: string, button: "Connect" | "Reconnect"): string {
   return button === "Connect" ? `${press} Connect again` : `${press} ${button}`;
 }
 

@@ -218,29 +218,39 @@ describe("the sentence the visitor reads after a flow", () => {
       expect(message, error).toMatch(pattern);
       expect(message, error).not.toMatch(/Settings/);
     }
-    expect(describe_({ linkedin_setup: "true" })?.message).toMatch(/Super admin/);
   });
 
-  // R53 AN4: the callback answers linkedin_setup=not_found only after a page
-  // hint from Settings' setup dialog. A link flow never sends one
-  // (server/connectLink/authorize.test.ts), so on /c not_found comes only from a
-  // hand-edited address and reads as any other setup return.
-  it("linkedin_setup=not_found reads as a first setup on /c", () => {
-    for (const shown of ["connect", "reconnect"] as const) {
-      const read = (value: string) =>
-        describeConnectLinkResult(new URLSearchParams({ linkedin_setup: value }), { shown: () => shown });
-      expect(read("not_found"), shown).toEqual(read("true"));
+  // R55 platform-clients L1: a link flow never sends a page hint, so on /c
+  // every linkedin_setup value means LinkedIn didn't answer (an empty list is
+  // linkedin_no_admin_pages), never "not a Super admin".
+  it("linkedin_setup on /c is a try-later sentence naming the row's button, the owner route last", () => {
+    const read = (value: string, shown: ShownControl) =>
+      describeConnectLinkResult(new URLSearchParams({ linkedin_setup: value }), { shown: () => shown });
+    for (const value of ["true", "not_found", "lookup_failed"]) {
+      expect(read(value, "connect"), value).toEqual({
+        variant: "danger",
+        message:
+          "LinkedIn didn't tell us which pages this account manages. Press Connect again in a few minutes. If it keeps happening, tell the person who sent you this link.",
+      });
+      expect(read(value, "reconnect"), value).toEqual({
+        variant: "danger",
+        message:
+          "LinkedIn didn't tell us which pages this account manages. Press Reconnect in a few minutes. Your existing connection is unchanged. If it keeps happening, tell the person who sent you this link.",
+      });
+      expect(read(value, "connected")?.message, value).toBe(
+        "LinkedIn didn't tell us which pages this account manages. Your existing connection is unchanged.",
+      );
     }
+    expect(describe_({ linkedin_setup: "true" })?.message).toMatch(/^LinkedIn didn't tell us .* Press Connect again in a few minutes\./);
   });
 
-  // R54 platform-clients L1: the callback's lookup_failed, like not_found,
-  // follows only a hint from Settings' dialog, so on /c it is a first setup too.
-  it("linkedin_setup=lookup_failed reads as a first setup on /c", () => {
-    for (const shown of ["connect", "reconnect"] as const) {
-      const read = (value: string) =>
-        describeConnectLinkResult(new URLSearchParams({ linkedin_setup: value }), { shown: () => shown });
-      expect(read("lookup_failed"), shown).toEqual(read("true"));
-    }
+  it("error=linkedin_no_admin_pages keeps the Super admin sentence on /c", () => {
+    expect(describe_({ error: "linkedin_no_admin_pages" })?.message).toBe(
+      "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page, then press Connect again.",
+    );
+    expect(describe_({ error: "linkedin_no_admin_pages", linkedin_setup: "true" })?.message).toBe(
+      "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page, then press Connect again.",
+    );
   });
 
   // R29 OO1 lead follow-up: /c shows Reconnect on a flagged or ending-soon row
@@ -261,7 +271,7 @@ describe("the sentence the visitor reads after a flow", () => {
       const connected = withShown({ error }, "connected");
       expect(connected, error).not.toMatch(/\b(Re)?[Cc]onnect again\b|[Pp]ress (Re)?Connect/);
     }
-    expect(withShown({ linkedin_setup: "true" }, "reconnect")).toMatch(/press Reconnect\./);
+    expect(withShown({ linkedin_setup: "true" }, "reconnect")).toMatch(/\. Press Reconnect in a few minutes\./);
     expect(describe_({ error: "pinterest_no_boards" })?.message).toBe(
       "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one), then press Connect again.",
     );
