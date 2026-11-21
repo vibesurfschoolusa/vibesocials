@@ -365,3 +365,27 @@ describe("exampleBoxStatus counts the way the save does", () => {
     }
   });
 });
+
+// R59 pages-a-4 L1: only a tag with a letter or a mark is a hashtag to strip,
+// so "Voted #1 surf school" keeps its "#1".
+describe("hashtags in examples: numbers are not tags", () => {
+  it("keeps \"#1\" whole", () => {
+    expect(cleanBrandVoiceExamples("We're #1 for surf lessons")).toEqual({ ok: true, value: "We're #1 for surf lessons" });
+  });
+
+  it("strips \"#surf #florida\" as now", () => {
+    expect(cleanBrandVoiceExamples("Waves are up #surf #florida")).toEqual({ ok: true, value: "Waves are up" });
+  });
+
+  it("strips a Devanagari tag whole", () => {
+    expect(cleanBrandVoiceExamples("लहरें #हिन्दी आज")).toEqual({ ok: true, value: "लहरें आज" });
+  });
+
+  it("strips a tag that starts with digits", () => {
+    expect(cleanBrandVoiceExamples("Season #2024surf starts")).toEqual({ ok: true, value: "Season starts" });
+  });
+
+  it("keeps \"#_\"", () => {
+    expect(cleanBrandVoiceExamples("Score #_ today")).toEqual({ ok: true, value: "Score #_ today" });
+  });
+});

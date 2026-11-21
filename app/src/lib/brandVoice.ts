@@ -30,6 +30,9 @@ const TRAILING_LINE_BREAKS = /[\r\n\u2028\u2029]+$/;
 const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g;
 // A hashtag token: # followed by letters, marks, digits or underscores, in any script.
 const HASHTAG = /#[\p{L}\p{M}\p{N}_]+/gu;
+// R59 pages-a-4 L1: only a token with a letter or a mark is a tag to strip, so
+// "Voted #1 surf school" keeps its "#1" (and "#2024" and "#_" stay too).
+const TAG_WORD = /[\p{L}\p{M}]/u;
 
 // Caps by code point so a cut never leaves half of an emoji behind.
 function capLength(text: string, max: number): string {
@@ -48,7 +51,10 @@ function cleanLine(line: string): string {
  * end captions in the bare words "surf florida".
  */
 function stripExampleLine(line: string): string {
-  return cleanLine(line).replace(HASHTAG, "").replace(/ {2,}/g, " ").trim();
+  return cleanLine(line)
+    .replace(HASHTAG, (token) => (TAG_WORD.test(token) ? "" : token))
+    .replace(/ {2,}/g, " ")
+    .trim();
 }
 
 function cleanExampleLine(line: string): string {
