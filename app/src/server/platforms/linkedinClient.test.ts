@@ -4644,7 +4644,8 @@ describe("linkedinClient.publishText - a post without a photo", () => {
     // Review fix: a link at the cut goes whole, never "https:..." (the little
     // escaping only touches reserved characters, none of them in this link).
     const url = "https://vibesurfschool.com/lessons/fort-lauderdale/private-surf-lessons";
-    expect(await sent("w".repeat(2990) + " " + url)).toBe("w".repeat(2990) + " ...");
+    // R63 platform-clients L1: the cut ends at the word before it.
+    expect(await sent("w".repeat(2990) + " " + url)).toBe("w".repeat(2990) + "...");
   });
 
   it.each([

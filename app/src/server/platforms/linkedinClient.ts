@@ -7,7 +7,7 @@ import { mediaKindOf, photoSetFormatsReason, PLATFORM_CAPTION_LIMITS, unsupporte
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { asStorageReadFailure } from "@/lib/publishFailureText";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders, toLinkedInLittleText } from "@/lib/linkedinApi";
-import { truncateKeepingLinks } from "@/lib/truncate";
+import { truncateKeepingLinksAtWord } from "@/lib/truncate";
 import type { PostCover } from "@/lib/videoCover";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 import {
@@ -835,7 +835,8 @@ function postBodyForLog(postBody: LinkedInPostBody): LinkedInPostBody {
  */
 export function computeLinkedInCommentary(caption: string): string {
   const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS.linkedin;
-  return charLimit === null ? caption : truncateKeepingLinks(caption, charLimit, ellipsis);
+  // R63 platform-clients L1: at the last whole word, so a #tag or @mention is never sent in part.
+  return charLimit === null ? caption : truncateKeepingLinksAtWord(caption, charLimit, ellipsis);
 }
 
 async function createPost(

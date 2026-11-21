@@ -236,6 +236,33 @@ export function truncateUnits(
   weigh: (unit: TextUnit) => number,
   ellipsis = "",
 ): string {
+  return cutUnits(text, max, weigh, ellipsis, false);
+}
+
+/**
+ * `truncateUnits` cut at the last whole word that fits (R63 platform-clients
+ * L1, LinkedIn), so a #tag or @mention is never sent in part; a link is still
+ * one piece and goes with its word. As `truncateGraphemesAtWord`, a text with
+ * no space in the 100 graphemes before the cut keeps the plain cut.
+ */
+export function truncateUnitsAtWord(
+  text: string,
+  max: number,
+  weigh: (unit: TextUnit) => number,
+  ellipsis = "",
+): string {
+  return cutUnits(text, max, weigh, ellipsis, true);
+}
+
+const isSpaceUnit = (unit: TextUnit) => unit.link === null && WHITESPACE.test(unit.text);
+
+function cutUnits(
+  text: string,
+  max: number,
+  weigh: (unit: TextUnit) => number,
+  ellipsis: string,
+  atWord: boolean,
+): string {
   const measure = (value: string) => textUnits(value).reduce((sum, unit) => sum + weigh(unit), 0);
   const units = textUnits(text);
   if (units.reduce((sum, unit) => sum + weigh(unit), 0) <= max) return text;
@@ -248,6 +275,23 @@ export function truncateUnits(
     if (used + weight > budget) break;
     kept.push(unit);
     used += weight;
+  }
+  if (atWord && kept.length < units.length) {
+    let end = kept.length;
+    // The next piece is a space: the cut already ends a word.
+    if (!isSpaceUnit(units[end])) {
+      let back = 0;
+      for (let i = end - 1; i >= 0 && back < WORD_LOOKBACK; i -= 1) {
+        if (isSpaceUnit(units[i])) {
+          end = i;
+          break;
+        }
+        back += graphemeCount(units[i].text);
+      }
+    }
+    while (end > 0 && isSpaceUnit(units[end - 1])) end -= 1;
+    // Only spaces before the cut: nothing whole to keep, so the plain cut.
+    if (end > 0) kept.length = end;
   }
   // The ellipsis can join the piece before it (a link that grows), so the
   // joined result is measured again and shortened until it fits.
@@ -265,4 +309,9 @@ export function truncateUnits(
  */
 export function truncateKeepingLinks(text: string, maxGraphemes: number, ellipsis = ""): string {
   return truncateUnits(text, maxGraphemes, (unit) => (unit.link ? graphemeCount(unit.text) : 1), ellipsis);
+}
+
+/** `truncateKeepingLinks` cut at the last whole word (R63 platform-clients L1, LinkedIn). */
+export function truncateKeepingLinksAtWord(text: string, maxGraphemes: number, ellipsis = ""): string {
+  return truncateUnitsAtWord(text, maxGraphemes, (unit) => (unit.link ? graphemeCount(unit.text) : 1), ellipsis);
 }

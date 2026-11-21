@@ -3,7 +3,7 @@ import type { Platform } from "@prisma/client";
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
 import { fitPinterestDescription, pinterestCountHint, pinterestDescriptionLength } from "@/lib/pinterestApi";
 import { type CaptionUnit, PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
-import { truncateGraphemes, truncateGraphemesAtWord, truncateKeepingLinks } from "@/lib/truncate";
+import { truncateGraphemes, truncateGraphemesAtWord, truncateKeepingLinksAtWord } from "@/lib/truncate";
 import { removeXMentions } from "@/lib/xMentions";
 import { truncateXWeighted, xWeightedLength } from "@/lib/xWeightedLength";
 import { fitYouTubeDescription, youtubeCountHint, youtubeDescriptionLength } from "@/lib/youtubeDescription";
@@ -169,17 +169,19 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
   }
   // Counted in the unit the map names and cut with the client's own function:
   // X by its weight, as computeTweetText does (fix round 1, M5); LinkedIn keeps
-  // a link whole at the cut, as computeLinkedInCommentary does; Pinterest by
+  // a link and a word whole at the cut, as computeLinkedInCommentary does; Pinterest by
   // code points with fitPinterestDescription (R53 platform-clients L1); every
   // other platform by graphemes.
   const charCount = countIn(unit, fullCaption);
   let rendered = fullCaption;
   if (charLimit !== null) {
     if (input.platform === "x") rendered = truncateXWeighted(fullCaption, charLimit, ellipsis);
-    else if (input.platform === "linkedin") rendered = truncateKeepingLinks(fullCaption, charLimit, ellipsis);
+    else if (input.platform === "linkedin") rendered = truncateKeepingLinksAtWord(fullCaption, charLimit, ellipsis);
     else if (input.platform === "pinterest") rendered = fitPinterestDescription(fullCaption);
-    // R62 platform-clients L1: at the last whole word, as computeInstagramCaption cuts.
-    else if (input.platform === "instagram") rendered = truncateGraphemesAtWord(fullCaption, charLimit, { ellipsis });
+    // R62 platform-clients L1 (R63 for TikTok): at the last whole word, as
+    // computeInstagramCaption and computeTikTokCaption cut.
+    else if (input.platform === "instagram" || input.platform === "tiktok")
+      rendered = truncateGraphemesAtWord(fullCaption, charLimit, { ellipsis });
     else rendered = truncateGraphemes(fullCaption, charLimit, { ellipsis });
   }
   const countHint = input.platform === "pinterest" ? pinterestCountHint(fullCaption) : null;
