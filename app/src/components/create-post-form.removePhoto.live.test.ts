@@ -340,7 +340,7 @@ describe("Create: a photo removed while it uploads", () => {
     expect(pageSays(UNEXPECTED)).toBe(false);
     expect(
       pageSays(
-        "You changed the file while the post was sending, so nothing was posted. Press Publish post again to post the new file.",
+        "You changed the file while the post was sending, so nothing was posted. Press Publish post again with the new file.",
       ),
     ).toBe(true);
   }, 10_000);
@@ -356,5 +356,24 @@ describe("Create: a photo removed while it uploads", () => {
     expect(posted).toHaveLength(0);
     expect(pageSays(UNEXPECTED)).toBe(false);
     expect(pageSays("You removed the file while the post was sending, so nothing was posted.")).toBe(true);
+  }, 10_000);
+
+  // R62 second look: the sentence reads right in Draft mode, with the button's own label.
+  it("Draft mode: the file is changed while the draft saves: Press Save draft again with the new file", async () => {
+    stall.add("draftold");
+    await typeCaption("Surf lesson today");
+    await run(() => props(buttonTexted("Save draft")).onClick());
+    await pick(new File(["v"], "draftold.mp4", { type: "video/mp4" }));
+    await run(() => props(byId("create-post-form")).onSubmit({ preventDefault() {} }));
+    await pick(new File(["n"], "draftnew.mp4", { type: "video/mp4" }));
+
+    expect(uploadsOf("draftold")[0]!.signal?.aborted).toBe(true);
+    expect(posted).toHaveLength(0);
+    expect(pageSays(UNEXPECTED)).toBe(false);
+    expect(
+      pageSays(
+        "You changed the file while the post was sending, so nothing was posted. Press Save draft again with the new file.",
+      ),
+    ).toBe(true);
   }, 10_000);
 });
