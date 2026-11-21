@@ -267,8 +267,25 @@ describe("mergeExampleCaptions (Use my recent posts)", () => {
     expect(result).toEqual({ kind: "added", added: 1, text: "  Typed one  \n\nTyped two\nNew" });
   });
 
-  it("changes nothing when the box already has five", () => {
-    expect(mergeExampleCaptions("1\n2\n3\n4\n5", ["New"])).toEqual({ kind: "full" });
+  it("changes nothing when the box already has five, and says how many it has", () => {
+    expect(mergeExampleCaptions("1\n2\n3\n4\n5", ["New"])).toEqual({ kind: "full", examples: 5 });
+  });
+
+  // R64 pages-a-4 L1: the toast is worded from the counts.
+  it("seven lines: full, with the count", () => {
+    expect(mergeExampleCaptions("1\n2\n3\n4\n5\n6\n7", ["New"])).toEqual({ kind: "full", examples: 7 });
+  });
+
+  it("no published posts: says so, not that nothing new was found", () => {
+    expect(mergeExampleCaptions("Waves are up", [])).toEqual({ kind: "no-posts" });
+  });
+
+  it("room left: adds as before", () => {
+    expect(mergeExampleCaptions("1\n2\n3", ["New", "Other", "Third"])).toEqual({
+      kind: "added",
+      added: 2,
+      text: "1\n2\n3\nNew\nOther",
+    });
   });
 
   it("says when nothing new was found", () => {

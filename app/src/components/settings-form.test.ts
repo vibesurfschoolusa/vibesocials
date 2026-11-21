@@ -11,7 +11,7 @@ import { renderedWorkspaceRefusal, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/
 
 import { COMPANY_WEBSITE_MAX_LENGTH, DEFAULT_HASHTAGS_MAX_LENGTH } from "@/app/api/settings/route";
 
-import { readRecentCaptions, SettingsForm } from "./settings-form";
+import { readRecentCaptions, recentPostsRefusalText, SettingsForm } from "./settings-form";
 
 const SETTINGS: UserSettings = {
   companyWebsite: "www.example.com",
@@ -378,6 +378,33 @@ describe("readRecentCaptions", () => {
       ok: false,
       text: "Could not load your recent posts. Try again.",
     });
+  });
+});
+
+// R64 pages-a-4 L1: "Use my recent posts" words its refusal from the counts.
+describe("recentPostsRefusalText", () => {
+  it("7 lines: the box's own count, and that only the first 5 are kept", () => {
+    expect(recentPostsRefusalText({ kind: "full", examples: 7 })).toBe(
+      "The box already has 7 examples and only the first 5 are kept. Delete lines to make room.",
+    );
+  });
+
+  it("5 lines: as before", () => {
+    expect(recentPostsRefusalText({ kind: "full", examples: 5 })).toBe(
+      "You already have five examples. Remove one to add another.",
+    );
+  });
+
+  it("no published posts: says the workspace has none yet", () => {
+    expect(recentPostsRefusalText({ kind: "no-posts" })).toBe(
+      "This workspace has no published posts yet. Type an example of how you write instead.",
+    );
+  });
+
+  it("posts with nothing new: as before", () => {
+    expect(recentPostsRefusalText({ kind: "nothing-new" })).toBe(
+      "Your recent published posts have no captions that are not already in the box. Type an example instead.",
+    );
   });
 });
 
