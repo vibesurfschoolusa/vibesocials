@@ -7,6 +7,7 @@ import { getWorkspaceContext } from "@/lib/workspace";
 import { CreatePostForm } from "@/components/create-post-form";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { googleButtonFromWorkspace } from "@/lib/googlePostOptions";
+import { textPostsEnabled } from "@/lib/platformLimits";
 
 export const metadata = { title: "Create post | Vibe Socials" };
 
@@ -43,7 +44,9 @@ export default async function NewPostPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Create post</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Upload a new image or video, then post to your connected platforms.
+            {textPostsEnabled()
+              ? "Add a photo or video, or just write, then post to the platforms you choose."
+              : "Add a photo or video, then post to the platforms you choose."}
           </p>
         </div>
         <Link href="/posts/bulk" className={buttonVariants({ variant: "outline", size: "md" })}>
