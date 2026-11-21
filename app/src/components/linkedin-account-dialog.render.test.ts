@@ -45,7 +45,7 @@ describe("LinkedIn Reconnect dialog", () => {
     expect(html).toContain("Reconnect LinkedIn");
     expect(html).toContain("Open LinkedIn sign-out");
     expect(html).toContain(
-      "Come back here and click Continue. LinkedIn asks you to sign in: sign in with a LinkedIn account that manages Surf Co page.",
+      "Come back here and click Continue. LinkedIn asks you to sign in: sign in with a LinkedIn account that is a Super admin of Surf Co page.",
     );
     expect(html).toContain("Already signed in to LinkedIn with an account that manages Surf Co page? Just click Continue.");
     expect(html).not.toContain("sign in to Surf Co page");
@@ -66,7 +66,7 @@ describe("LinkedIn Reconnect dialog", () => {
   });
 
   it("without a name: the connected LinkedIn page", () => {
-    expect(render()).toContain("sign in with a LinkedIn account that manages the connected LinkedIn page.");
+    expect(render()).toContain("sign in with a LinkedIn account that is a Super admin of the connected LinkedIn page.");
   });
 
   it("Connect and Switch account keep their own words", () => {
@@ -74,7 +74,7 @@ describe("LinkedIn Reconnect dialog", () => {
       createElement(LinkedInAccountDialog, { workspaceId: "ws-1", open: true, onOpenChange: () => {}, mode: "connect" }),
     );
     expect(html).toContain("Connect LinkedIn");
-    expect(html).toContain("use the account that manages your company page.");
+    expect(html).toContain("use an account that is a Super admin of your company page.");
   });
 });
 

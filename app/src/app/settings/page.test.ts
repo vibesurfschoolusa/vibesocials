@@ -579,7 +579,7 @@ describe("SettingsPage — a reconnect with a different account", () => {
     );
 
     expect(html).toContain(
-      "LinkedIn connected a different page than Surf Co page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Surf Co page. To use the other page instead, use Switch account.",
+      "LinkedIn connected a different page than Surf Co page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that is a Super admin of Surf Co page. To use the other page instead, use Switch account.",
     );
     expect(html).not.toContain("evil.example");
   });

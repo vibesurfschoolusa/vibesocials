@@ -63,7 +63,7 @@ describe("different account on reconnect", () => {
   // R8-client-journey L2: the stored name is the company page, which nobody signs in to.
   it("Settings, LinkedIn: names the sign-out step, then an account that manages the page", () => {
     expect(reconnectDifferentAccountMessage("linkedin", "Surf Co page")).toBe(
-      "LinkedIn connected a different page than Surf Co page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Surf Co page. To use the other page instead, use Switch account.",
+      "LinkedIn connected a different page than Surf Co page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that is a Super admin of Surf Co page. To use the other page instead, use Switch account.",
     );
   });
 
@@ -116,7 +116,7 @@ describe("different account on reconnect", () => {
 
   it("the client's page, LinkedIn: also names the sign-out step for the one who manages the page", () => {
     expect(linkDifferentAccountMessage("linkedin", "Surf Co page")).toBe(
-      "This connection posts to Surf Co page. If you manage that page, sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+      "This connection posts to Surf Co page. If you manage that page, sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that is a Super admin of Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
     );
   });
 
@@ -145,9 +145,9 @@ describe("different account on reconnect", () => {
     }
   });
 
-  it("the Reconnect steps' sign-in line names an account that manages the page", () => {
+  it("the Reconnect steps' sign-in line names an account that is a Super admin of the page", () => {
     expect(linkedInReconnectSignInStep("Surf Co page")).toBe(
-      "Come back here and click Continue. LinkedIn asks you to sign in: sign in with a LinkedIn account that manages Surf Co page.",
+      "Come back here and click Continue. LinkedIn asks you to sign in: sign in with a LinkedIn account that is a Super admin of Surf Co page.",
     );
   });
 
@@ -314,5 +314,25 @@ describe("a refused choice from a list", () => {
 describe("no address reading for the same-end row", () => {
   it("has no sameEndAddress", () => {
     expect("sameEndAddress" in differentAccount).toBe(false);
+  });
+});
+
+// R57 pages-a-3 L1: LinkedIn's callback accepts only pages the account is a
+// Super admin of, so its sign-in step says so; other platforms keep theirs.
+describe("signInTo: who has to sign in", () => {
+  it("LinkedIn: an account that is a Super admin of the page", async () => {
+    const { signInTo } = await import("./differentAccount");
+    expect(signInTo("linkedin", "Surf Co page")).toBe("sign in with a LinkedIn account that is a Super admin of Surf Co page");
+  });
+
+  it("Facebook, Instagram and a platform with no page keep their words", async () => {
+    const { signInTo } = await import("./differentAccount");
+    expect(signInTo("facebook_page", "Surf Co")).toBe(
+      "sign in with a Facebook account that manages Surf Co and tick it when Facebook lists the Pages",
+    );
+    expect(signInTo("instagram", "@surfco")).toBe(
+      "sign in with a Facebook account that manages the Page linked to @surfco and tick that Page when Facebook lists the Pages (and its Instagram account, if listed)",
+    );
+    expect(signInTo("x", "@surfco")).toBe("sign in to @surfco");
   });
 });

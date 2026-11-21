@@ -964,7 +964,7 @@ describe("POST: a refused choice, by whether the connected one was on the list",
     expect(response.status).toBe(409);
     expect((await response.json()).error).toBe(
       // R8-client-journey L2: a LinkedIn page is managed, not signed in to.
-      "LinkedIn connected a different page than Old Page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Old Page. To use the other page instead, use Switch account.",
+      "LinkedIn connected a different page than Old Page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that is a Super admin of Old Page. To use the other page instead, use Switch account.",
     );
   });
 
@@ -1022,7 +1022,7 @@ describe("POST: a refused choice, by whether the connected one was on the list",
     const response = await POST(postReq({ candidateId: "222" }), ctx());
 
     expect((await response.json()).error).toBe(
-      "LinkedIn connected a different page than Old Page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Old Page. To use the other page instead, use Switch account.",
+      "LinkedIn connected a different page than Old Page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that is a Super admin of Old Page. To use the other page instead, use Switch account.",
     );
   });
 

@@ -21,7 +21,7 @@ describe("linkedinAccount", () => {
       expect(copy.steps[0]).toMatch(/sign out/i);
       // The sign-out URL bounces a signed-out visitor to a sign-in page that signs out again.
       expect(copy.steps[0]).toMatch(/already signed out: close it/);
-      expect(copy.steps[1]).toMatch(/manages your company page/);
+      expect(copy.steps[1]).toMatch(/use an account that is a Super admin of your company page./);
     }
   });
 });

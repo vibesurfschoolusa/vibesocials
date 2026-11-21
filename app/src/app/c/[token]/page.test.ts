@@ -547,7 +547,7 @@ describe("LinkedIn on the client's page", () => {
     expect(row).toContain('href="https://www.linkedin.com/m/logout/"');
     expect(row).toContain('target="_blank"');
     // R8-client-journey L2: the name is the company page, which nobody signs in to.
-    expect(row).toContain("sign in with a LinkedIn account that manages Surf Co page");
+    expect(row).toContain("sign in with a LinkedIn account that is a Super admin of Surf Co page");
     expect(row).not.toContain("sign in to Surf Co page");
     // The sign-in is the last step, inside the steps, posting as before.
     const steps = row.slice(row.indexOf("<details"));
@@ -562,7 +562,7 @@ describe("LinkedIn on the client's page", () => {
   it("without the page's name: the connected LinkedIn page, never the profile id", async () => {
     h.listConnections.mockResolvedValue([linkedin({ username: null, accountIdentifier: "aB3xYz9q" })]);
     const html = await render({ error: "linkedin_different_account" });
-    expect(html).toContain("sign in with a LinkedIn account that manages the connected LinkedIn page");
+    expect(html).toContain("sign in with a LinkedIn account that is a Super admin of the connected LinkedIn page");
     expect(html).not.toContain("aB3xYz9q");
   });
 
@@ -579,7 +579,7 @@ describe("LinkedIn on the client's page", () => {
   it("a different LinkedIn account: the sentence names the sign-out step", async () => {
     h.listConnections.mockResolvedValue([linkedin({ needsReconnect: true, reconnectSoon: false })]);
     expect(await render({ error: "linkedin_different_account" })).toContain(
-      "This connection posts to Surf Co page. If you manage that page, sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+      "This connection posts to Surf Co page. If you manage that page, sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that is a Super admin of Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
     );
   });
 
