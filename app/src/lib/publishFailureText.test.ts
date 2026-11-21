@@ -519,7 +519,7 @@ describe("sentenceForRecipient", () => {
     const noOrganization =
       "No LinkedIn company pages configured. This app only posts to company pages, not personal profiles.\n\nTo fix this:\n2. Go to Settings → Connections\n";
     expect(sentenceForRecipient(noOrganization, "linkedin", "member")).toBe(
-      "The connected LinkedIn account manages no company page. The workspace owner can reconnect with an account that manages one; then retry.",
+      "The connected LinkedIn account is not a Super admin of any company page. The workspace owner can reconnect with an account that is a Super admin of one; then retry.",
     );
   });
 

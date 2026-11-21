@@ -118,11 +118,35 @@ describe("repeated buttons name their item", () => {
     expect(unnamedRepeatedButtons(bad)).toEqual([expect.objectContaining({ text: "View post" })]);
   });
 
+  // R57 fix review: text inside a wrapper, a ternary of two fixed words, and
+  // native <button> and <a> are just as static.
+  it("finds static text inside a wrapper element", () => {
+    const bad = `items.map((item) => (\n  <Button onClick={() => reuse(item)}>\n    <Repeat className="h-3.5 w-3.5" aria-hidden />\n    <span className={cn("truncate", item.x && "a")}>Use in new post</span>\n  </Button>\n))`;
+    expect(unnamedRepeatedButtons(bad)).toEqual([expect.objectContaining({ text: "Use in new post" })]);
+  });
+
+  it("finds a ternary of two string literals", () => {
+    const bad = `items.map((item) => <Button onClick={() => save(item)}>{busy ? "Saving…" : "Save"}</Button>)`;
+    expect(unnamedRepeatedButtons(bad)).toEqual([expect.objectContaining({ text: "Saving…" })]);
+  });
+
+  it("finds a native button", () => {
+    const bad = `items.map((item) => (\n  <button type="button" onClick={() => remove(item)}>\n    Remove{" "}\n  </button>\n))`;
+    expect(unnamedRepeatedButtons(bad)).toEqual([expect.objectContaining({ text: "Remove" })]);
+  });
+
+  it("finds a native link", () => {
+    const bad = `rows.map((row) => <a key={row.id} href={row.url}>Open</a>)`;
+    expect(unnamedRepeatedButtons(bad)).toEqual([expect.objectContaining({ text: "Open" })]);
+  });
+
   it("passes a named one, a dynamic one, and one outside any .map(", () => {
     const named = `items.map((item) => <Button onClick={() => go(item)} aria-label={\`Delete \${item.name}\`}>Delete</Button>)`;
     const dynamic = `items.map((item) => <Button onClick={() => go(item)}>{item.name}</Button>)`;
+    const mixed = `items.map((item) => <button onClick={() => go(item)}>{busy ? "Saving" : item.name}</button>)`;
+    const wrapped = `items.map((item) => <a href={item.url}><span>{item.name}</span></a>)`;
     const outside = `<Button onClick={() => save()}>Save</Button>`;
-    for (const source of [named, dynamic, outside]) expect(unnamedRepeatedButtons(source)).toEqual([]);
+    for (const source of [named, dynamic, mixed, wrapped, outside]) expect(unnamedRepeatedButtons(source)).toEqual([]);
   });
 
   it("every repeated button and link under src/app and src/components has a name", () => {

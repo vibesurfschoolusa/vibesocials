@@ -47,7 +47,7 @@ describe("LinkedIn Reconnect dialog", () => {
     expect(html).toContain(
       "Come back here and click Continue. LinkedIn asks you to sign in: sign in with a LinkedIn account that is a Super admin of Surf Co page.",
     );
-    expect(html).toContain("Already signed in to LinkedIn with an account that manages Surf Co page? Just click Continue.");
+    expect(html).toContain("Already signed in to LinkedIn with an account that is a Super admin of Surf Co page? Just click Continue.");
     expect(html).not.toContain("sign in to Surf Co page");
     expect(html).toContain(">Continue<");
     expect(html).not.toContain("post numbers");
