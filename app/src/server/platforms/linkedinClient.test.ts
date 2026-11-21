@@ -10,7 +10,7 @@ import {
   LINKEDIN_ASSET_MAX_WAIT_MS,
   LINKEDIN_ASSET_POLL_INTERVAL_MS,
   LINKEDIN_COVER_FRAME_ONLY_NOTE,
-  LINKEDIN_COVER_REFUSED_NOTE,
+  LINKEDIN_COVER_LARGE_VIDEO_NOTE,
   LINKEDIN_INLINE_VIDEO_POLL_MS,
   LINKEDIN_INLINE_VIDEO_WAIT_MS,
   LINKEDIN_MAX_UPLOAD_RESTARTS,
@@ -4094,8 +4094,12 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       stubLinkedIn();
       expect(await run(bigCtx(store, imageCover))).toEqual({
         externalPostId: "urn:li:share:77",
-        note: LINKEDIN_COVER_REFUSED_NOTE,
+        note: LINKEDIN_COVER_LARGE_VIDEO_NOTE,
       });
+      // Its own sentence: the cover was never sent, so it was not refused either.
+      expect(LINKEDIN_COVER_LARGE_VIDEO_NOTE).toBe(
+        "Cover not set: a video over 50 MB is sent to LinkedIn in parts, without the chosen cover, so the video uses its own.",
+      );
     });
 
     it("a frame without an image: the post carries the frame-only note", async () => {
