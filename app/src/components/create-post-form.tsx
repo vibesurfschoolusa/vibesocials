@@ -2026,19 +2026,26 @@ function CreatePostFormInner({
   // 07c: one photo of a set, uploaded the way ensureUploaded uploads a single
   // file (same key, route and storage-full sentence) but without its
   // one-file state, which the single path keeps for itself.
-  async function uploadPhoto(file: File, onProgress: (percent: number) => void): Promise<UploadedBlobInfo> {
+  async function uploadPhoto(
+    file: File,
+    onProgress: (percent: number) => void,
+    signal: AbortSignal,
+  ): Promise<UploadedBlobInfo> {
     let settled = false;
     try {
       const newBlob = await upload(generateBlobKey(file), file, {
         access: "public",
         handleUploadUrl: uploadRouteUrl(workspaceId),
         clientPayload: uploadSizePayload(file),
+        abortSignal: signal,
         onUploadProgress: (event) => {
           if (!settled) onProgress(event.percentage);
         },
       });
       return { url: newBlob.url, filename: file.name, mimeType: file.type, sizeBytes: file.size };
     } catch (err: unknown) {
+      // Removed while it uploaded: no sentence to find for it.
+      if (signal.aborted) throw err;
       throw await explainUploadFailure(err, workspaceId);
     } finally {
       settled = true;
@@ -2105,6 +2112,8 @@ function CreatePostFormInner({
   }, [photoSet, uploadFile, reuseItem, singleAltText]);
 
   const isPhotoAttached = (key: string) => photoSetRef.current.some((photo) => photo.key === key);
+  // R62 publishing-flow-2 L1: the photo uploading now, so Remove stops its bytes.
+  const photoUploadAbortsRef = useRef(new Map<string, AbortController>());
   const isCoverPhoto = (key: string) => photoSetRef.current[0]?.key === key;
 
   // Queue photos for upload behind any already uploading. With `wantCaption`
@@ -2121,6 +2130,7 @@ function CreatePostFormInner({
     photoQueueRef.current = photoQueueRef.current.then(() =>
       uploadPhotosInOrder(entries, {
         upload: uploadPhoto,
+        aborts: photoUploadAbortsRef.current,
         isStale,
         isAttached: isPhotoAttached,
         isCover: isCoverPhoto,
@@ -2273,6 +2283,7 @@ function CreatePostFormInner({
   }
 
   function removeAttachedPhoto(key: string) {
+    photoUploadAbortsRef.current.get(key)?.abort();
     const current = photoSetRef.current;
     if (current.length === 1 && current[0].key === key) {
       // The caption the AI wrote for it goes too, as "Remove all" does

@@ -286,7 +286,12 @@ export async function preparePhotos(
 
 export interface UploadPhotosDeps {
   /** Uploads one file, rejecting with the sentence to show (lib/uploadFailure.ts). */
-  upload(file: File, onProgress: (percent: number) => void): Promise<UploadedBlob>;
+  upload(file: File, onProgress: (percent: number) => void, signal: AbortSignal): Promise<UploadedBlob>;
+  /**
+   * R62 publishing-flow-2 L1: the caller's map of the photo uploading now, by
+   * key, so removing it aborts its bytes and the next photo starts.
+   */
+  aborts?: Map<string, AbortController>;
   /** True once a newer pick replaced this set, or the page was left: stop. */
   isStale(): boolean;
   /** False once the user removed that photo: skip it, or drop its result. */
@@ -320,10 +325,16 @@ export async function uploadPhotosInOrder(
     if (deps.isStale()) return;
     if (!deps.isAttached(key)) continue;
     deps.onUpdate(key, { status: "uploading", progress: 0, error: null });
+    const abort = new AbortController();
+    deps.aborts?.set(key, abort);
     try {
-      const blob = await deps.upload(file, (percent) => {
-        if (!deps.isStale() && deps.isAttached(key)) deps.onUpdate(key, { progress: percent });
-      });
+      const blob = await deps.upload(
+        file,
+        (percent) => {
+          if (!deps.isStale() && deps.isAttached(key)) deps.onUpdate(key, { progress: percent });
+        },
+        abort.signal,
+      );
       if (deps.isStale()) return;
       if (!deps.isAttached(key)) continue;
       deps.onUpdate(key, { status: "uploaded", blob, error: null });
@@ -333,9 +344,12 @@ export async function uploadPhotosInOrder(
       }
     } catch (error: unknown) {
       if (deps.isStale()) return;
-      if (!deps.isAttached(key)) continue;
+      // Removed (and so aborted): nothing to say, and the next photo starts.
+      if (abort.signal.aborted || !deps.isAttached(key)) continue;
       const message = error instanceof Error && error.message ? error.message : UPLOAD_FAILED_FALLBACK;
       deps.onUpdate(key, { status: "failed", error: message, blob: null });
+    } finally {
+      if (deps.aborts?.get(key) === abort) deps.aborts.delete(key);
     }
   }
   deps.onDone?.(captionStarted);
