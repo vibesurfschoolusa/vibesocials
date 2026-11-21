@@ -95,7 +95,7 @@ describe("POST /api/posts/[postJobId]/cancel-series", () => {
     const res = await POST(req, ctx("job-2"));
 
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 2, notCancelled: 0 });
+    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 2, notCancelled: 0, changed: 0 });
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { id: "job-2", workspaceId: "ws-1" },
       select: { status: true, scheduledFor: true, seriesId: true },
@@ -136,13 +136,53 @@ describe("POST /api/posts/[postJobId]/cancel-series", () => {
   });
 
   it("a post the scheduler claimed meanwhile is left alone and counted as not cancelled", async () => {
-    findManyMock.mockResolvedValue([row("job-2"), row("job-3")]);
+    findManyMock
+      .mockResolvedValueOnce([row("job-2"), row("job-3")])
+      .mockResolvedValueOnce([{ id: "job-3", status: "in_progress" }]);
     updateManyMock.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
 
     const res = await POST(req, ctx("job-2"));
 
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 1 });
+    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 1, changed: 0 });
+  });
+
+  // R59 publishing-flow L4: the writes are pinned to the approval fields, so a
+  // post a member's edit sent back for approval meanwhile is missed while it is
+  // still cancellable. It is counted apart, so the toast doesn't say it started publishing.
+  it("some cancelled, some changed, some moved on: notCancelled counts only those that moved on", async () => {
+    findManyMock
+      .mockResolvedValueOnce([row("job-2"), row("job-3"), row("job-4"), row("job-5")])
+      .mockResolvedValueOnce([
+        { id: "job-3", status: "draft" },
+        { id: "job-4", status: "in_progress" },
+      ]);
+    updateManyMock
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 });
+
+    const res = await POST(req, ctx("job-2"));
+
+    expect(res.status).toBe(200);
+    // job-5 is gone: it moved on too.
+    await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 2, changed: 1 });
+    expect(findManyMock).toHaveBeenLastCalledWith({
+      where: { id: { in: ["job-3", "job-4", "job-5"] }, workspaceId: "ws-1" },
+      select: { id: true, status: true },
+    });
+  });
+
+  it("every post missed while this one is still cancellable: 409, changed in the meantime", async () => {
+    findFirstMock.mockResolvedValueOnce(row("job-2")).mockResolvedValueOnce({ status: "draft" });
+    findManyMock.mockResolvedValue([row("job-2"), row("job-3")]);
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req, ctx("job-2"));
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error: "This post changed in the meantime. Try again.", code: "NOT_CANCELABLE" });
   });
 
   // Review round 3: like the single cancel, through finishPostJob, so the

@@ -33,7 +33,8 @@ const MUTATE_RATE_LIMIT = { route: "posts/mutate", limit: 60, windowMs: 5 * 60 *
  * that route's ATOMIC conditional update (id + workspace + a cancelable
  * status, pinned to the approval columns it was read with), so a post the
  * scheduler claims at the same instant is not touched. The updates go in one
- * batch; one that matches nothing is counted in `notCancelled`.
+ * batch; one that matches nothing is counted in `notCancelled` when it moved
+ * on, and in `changed` when it is still a draft or scheduled.
  */
 export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
@@ -105,10 +106,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // One transaction, each post with its own condition. finishPostJob also
   // stamps each cancelled post's media as used now, as the single cancel does,
   // so the retention sweep counts its 30 days from here.
-  const cancelled = await prisma.$transaction(async (tx) => {
-    let count = 0;
+  const missed = await prisma.$transaction(async (tx) => {
+    const ids: string[] = [];
     for (const post of posts) {
-      count += await finishPostJob(tx, {
+      const count = await finishPostJob(tx, {
         where: {
           id: post.id,
           workspaceId,
@@ -118,17 +119,38 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         },
         data: cancelData(post),
       });
+      if (count === 0) ids.push(post.id);
     }
-    return count;
+    return ids;
   });
+  const cancelled = posts.length - missed.length;
   if (cancelled === 0) {
-    // Lost every race (the scanner claimed them): read this post again, for the sentence only.
+    // Lost every race: read this post again, for the sentence only.
     const now = await prisma.postJob.findFirst({ where: { id: postJobId, workspaceId }, select: { status: true } });
+    // R59 publishing-flow L4, Cancel's rule: the writes are pinned to the
+    // approval fields, so they also miss when a member's edit sent the post
+    // back for approval meanwhile, and it is still cancellable.
+    if (now && MUTABLE_POST_JOB_STATUSES.includes(now.status)) {
+      return NextResponse.json(
+        { error: "This post changed in the meantime. Try again.", code: "NOT_CANCELABLE" },
+        { status: 409 },
+      );
+    }
     return notCancelable(now?.status);
   }
 
+  // R59 publishing-flow L4: a missed post still draft or scheduled changed in
+  // the meantime (`changed`); only one that moved on is `notCancelled`, so a
+  // tab reading only that still says those had started publishing.
+  const stillCancellable =
+    missed.length === 0
+      ? 0
+      : (
+          await prisma.postJob.findMany({ where: { id: { in: missed }, workspaceId }, select: { id: true, status: true } })
+        ).filter((post) => MUTABLE_POST_JOB_STATUSES.includes(post.status)).length;
+
   return NextResponse.json(
-    { ok: true, cancelled, notCancelled: posts.length - cancelled },
+    { ok: true, cancelled, notCancelled: missed.length - stillCancellable, changed: stillCancellable },
     { status: 200 },
   );
 }

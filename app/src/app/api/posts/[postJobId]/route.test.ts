@@ -374,12 +374,24 @@ describe("PATCH /api/posts/[postJobId]", () => {
     );
   });
 
-  it("a race on a post still a draft keeps the plain sentence", async () => {
-    findFirstMock.mockResolvedValue({ status: "draft" });
+  // R59 publishing-flow L4: the write is pinned to the status, so an owner
+  // scheduling the draft meanwhile makes it miss while the post can still be edited.
+  it("a race on a post still a draft or scheduled: it changed in the meantime, try again", async () => {
+    for (const status of ["draft", "scheduled"]) {
+      findFirstMock.mockResolvedValue({ status });
+      updateManyMock.mockResolvedValue({ count: 0 });
+      const res = await PATCH(req({ baseCaption: "x" }), ctx("job-1"));
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: "This post changed in the meantime. Try again.", code: "NOT_EDITABLE" });
+    }
+  });
+
+  it("a race on a post deleted by the re-read: it says so, as before", async () => {
+    findFirstMock.mockResolvedValueOnce({ status: "draft" }).mockResolvedValue(null);
     updateManyMock.mockResolvedValue({ count: 0 });
     const res = await PATCH(req({ baseCaption: "x" }), ctx("job-1"));
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toBe("This post can no longer be edited.");
+    expect(await res.json()).toEqual({ error: "This post no longer exists.", code: "NOT_EDITABLE" });
   });
 
   it("a draft is still edited as before", async () => {

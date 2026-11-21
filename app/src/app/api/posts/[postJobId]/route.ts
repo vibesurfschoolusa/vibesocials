@@ -391,6 +391,14 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   if (!result.ok) {
     // Lost the race (the scanner claimed it): read the status again, for the sentence only.
     const now = await prisma.postJob.findFirst({ where: { id: postJobId, workspaceId }, select: { status: true } });
+    // R59 publishing-flow L4: the write is pinned to the status, so it also
+    // misses when an owner scheduled the draft meanwhile; it can still be edited.
+    if (now && MUTABLE_POST_JOB_STATUSES.includes(now.status)) {
+      return NextResponse.json(
+        { error: "This post changed in the meantime. Try again.", code: "NOT_EDITABLE" },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { error: postMovedOnText(now?.status, "edited") ?? "This post can no longer be edited.", code: "NOT_EDITABLE" },
       { status: 409 },
