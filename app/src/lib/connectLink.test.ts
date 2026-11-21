@@ -233,6 +233,16 @@ describe("the sentence the visitor reads after a flow", () => {
     }
   });
 
+  // R54 platform-clients L1: the callback's lookup_failed, like not_found,
+  // follows only a hint from Settings' dialog, so on /c it is a first setup too.
+  it("linkedin_setup=lookup_failed reads as a first setup on /c", () => {
+    for (const shown of ["connect", "reconnect"] as const) {
+      const read = (value: string) =>
+        describeConnectLinkResult(new URLSearchParams({ linkedin_setup: value }), { shown: () => shown });
+      expect(read("lookup_failed"), shown).toEqual(read("true"));
+    }
+  });
+
   // R29 OO1 lead follow-up: /c shows Reconnect on a flagged or ending-soon row
   // (app/c/[token]/page.tsx: form(connection ? "Reconnect" : "Connect")), so
   // a cause names the button the row shows, with the page's "press".
