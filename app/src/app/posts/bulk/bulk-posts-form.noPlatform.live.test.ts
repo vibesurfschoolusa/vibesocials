@@ -140,6 +140,16 @@ describe("Add many: no platform ticked", () => {
     expect(buttonNamed("Save all as drafts").attributes["aria-describedby"]).toBe(line!.attributes.id);
   }, 10_000);
 
+  it("untick, then tick one again: the line and both pointers are gone", async () => {
+    await mountWithPhoto();
+    await run(() => props(platformBox()).onChange({ target: { checked: false } }));
+    expect(lineNode()).toBeTruthy();
+    await run(() => props(platformBox()).onChange({ target: { checked: true } }));
+    expect(lineNode()).toBeUndefined();
+    expect(buttonNamed("Schedule all").attributes["aria-describedby"]).toBeUndefined();
+    expect(buttonNamed("Save all as drafts").attributes["aria-describedby"]).toBeUndefined();
+  }, 10_000);
+
   it("one ticked: no line, no pointer", async () => {
     await mountWithPhoto();
     expect(lineNode()).toBeUndefined();
