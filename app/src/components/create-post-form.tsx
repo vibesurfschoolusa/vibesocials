@@ -2731,6 +2731,13 @@ function CreatePostFormInner({
     }
   }
 
+  // R64 pages-b L1: performSubmit builds the request from the form as it was at
+  // the press, after the upload, and the success clears it, so an edit made while
+  // a Schedule or Save draft sends would be dropped unseen. Those fields lock
+  // until the send ends; the file stays changeable, which stops the send (R63).
+  // Publish now's dialog covers the form while it sends.
+  const sendLocksFields = uploadLoading && !confirmPublishOpen;
+
   // R33 pages L2: the press's own checks on the form as it is now (pressRefusalLine).
   const sendCheck: ComposerSendCheck = {
     fileBlock:
@@ -3311,6 +3318,7 @@ function CreatePostFormInner({
             id="post-caption"
             value={uploadCaption}
             onChange={(event) => setUploadCaption(event.target.value)}
+            disabled={sendLocksFields}
             rows={3}
             placeholder="What do you want to say with this post?"
             aria-invalid={captionOver || undefined}
@@ -3327,6 +3335,7 @@ function CreatePostFormInner({
           overrides={platformOverrides}
           onChange={setPlatformOverrides}
           footer={footerSettings}
+          disabled={sendLocksFields}
           workspaceId={workspaceId}
           formGeneration={captionBox.formGeneration}
           aiRequestStarted={captionBox.aiRequestStarted}
@@ -3404,7 +3413,7 @@ function CreatePostFormInner({
                       type="checkbox"
                       className="h-3.5 w-3.5 rounded border-input accent-[var(--primary)]"
                       checked={checked}
-                      disabled={disabled}
+                      disabled={disabled || sendLocksFields}
                       aria-describedby={disabled ? reasonId : undefined}
                       onChange={(event) => {
                         setDeselected((prev) => {
@@ -3500,6 +3509,7 @@ function CreatePostFormInner({
                   type="datetime-local"
                   value={scheduledForLocal}
                   min={minScheduleLocal || undefined}
+                  disabled={sendLocksFields}
                   onChange={(event) => {
                     setScheduledForLocal(event.target.value);
                     setSlotPresses(0);
@@ -3510,7 +3520,7 @@ function CreatePostFormInner({
                   "refused" in slotData ? (
                     <Alert variant="warning">{slotData.refused}</Alert>
                   ) : slotData.slots.length > 0 ? (
-                    <Button type="button" variant="outline" size="sm" onClick={fillNextFreeSlot}>
+                    <Button type="button" variant="outline" size="sm" onClick={fillNextFreeSlot} disabled={sendLocksFields}>
                       Next free slot
                     </Button>
                   ) : (
