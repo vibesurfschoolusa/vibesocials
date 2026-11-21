@@ -20,7 +20,8 @@ import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { answerLostText } from "@/lib/answerLost";
 import { dispatchFailedText } from "@/lib/composerSubmitOutcome";
 import { postActionRefusal, sendActionRequest } from "@/lib/queueActions";
-import { memberReconnectMessage, NOT_SENT_MESSAGE, sentenceForRecipient } from "@/lib/publishFailureText";
+import { connectionStepSentence, stepVerb } from "@/lib/connectionSteps";
+import { NOT_SENT_MESSAGE, sentenceForRecipient } from "@/lib/publishFailureText";
 import { sendAgainTooOld, tooOldToSendText } from "@/lib/sendAgain";
 import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
 import { retryAllPlan, type ConnectionStep, type LeftOut } from "@/lib/retryAll";
@@ -86,13 +87,7 @@ export function reconnectRefusalToast(
   step: ConnectionStep = "reconnect",
 ): string {
   if (serverError) return serverError;
-  const which = dead.length > 0 ? platformList(dead) : label;
-  if (step === "connect") {
-    return role === "member" ? `The workspace owner can connect ${which}; then retry.` : `Connect ${which} in Settings, then retry.`;
-  }
-  return role === "member"
-    ? `The workspace owner can reconnect ${which}; then retry.`
-    : `Reconnect ${which} in Settings before retrying.`;
+  return connectionStepSentence({ form: "retry", platforms: dead, step, unnamed: label }, role);
 }
 
 /**
@@ -121,16 +116,12 @@ export function ReconnectStep({
     "inline-flex items-center gap-1 rounded-[var(--radius)] border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs text-foreground";
   if (role === "member") {
     return (
-      <span className={className}>
-        {step === "connect"
-          ? `The workspace owner can connect ${platformLabel(platform)}; then retry.`
-          : memberReconnectMessage(platform)}
-      </span>
+      <span className={className}>{connectionStepSentence({ form: "row", platform, step }, "member")}</span>
     );
   }
   return (
     <span className={className}>
-      {step === "connect" ? "Connect" : "Reconnect"} {platformLabel(platform)} in{" "}
+      {stepVerb(step)} {platformLabel(platform)} in{" "}
       <Link
         href={SETTINGS_CONNECTIONS_HREF}
         className="font-medium text-primary underline underline-offset-2 hover:no-underline"

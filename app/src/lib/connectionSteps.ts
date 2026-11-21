@@ -45,8 +45,11 @@ export function stepsForRows(
 export type StepSentence =
   /** A failed row's stored sentence. */
   | { form: "row"; platform: Platform; step: ConnectionStep }
-  /** Retry refused for these platforms (#293). */
-  | { form: "retry"; platforms: readonly Platform[]; step: ConnectionStep }
+  /**
+   * Retry refused for these platforms (#293). `unnamed` is what to say when the
+   * answer listed none (the Activity card's "the failed platforms").
+   */
+  | { form: "retry"; platforms: readonly Platform[]; step: ConnectionStep; unnamed?: string }
   /** Retry all left this platform out. */
   | { form: "leftOut"; platform: Platform; step: ConnectionStep }
   /** The outcome email's row for a stalled platform. */
@@ -88,6 +91,11 @@ function namedSteps(steps: readonly PlatformStep[]): string[] {
   ];
 }
 
+/** The step as its sentence starts, for one whose "Settings" is a link (the Activity card's owner step). */
+export function stepVerb(step: ConnectionStep): string {
+  return capitalized(step);
+}
+
 export function connectionStepSentence(sentence: StepSentence, role: StepReader): string {
   const member = role === "member";
   switch (sentence.form) {
@@ -99,7 +107,8 @@ export function connectionStepSentence(sentence: StepSentence, role: StepReader)
         : `Reconnect ${label} in Settings, then retry.`;
     }
     case "retry": {
-      const names = joinWithAnd(sentence.platforms.map(platformLabel));
+      const names =
+        sentence.platforms.length > 0 ? joinWithAnd(sentence.platforms.map(platformLabel)) : (sentence.unnamed ?? "");
       if (member) return `The workspace owner can ${sentence.step} ${names}; then retry.`;
       return sentence.step === "connect"
         ? `Connect ${names} in Settings, then retry.`
