@@ -1990,6 +1990,19 @@ describe("instagramClient.publishVideo — several photos (carousel)", () => {
     expect(publish.searchParams.get("access_token")).toBe("page-access-token");
   }
 
+  // R61 platform-clients-2 L1: a carousel's caption is cut before it is fitted too.
+  it("a carousel: mentions past the 2,200 cut are not named as sent", async () => {
+    const { store } = makeStore();
+    const graph = stubGraph();
+    const first20 = Array.from({ length: 20 }, (_, i) => `@u${i + 1}`).join(" ");
+    const caption = `${first20} ${"a".repeat(2300)} @surfer21 @surfer22`;
+
+    const result = await instagramClient.publishVideo(ctx(2, { store, caption }));
+
+    expect(graph.parentRequests()[0].searchParams.get("caption")).not.toContain("surfer");
+    expect(result.note ?? "").not.toMatch(/surfer|plain text/);
+  });
+
   it.each([2, 10])(
     "%i photos ready at once: children in order, one CAROUSEL container, one status check and one media_publish, all in the first step",
     async (count) => {
@@ -2956,6 +2969,67 @@ describe("instagramClient.publishVideo — hashtag and mention limits", () => {
       externalPostId: "media-1",
       note: "Instagram allows 20 @mentions in a post, so these went out as plain text without the @: u21.",
     });
+  });
+
+  // R61 platform-clients-2 L1: the caption is cut to 2,200 first and fitted
+  // after, so a note names only tags and mentions in the text actually sent.
+  function stubSingle() {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("fields=permalink")) return Promise.resolve(new Response("{}", { status: 404 }));
+      if (url.includes("/media_publish")) return Promise.resolve(json({ id: "media-1" }));
+      if (url.includes("/ig-account-1/media")) return Promise.resolve(json({ id: "container-1" }));
+      if (url.includes("fields=status_code")) return Promise.resolve(json({ status_code: "FINISHED" }));
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const single = (caption: string) =>
+    instagramClient.publishVideo({
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      get mediaItems() { return [this.mediaItem]; },
+      mediaItem: { mimeType: "image/jpeg", storageLocation: "https://blob.example.com/p.jpg", metadata: null } as unknown as MediaItem,
+      caption,
+    });
+
+  it("mentions past the 2,200 cut are not named as sent", async () => {
+    const fetchMock = stubSingle();
+    const first20 = Array.from({ length: 20 }, (_, i) => `@u${i + 1}`).join(" ");
+    const past = Array.from({ length: 6 }, (_, i) => `@surfer${i + 21}`).join(" ");
+    const caption = `${first20} ${"a".repeat(2300)} ${past}`;
+
+    const result = await single(caption);
+
+    const sent = new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("caption") ?? "";
+    expect(sent).not.toContain("surfer");
+    expect(result).toEqual({ externalPostId: "media-1" });
+  });
+
+  it("a 31st tag inside the cut is still dropped and named; tags past the cut are not named", async () => {
+    const fetchMock = stubSingle();
+    const inside = Array.from({ length: 31 }, (_, i) => `#t${i + 1}`).join(" ");
+    const caption = `${inside} ${"a".repeat(2300)} #t32 #t33`;
+
+    const result = await single(caption);
+
+    const sent = new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("caption") ?? "";
+    expect(sent).not.toMatch(/#t31/);
+    expect(result).toEqual({
+      externalPostId: "media-1",
+      note: "Instagram allows 30 hashtags in a post, so these were left out: #t31.",
+    });
+  });
+
+  it("a short caption: sent as written, with no note", async () => {
+    const fetchMock = stubSingle();
+
+    const result = await single("Dawn patrol #surf @kai");
+
+    expect(new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("caption")).toBe("Dawn patrol #surf @kai");
+    expect(result).toEqual({ externalPostId: "media-1" });
   });
 
   it("says which hashtags were left out past the 30th", async () => {
