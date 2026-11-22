@@ -28,6 +28,14 @@ const NAME_WORDS = new Set(["name", "title", "email", "handle", "vanity", "usern
 const NAME_JOINED = /screenname|username|displayname|accountidentifier|userid|vanity|email|handle|pageid|accountid|orgid|channelid/;
 const PLATFORM_ID_NAMES = new Set(["sub", "open_id"]);
 /**
+ * R67 lead follow-up: a token, a secret, an authorization code or a PKCE
+ * verifier in a name (oauthToken, oauth_token, accessToken, refreshToken,
+ * codeVerifier). console.* skips the logger's key redaction, so these are
+ * kept out of every log call. `code` alone is the OAuth code.
+ */
+const TOKEN_WORDS = new Set(["token", "secret", "verifier"]);
+const TOKEN_NAMES = new Set(["code"]);
+/**
  * A whole account object logged as is (`orgs: organizations`,
  * `organizations[0]`) prints its name and id; reading one of its fields
  * (`organizations.length`) is judged by that field's own name.
@@ -64,6 +72,8 @@ export function saysWhoItIs(identifier: string): boolean {
   if (isBooleanName(identifier)) return false;
   return (
     PLATFORM_ID_NAMES.has(identifier) ||
+    TOKEN_NAMES.has(identifier) ||
+    words(identifier).some((word) => TOKEN_WORDS.has(word)) ||
     words(identifier).some((word) => NAME_WORDS.has(word)) ||
     NAME_JOINED.test(identifier.toLowerCase())
   );
@@ -98,10 +108,11 @@ export function loggedNames(source: string, fileName = "planted.ts"): string[] {
       return;
     }
     if (ts.isIdentifier(node)) {
-      if (saysWhoItIs(node.text)) record(node, node.text);
       const parent = node.parent;
+      // `tokenResponse.status` logs the status: a value whose field is read
+      // is judged by that field's name, not its own.
       const readsAField = ts.isPropertyAccessExpression(parent) && parent.expression === node;
-      if (ACCOUNT_OBJECTS.has(node.text) && !readsAField) record(node, node.text);
+      if (!readsAField && (saysWhoItIs(node.text) || ACCOUNT_OBJECTS.has(node.text))) record(node, node.text);
     }
     ts.forEachChild(node, inArgument);
   };
@@ -145,6 +156,8 @@ function relative(file: string): string {
  * file and name, so the same name elsewhere is still caught.
  */
 const OWN_USER_ID = "our own user id (Vibe Socials' User.id), never the platform's";
+const ERROR_CODE = "an Error's own code (error.code), never an OAuth code";
+const TOKEN_TYPE = "the kind of token TikTok sent (Bearer), never the token";
 const ERROR_NAME = "an Error's class name (error.name), never a person's";
 const SAFE: Record<string, string> = {
   "app/api/auth/facebook_page/callback/route.ts userId": OWN_USER_ID,
@@ -156,6 +169,10 @@ const SAFE: Record<string, string> = {
   "server/connections/gbpLocationTitle.ts name": ERROR_NAME,
   "server/connections/pendingConnection.ts name": ERROR_NAME,
   "server/connections/saveConnection.ts name": ERROR_NAME,
+  "server/connections/gbpLocationTitle.ts code": ERROR_CODE,
+  "server/connections/saveConnection.ts code": ERROR_CODE,
+  "app/api/auth/tiktok/callback/route.ts tokenType": TOKEN_TYPE,
+  "app/api/auth/tiktok/callback/route.ts token_type": TOKEN_TYPE,
 };
 
 describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
@@ -202,6 +219,14 @@ describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
       ['console.log("[LinkedIn] Lookup failed", { orgId: id });', "orgId"],
       ['logger.info("Me", { username });', "username"],
       ['logger.info("Me", { handle });', "handle"],
+      ['console.log("[X OAuth 1.0a] Request token received", oauthToken);', "oauthToken"],
+      ['console.log("[Google] token", tokenResponse.access_token);', "access_token"],
+      ['console.log("[X] token", { oauth_token: params.get("oauth_token") });', "oauth_token"],
+      ['console.log("[X] token", { token });', "token"],
+      ['console.log("[Google] tokens", { accessToken, refreshToken });', "refreshToken"],
+      ['console.log("[X] secret", { secret });', "secret"],
+      ['console.log("[Google] code", { code });', "code"],
+      ['console.log("[X] verifier", { verifier, codeVerifier });', "codeVerifier"],
     ])("%s", (source, name) => {
       expect(loggedNames(source).map((hit) => hit.replace(/^\d+: /, ""))).toContain(name);
     });

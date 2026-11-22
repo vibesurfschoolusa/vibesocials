@@ -132,3 +132,24 @@ describe("X start: the per-person limit", () => {
     expect(fetchWithinLimitMock).not.toHaveBeenCalled();
   });
 });
+
+// R67 lead follow-up: console.log skips the logger's token redaction, so the
+// request token is never logged, only that one was received.
+describe("X start: the log holds no token", () => {
+  it("a start logs neither the request token nor its secret", async () => {
+    const logged: unknown[][] = [];
+    for (const method of ["log", "info", "warn", "error", "debug"] as const) {
+      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+        logged.push(args);
+      });
+    }
+
+    const response = await GET(new NextRequest(`${ORIGIN}/api/auth/x/start?workspaceId=ws-1`));
+
+    expect(response.headers.get("location")).toContain("oauth_token=req-token");
+    const text = JSON.stringify(logged);
+    expect(text).toContain("Request token received");
+    expect(text).not.toContain("req-token");
+    expect(text).not.toContain("req-secret");
+  });
+});
