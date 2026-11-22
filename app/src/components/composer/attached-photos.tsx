@@ -598,7 +598,7 @@ function PhotoTile({
             onClick={onRetry}
             disabled={disabled}
             aria-label={`Retry photo ${position}`}
-            className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+            className="text-xs font-medium text-primary underline-offset-4 enabled:hover:underline disabled:cursor-not-allowed disabled:opacity-50"
           >
             Retry
           </button>

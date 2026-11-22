@@ -3455,9 +3455,13 @@ function CreatePostFormInner({
                       "inline-flex items-center gap-2 rounded-[var(--radius)] border px-3 py-1.5 text-sm transition-colors",
                       disabled
                         ? "cursor-not-allowed border-input text-muted-foreground opacity-60"
-                        : checked
-                          ? "cursor-pointer border-primary/40 bg-primary/10 text-foreground"
-                          : "cursor-pointer border-input text-muted-foreground hover:text-foreground",
+                        : sendLocksFields
+                          ? checked
+                            ? "cursor-not-allowed border-primary/40 bg-primary/10 text-foreground opacity-50"
+                            : "cursor-not-allowed border-input text-muted-foreground opacity-50"
+                          : checked
+                            ? "cursor-pointer border-primary/40 bg-primary/10 text-foreground"
+                            : "cursor-pointer border-input text-muted-foreground hover:text-foreground",
                     )}
                   >
                     <input
@@ -3540,10 +3544,10 @@ function CreatePostFormInner({
                   disabled={sendLocksFields}
                   onClick={() => setPublishMode(mode)}
                   className={cn(
-                    "rounded-[calc(var(--radius)-0.125rem)] px-3 py-1.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                    "rounded-[calc(var(--radius)-0.125rem)] px-3 py-1.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
                     publishMode === mode
                       ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground",
+                      : "text-muted-foreground enabled:hover:text-foreground",
                   )}
                 >
                   {label}

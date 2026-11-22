@@ -38,7 +38,7 @@ export function StoryPlacementSettings({
   fileCount,
   videoDurationSec,
   onChange,
-  disabled = false,
+  disabled: locked = false,
 }: StoryPlacementSettingsProps) {
   const label = platformLabel(platform);
   const note = placementNote(platform, choice, fileCount);
@@ -47,7 +47,7 @@ export function StoryPlacementSettings({
 
   return (
     <Card className="space-y-2 p-4">
-      <fieldset disabled={disabled} className="space-y-2">
+      <fieldset disabled={locked} className="space-y-2">
         <legend className="text-sm font-semibold text-foreground">{label}: post to</legend>
         <div className="flex flex-wrap gap-2">
           {OPTIONS.map(({ value, label: optionLabel }) => {
@@ -60,9 +60,13 @@ export function StoryPlacementSettings({
                   "inline-flex items-center gap-2 rounded-[var(--radius)] border px-3 py-1.5 text-sm transition-colors",
                   disabled
                     ? "cursor-not-allowed border-input text-muted-foreground opacity-60"
-                    : checked
-                      ? "cursor-pointer border-primary/40 bg-primary/10 text-foreground"
-                      : "cursor-pointer border-input text-muted-foreground hover:text-foreground",
+                    : locked
+                      ? checked
+                        ? "cursor-not-allowed border-primary/40 bg-primary/10 text-foreground opacity-50"
+                        : "cursor-not-allowed border-input text-muted-foreground opacity-50"
+                      : checked
+                        ? "cursor-pointer border-primary/40 bg-primary/10 text-foreground"
+                        : "cursor-pointer border-input text-muted-foreground hover:text-foreground",
                 )}
               >
                 <input
