@@ -5,8 +5,11 @@
 
 import { truncateGraphemes, truncateGraphemesWithinCodePoints } from "@/lib/truncate";
 
-/** The longest first grapheme an initial keeps whole: a family emoji is 5. */
-const INITIAL_MAX_CODE_POINTS = 8;
+/**
+ * The longest first grapheme an initial keeps whole: the longest standard
+ * (RGI) emoji, the kiss with two skin tones, is 10 code points (R67).
+ */
+const INITIAL_MAX_CODE_POINTS = 10;
 
 export function workspaceInitials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean).slice(0, 2);
@@ -16,7 +19,7 @@ export function workspaceInitials(name: string): string {
 
 /**
  * R66: the word's first grapheme, so an emoji, a flag or a skin tone stays
- * whole. A grapheme over 8 code points (a letter with many marks) gives its
+ * whole. A grapheme over 10 code points (a letter with many marks) gives its
  * first code point instead: the base letter, never half a surrogate pair.
  */
 function initialOf(word: string): string {

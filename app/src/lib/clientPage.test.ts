@@ -28,6 +28,15 @@ describe("workspaceInitials", () => {
   it("a letter with 5,000 combining marks gives just its letter", () => {
     expect(workspaceInitials(`a${"́".repeat(5_000)}lpha Beta`)).toBe("AB");
   });
+  // R67 client-journey L1: the longest standard emoji is 10 code points.
+  it("keeps the kiss with two skin tones whole (10 code points)", () => {
+    const kiss = "\u{1F469}\u{1F3FB}‍❤️‍\u{1F48B}‍\u{1F468}\u{1F3FE}";
+    expect(Array.from(kiss)).toHaveLength(10);
+    expect(workspaceInitials(`${kiss} Love Films`)).toBe(`${kiss}L`);
+  });
+  it("a letter with 50 marks still falls back to its letter", () => {
+    expect(workspaceInitials(`e${"́".repeat(50)}ra Films`)).toBe("EF");
+  });
 });
 
 describe("formatFileSize", () => {
