@@ -343,7 +343,7 @@ export function storageFullMessage(limitBytes: number): string {
 }
 
 /** Settings, when the usage could not be read. */
-export const USAGE_UNAVAILABLE_MESSAGE = "Usage is not available right now.";
+export const USAGE_UNAVAILABLE_MESSAGE = "We couldn't read this workspace's usage just now. Reload the page to try again.";
 
 /** The "when it starts again" line under each limit in Settings. `resetsAt` is null for storage. */
 export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): string {

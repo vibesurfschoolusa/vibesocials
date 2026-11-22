@@ -37,6 +37,7 @@ import {
   utcMonthRange,
   xMonthlyLimitMessage,
   youtubeWorkspaceDailyLimitMessage,
+  USAGE_UNAVAILABLE_MESSAGE,
 } from "./usageLimits";
 
 const MB = 1024 * 1024;
@@ -753,5 +754,17 @@ describe("stored limit sentences name a fixed reset", () => {
     expect(youtubeWorkspaceDailyLimitMessage(10, new Date("2026-07-01T12:00:00Z"))).toContain(
       "Retry this upload after 07:00 UTC on July 2, 2026.",
     );
+  });
+});
+
+// R67 pages-a-3 L5: Settings' Usage line when the usage can't be read names the next step.
+describe("USAGE_UNAVAILABLE_MESSAGE", () => {
+  it("the failure shows what happened and what to do next", async () => {
+    const { createElement } = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { UsageSection } = await import("@/components/usage-section");
+    const html = renderToStaticMarkup(createElement(UsageSection, { usage: null })).replace(/&#x27;/g, "'");
+    expect(USAGE_UNAVAILABLE_MESSAGE).toBe("We couldn't read this workspace's usage just now. Reload the page to try again.");
+    expect(html).toContain("We couldn't read this workspace's usage just now. Reload the page to try again.");
   });
 });
