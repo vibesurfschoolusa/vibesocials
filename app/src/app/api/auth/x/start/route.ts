@@ -177,9 +177,10 @@ export async function GET(request: Request) {
       },
     });
 
+    // R67: console.log skips the logger's redaction, so never the token itself.
     console.log("[X OAuth 1.0a] Request token received", {
       userId: user.id,
-      oauthToken,
+      hasOauthToken: true,
     });
 
     const authorizeUrl = new URL("https://api.twitter.com/oauth/authorize");
