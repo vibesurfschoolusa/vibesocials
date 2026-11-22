@@ -803,10 +803,19 @@ describe("buildPostOutcomeEmail - names the workspace and the post (F4)", () => 
     ["a flag", "\u{1F1FA}\u{1F1F8}"],
     ["a skin-tone emoji", "\u{1F44D}\u{1F3FD}"],
     ["a family emoji", "\u{1F468}‍\u{1F469}‍\u{1F467}"],
-  ])("keeps %s at the 80th place whole", (_name, emoji) => {
-    const caption = `${"a".repeat(79)}${emoji} surf all day`;
-    const email = buildPostOutcomeEmail({ results, appBaseUrl: null, ...WS, caption });
-    expect(email.html).toContain(`<p>Caption: ${"a".repeat(79)}${emoji}…</p>`);
+  ])("%s across the 80-code-point bound is dropped whole; one that fits is kept whole", (_name, emoji) => {
+    // R66 fix review L2: the excerpt keeps its old bound, 80 code points, in whole graphemes.
+    const across = buildPostOutcomeEmail({ results, appBaseUrl: null, ...WS, caption: `${"a".repeat(79)}${emoji} surf all day` });
+    expect(across.html).toContain(`<p>Caption: ${"a".repeat(79)}…</p>`);
+    const fits = `${"a".repeat(80 - [...emoji].length)}${emoji}`;
+    const within = buildPostOutcomeEmail({ results, appBaseUrl: null, ...WS, caption: `${fits} surf all day` });
+    expect(within.html).toContain(`<p>Caption: ${fits}…</p>`);
+  });
+
+  it("a letter with 5,000 combining marks stays within the bound", () => {
+    const heavy = `a${"́".repeat(5_000)}`;
+    const email = buildPostOutcomeEmail({ results, appBaseUrl: null, ...WS, caption: `Dawn ${heavy} patrol` });
+    expect(email.html).toContain("<p>Caption: Dawn…</p>");
   });
 
   it("quotes a short caption whole and leaves the line out for an empty one", () => {

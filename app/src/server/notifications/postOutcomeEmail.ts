@@ -8,7 +8,7 @@ import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { connectionStep, failedRowStep, type ConnectionStep } from "@/lib/retryAll";
 import { sentenceForRecipient } from "@/lib/publishFailureText";
 import { storyPlatformsOf } from "@/lib/storyPlacement";
-import { truncateGraphemes } from "@/lib/truncate";
+import { truncateGraphemesWithinCodePoints } from "@/lib/truncate";
 import { WORKSPACE_PAUSED_CODE } from "@/lib/workspaceStatus";
 import { PUBLISH_STALLED_FAILURE } from "@/server/jobs/failPendingResults";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
@@ -140,14 +140,15 @@ export const SCAN_NOTICE_ONCE_A_DAY_LINE =
 export const POST_OUTCOME_CAPTION_CHARS = 80;
 
 /**
- * The first 80 characters, then "…". R66 publishing-flow-2 L1: counted in
- * graphemes, as approvalEmail.ts does; a code-point count split a flag, a skin
- * tone or a family emoji.
+ * At most 80 code points of the caption, then "…". R66 publishing-flow-2 L1:
+ * in whole graphemes, so a flag, a skin tone or a family emoji is never split;
+ * R66 fix review L2: still bounded, so a letter with any number of marks can't
+ * make the email longer.
  */
 function captionExcerpt(caption: string): string {
   const flat = caption.trim().replace(/\s+/g, " ");
-  const cut = truncateGraphemes(flat, POST_OUTCOME_CAPTION_CHARS);
-  return cut === flat ? flat : `${cut}…`;
+  const cut = truncateGraphemesWithinCodePoints(flat, POST_OUTCOME_CAPTION_CHARS);
+  return cut === flat ? flat : `${cut.trimEnd()}…`;
 }
 
 /** A subject is plain text on one line. */

@@ -70,9 +70,18 @@ describe("firstName", () => {
 
   // R66 publishing-flow-2 L1 (lead grep): cut by code point, the 24th place kept
   // a hand without its skin tone, or half a flag.
-  it("keeps an emoji at the 24th place whole", () => {
-    expect(firstName(`${"a".repeat(23)}\u{1F44D}\u{1F3FD}bc`)).toBe(`${"a".repeat(23)}\u{1F44D}\u{1F3FD}`);
-    expect(firstName(`${"a".repeat(23)}\u{1F1FA}\u{1F1F8}bc`)).toBe(`${"a".repeat(23)}\u{1F1FA}\u{1F1F8}`);
+  // R66 fix review L2: still at most 24 code points, in whole graphemes.
+  it("a flag at the bound is kept whole when it fits, dropped whole when it doesn't", () => {
+    expect(firstName(`${"a".repeat(22)}\u{1F1FA}\u{1F1F8}bc`)).toBe(`${"a".repeat(22)}\u{1F1FA}\u{1F1F8}`);
+    expect(firstName(`${"a".repeat(23)}\u{1F1FA}\u{1F1F8}bc`)).toBe("a".repeat(23));
+    expect(firstName(`${"a".repeat(23)}\u{1F44D}\u{1F3FD}bc`)).toBe("a".repeat(23));
+  });
+
+  it("a letter with 5,000 combining marks stays within the bound", () => {
+    const heavy = `a${"́".repeat(5_000)}`;
+    expect(firstName(`xy${heavy}z Ana`)).toBe("xy");
+    // Nothing whole fits: the next word greets instead.
+    expect(firstName(`${heavy}z Ana`)).toBe("Ana");
   });
 });
 

@@ -25,14 +25,22 @@ function balancedAt(text: string, open: number, opener: string, closer: string):
 
 /**
  * A spread or Array.from of a list, not of a string: a Set, a Map's keys, DOM
- * children or files, an array literal, or a string already split into
- * graphemes (Intl.Segmenter's segment()).
+ * children or files, an array literal, a list or nothing (`list ?? []`,
+ * `x ? [a] : []`), or a string already split into graphemes
+ * (Intl.Segmenter's segment()). R66 fix review L1: a parenthesised source is a
+ * list only in those forms; `(name ?? "")` is a string.
  */
 const LIST_SOURCE =
-  /^\s*(?:new\s+(?:Set|Map)\b|\(|\[)|\.(?:keys|values|entries)\(\)|\.segment\(|\bchildren\b|\bfiles\b|querySelectorAll|\?\?\s*\[\]/;
+  /^\s*(?:new\s+(?:Set|Map)\b|\[)|\.(?:keys|values|entries)\(\)|\.segment\(|\bchildren\b|\bfiles\b|querySelectorAll|\?\?\s*\[\]|\?\s*\[[^\]]*\]\s*:\s*\[\]/;
 
-/** A cut: a slice, a splice, a substring or the first element. */
-const CUT_AFTER = /^\s*(?:\.(?:slice|splice|substring)\(|\[\s*0\s*\])/;
+/** A cut: a slice, a splice, a substring, the first element or at(). */
+const CUT_AFTER = /^\s*(?:\.(?:slice|splice|substring|at)\(|\[\s*0\s*\])/;
+
+/** A variable the spread is kept in, with or without a type: `const chars: string[] =`. */
+const KEPT_IN = /(?:const|let)\s+(\w+)\s*(?::[^=;]+)?=\s*$/;
+
+/** Destructured on the spot, which takes its first code points: `const [first] =`. */
+const DESTRUCTURED = /(?:const|let)\s*\[[^\]]*\]\s*(?::[^=;]+)?=\s*$/;
 
 /** Each `Array.from(x)` or `[...x]` in `text`: where it ends and what it spreads. */
 function spreads(text: string): { start: number; end: number; source: string }[] {
@@ -59,10 +67,15 @@ function codePointCuts(text: string): string[] {
       cuts.push(text.slice(start, end) + (CUT_AFTER.exec(after)?.[0] ?? ""));
       continue;
     }
+    const before = text.slice(Math.max(0, start - 120), start);
+    if (DESTRUCTURED.test(before)) {
+      cuts.push(`${DESTRUCTURED.exec(before)?.[0] ?? ""}${text.slice(start, end)}`);
+      continue;
+    }
     // Kept, then cut: const chars = Array.from(text); ... chars.slice(0, max).
     if (/^\s*\.sort\(/.test(after)) continue;
-    const named = /(?:const|let)\s+(\w+)\s*=\s*$/.exec(text.slice(Math.max(0, start - 60), start));
-    if (named && new RegExp(String.raw`\b${named[1]}\s*(?:\.(?:slice|splice)\(|\[\s*0\s*\])`).test(text.slice(end))) {
+    const named = KEPT_IN.exec(before);
+    if (named && new RegExp(String.raw`\b${named[1]}\s*(?:\.(?:slice|splice|at)\(|\[\s*0\s*\])`).test(text.slice(end))) {
       cuts.push(`${named[1]} = ${text.slice(start, end)}`);
     }
   }
@@ -98,6 +111,20 @@ describe("no user text is cut by code point", () => {
     expect(codePointCuts("const chars = Array.from(caption.trim().replace(/\\s+/g, ' '));\nreturn chars.slice(0, 80).join('');")).toHaveLength(1);
     expect(codePointCuts("return words.map((word) => Array.from(word)[0]).join('');")).toHaveLength(1);
     expect(codePointCuts("return [...word][0];")).toHaveLength(1);
+  });
+
+  // R66 fix review L1: forms the first guard let through.
+  it.each([
+    ["a spread of a parenthesised string", 'return [...(name ?? "")].slice(0, 24).join("");'],
+    ["Array.from of a parenthesised string", 'return Array.from((caption ?? "").trim()).slice(0, 80).join("");'],
+    ["a typed variable", 'const chars: string[] = Array.from(text);\nreturn chars.slice(0, 80).join("");'],
+    ["a typed let", "let chars: Array<string> = [...text];\nchars = chars.slice(0, 3);"],
+    ["destructuring a spread", "const [first] = [...word];"],
+    ["destructuring Array.from", "const [a, b] = Array.from(name);"],
+    ["at(0) on the spot", "return Array.from(text).at(0);"],
+    ["at() on a kept variable", "const chars = [...text];\nreturn chars.at(-1);"],
+  ])("fails on %s", (_form, text) => {
+    expect(codePointCuts(text)).toHaveLength(1);
   });
 
   it("leaves lists, grapheme arrays and counts alone", () => {

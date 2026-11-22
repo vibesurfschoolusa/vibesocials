@@ -1,4 +1,4 @@
-import { truncateGraphemes } from "@/lib/truncate";
+import { truncateGraphemesWithinCodePoints } from "@/lib/truncate";
 
 const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 
@@ -48,8 +48,11 @@ const FIRST_NAME_MAX = 24;
 export function firstName(name: string | null | undefined): string | null {
   for (const word of (name ?? "").split(/\s+/)) {
     const trimmed = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
-    // R66: by grapheme, so an emoji at the limit is kept whole.
-    if (trimmed) return truncateGraphemes(trimmed, FIRST_NAME_MAX);
+    // R66: at most 24 code points in whole graphemes, so an emoji at the limit
+    // is kept or dropped whole and a letter with many marks can't pass the bound.
+    // When nothing whole fits, the next word is tried.
+    const cut = trimmed ? truncateGraphemesWithinCodePoints(trimmed, FIRST_NAME_MAX) : "";
+    if (cut) return cut;
   }
   return null;
 }

@@ -22,6 +22,11 @@ describe("workspaceInitials", () => {
   it("keeps a flag or a skin-tone emoji whole", () => {
     expect(workspaceInitials("\u{1F1FA}\u{1F1F8} Surf")).toBe("\u{1F1FA}\u{1F1F8}S");
     expect(workspaceInitials("\u{1F44D}\u{1F3FD} Surf")).toBe("\u{1F44D}\u{1F3FD}S");
+    expect(workspaceInitials("\u{1F468}‍\u{1F469}‍\u{1F467} Surf")).toBe("\u{1F468}‍\u{1F469}‍\u{1F467}S");
+  });
+  // R66 fix review L2: a first grapheme over 8 code points falls back to its first code point.
+  it("a letter with 5,000 combining marks gives just its letter", () => {
+    expect(workspaceInitials(`a${"́".repeat(5_000)}lpha Beta`)).toBe("AB");
   });
 });
 

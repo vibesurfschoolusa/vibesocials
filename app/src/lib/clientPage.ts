@@ -3,13 +3,26 @@
  * the workspace's initials for the header tile, and the upload page's file list.
  */
 
-import { truncateGraphemes } from "@/lib/truncate";
+import { truncateGraphemes, truncateGraphemesWithinCodePoints } from "@/lib/truncate";
+
+/** The longest first grapheme an initial keeps whole: a family emoji is 5. */
+const INITIAL_MAX_CODE_POINTS = 8;
 
 export function workspaceInitials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean).slice(0, 2);
   if (words.length === 0) return "?";
-  // The first grapheme, so an emoji, a flag or a skin tone stays whole (R66).
-  return words.map((word) => truncateGraphemes(word, 1).toUpperCase()).join("");
+  return words.map((word) => initialOf(word).toUpperCase()).join("");
+}
+
+/**
+ * R66: the word's first grapheme, so an emoji, a flag or a skin tone stays
+ * whole. A grapheme over 8 code points (a letter with many marks) gives its
+ * first code point instead: the base letter, never half a surrogate pair.
+ */
+function initialOf(word: string): string {
+  const first = truncateGraphemes(word, 1);
+  if (truncateGraphemesWithinCodePoints(first, INITIAL_MAX_CODE_POINTS) === first) return first;
+  return String.fromCodePoint(word.codePointAt(0) ?? 0x3f);
 }
 
 export function formatFileSize(bytes: number): string {
