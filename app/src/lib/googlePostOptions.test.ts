@@ -5,6 +5,7 @@ import {
   defaultGoogleButtonUrl,
   googleButtonFromWorkspace,
   changeGooglePostType,
+  rememberGooglePostFields,
   googleQueueLabel,
   parseGoogleButton,
   parseGooglePostMetadata,
@@ -353,6 +354,32 @@ describe("changeGooglePostType", () => {
     expect(changeGooglePostType({ postType: "offer", offer: off }, "offer", book)).toEqual({
       metadata: { postType: "offer", offer: off },
       savedButton: book,
+    });
+  });
+});
+
+// R67 pages-a-3 L4: the event and offer details are kept across a switch.
+describe("rememberGooglePostFields", () => {
+  const evt = { title: "Full moon paddle", startDate: "2026-12-04", endDate: "2026-12-04", startTime: "18:00" };
+  const off = { title: "Sale", startDate: "2026-12-01", endDate: "2026-12-24", couponCode: "SURF20", terms: "One each." };
+
+  it("keeps the chosen type's fields and what was kept for the other", () => {
+    expect(rememberGooglePostFields({ postType: "event", event: evt }, { offer: off })).toEqual({ event: evt, offer: off });
+  });
+
+  it("the chosen type's own fields win over an older kept copy", () => {
+    const edited = { ...evt, title: "New moon paddle" };
+    expect(rememberGooglePostFields({ postType: "event", event: edited }, { event: evt }).event).toEqual(edited);
+  });
+
+  it("through changeGooglePostType, only the chosen type's fields are passed on", () => {
+    const kept = rememberGooglePostFields({ postType: "event", event: evt }, { offer: off });
+    expect(changeGooglePostType({ postType: "event", event: evt, ...kept }, "offer", undefined).metadata).toEqual({
+      postType: "offer",
+      offer: off,
+    });
+    expect(changeGooglePostType({ postType: "offer", offer: off, ...kept }, "update", undefined).metadata).toEqual({
+      postType: "update",
     });
   });
 });

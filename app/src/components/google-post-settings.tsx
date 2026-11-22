@@ -18,7 +18,9 @@ import {
   GOOGLE_TITLE_MAX,
   changeGooglePostType,
   parseGooglePostMetadata,
+  rememberGooglePostFields,
   type GoogleButton,
+  type GooglePostFields,
   type GoogleButtonType,
   type GooglePostType,
 } from "@/lib/googlePostOptions";
@@ -92,10 +94,14 @@ export function GooglePostSettings({ metadata, onChange, disabled = false }: Goo
   const button = metadata.button;
   // The button an offer dropped, restored when the user switches back (changeGooglePostType).
   const [savedButton, setSavedButton] = useState<GoogleButton | undefined>(metadata.button);
+  // R67 pages-a-3 L4: the event and offer details, restored the same way.
+  const [savedFields, setSavedFields] = useState<GooglePostFields>({});
 
   const setType = (postType: GooglePostType) => {
-    const next = changeGooglePostType(metadata, postType, savedButton);
+    const kept = rememberGooglePostFields(metadata, savedFields);
+    const next = changeGooglePostType({ ...metadata, ...kept }, postType, savedButton);
     setSavedButton(next.savedButton);
+    setSavedFields(kept);
     onChange(next.metadata);
   };
   const setButtonType = (value: string) => {

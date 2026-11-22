@@ -241,6 +241,20 @@ export function changeGooglePostType(
   return { metadata, savedButton };
 }
 
+/** The event and offer details typed so far, whichever type is chosen now. */
+export type GooglePostFields = Pick<GoogleBusinessPostMetadata, "event" | "offer">;
+
+/**
+ * R67 pages-a-3 L4: the details to keep across a type switch, as savedButton
+ * keeps the button. The chosen type's own fields win over what was kept, so
+ * switching back to Event or Offer shows what was typed. Passed into
+ * changeGooglePostType, which still returns only the chosen type's fields,
+ * so what Create sends is as before.
+ */
+export function rememberGooglePostFields(current: GoogleBusinessPostMetadata, saved: GooglePostFields): GooglePostFields {
+  return { event: current.event ?? saved.event, offer: current.offer ?? saved.offer };
+}
+
 export interface WorkspaceGoogleButton {
   googleButtonType: string | null;
   googleButtonUrl: string | null;
