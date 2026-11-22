@@ -83,6 +83,36 @@ describe("firstName", () => {
     // Nothing whole fits: the next word greets instead.
     expect(firstName(`${heavy}z Ana`)).toBe("Ana");
   });
+
+  // R67 new-customer L1: whole graphemes are trimmed, so a mark stays with its letter.
+  it("drops a trailing emoji: \"Ana☀️\" is \"Ana\"", () => {
+    expect(firstName("Ana☀️")).toBe("Ana");
+  });
+
+  it("keeps \"प्रिया\" whole", () => {
+    expect(firstName("प्रिया शर्मा")).toBe("प्रिया");
+  });
+
+  it("keeps \"ਪ੍ਰੀਤੀ\" whole", () => {
+    expect(firstName("ਪ੍ਰੀਤੀ ਕੌਰ")).toBe("ਪ੍ਰੀਤੀ");
+  });
+
+  it("keeps the ë of a decomposed \"Zoë\"", () => {
+    expect(firstName("Zoë Smith")).toBe("Zoë");
+  });
+
+  it("keeps \"Émile\" as before, composed or decomposed", () => {
+    expect(firstName("Émile Zola")).toBe("Émile");
+    expect(firstName("Émile Zola")).toBe("Émile");
+  });
+
+  it("is linear: 5,000 marks, in one word and as separate words", () => {
+    const started = performance.now();
+    expect(firstName(`Ana${"́".repeat(5_000)}`)).toBe("An");
+    expect(firstName(`${"!́".repeat(5_000)}Ana`)).toBe("Ana");
+    expect(firstName(`${"́ ".repeat(5_000)}Ana`)).toBe("Ana");
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
 });
 
 describe("accountWorkspaceLine", () => {

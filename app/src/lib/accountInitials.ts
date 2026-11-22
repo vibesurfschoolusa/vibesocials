@@ -40,6 +40,25 @@ export function accountLabel(name: string | null | undefined, email: string): st
 
 const FIRST_NAME_MAX = 24;
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * `word` without the whole graphemes at each end that hold no letter or digit
+ * ("(Klaus)" is "Klaus", "Ana☀️" is "Ana"). R67 new-customer L1: trimming code
+ * points took a name's last combining mark ("प्रिया" lost its vowel sign), and
+ * one pass over the graphemes replaces R66's quadratic end-anchored pattern.
+ */
+function withoutEdgeSymbols(word: string): string {
+  let start = -1;
+  let end = 0;
+  for (const { segment, index } of graphemes.segment(word)) {
+    if (!LETTER_OR_DIGIT.test(segment)) continue;
+    if (start < 0) start = index;
+    end = index + segment.length;
+  }
+  return start < 0 ? "" : word.slice(start, end);
+}
+
 /**
  * The Dashboard greets by first name: the first word with a letter or digit,
  * without the punctuation around it ("(Klaus)" is "Klaus"), at most 24
@@ -47,7 +66,7 @@ const FIRST_NAME_MAX = 24;
  */
 export function firstName(name: string | null | undefined): string | null {
   for (const word of (name ?? "").split(/\s+/)) {
-    const trimmed = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    const trimmed = withoutEdgeSymbols(word);
     // R66: at most 24 code points in whole graphemes, so an emoji at the limit
     // is kept or dropped whole and a letter with many marks can't pass the bound.
     // When nothing whole fits, the next word is tried.
