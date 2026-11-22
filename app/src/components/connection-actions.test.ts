@@ -75,24 +75,25 @@ describe("Disconnect dialog", () => {
 
 // R65 client-journey L1: a Google Business Profile connected again has no
 // location, so its posts fail until one is chosen; the dialog names that step.
+// R66 client-journey L1: every form names the platform, so "it" never reads as the post.
 describe("Disconnect dialog: Google Business Profile names choosing the location", () => {
   const GBP = "Google Business Profile";
 
-  it("count unread: fails until it is connected again and its location chosen", () => {
+  it("count unread: fails until Google Business Profile is connected again and its location chosen", () => {
     expect(disconnectDescription("google_business_profile", null)).toContain(
-      `Scheduled posts, and posts waiting for approval, that chose ${GBP} will fail on it until it is connected again and its location chosen.`,
+      `Scheduled posts, and posts waiting for approval, that chose ${GBP} will fail on it until ${GBP} is connected again and its location chosen.`,
     );
   });
 
-  it("1: fails until it is connected again and its location chosen", () => {
+  it("1: fails until Google Business Profile is connected again and its location chosen", () => {
     expect(disconnectDescription("google_business_profile", 1)).toContain(
-      `1 scheduled post, or post waiting for approval, chose ${GBP}. It will fail on ${GBP} until it is connected again and its location chosen.`,
+      `1 scheduled post, or post waiting for approval, chose ${GBP}. It will fail on ${GBP} until ${GBP} is connected again and its location chosen.`,
     );
   });
 
-  it("3: fail until it is connected again and its location chosen", () => {
+  it("3: fail until Google Business Profile is connected again and its location chosen", () => {
     expect(disconnectDescription("google_business_profile", 3)).toContain(
-      `3 scheduled posts, or posts waiting for approval, chose ${GBP}. They will fail on ${GBP} until it is connected again and its location chosen.`,
+      `3 scheduled posts, or posts waiting for approval, chose ${GBP}. They will fail on ${GBP} until ${GBP} is connected again and its location chosen.`,
     );
   });
 

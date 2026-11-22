@@ -110,10 +110,12 @@ function numbersDeletedSentence(platform: string): string {
 function scheduledPostsSentence(platform: string, chosenCount: number | null): string {
   const label = platformLabel(platform as Platform);
   // R65 client-journey L1: a Google Business Profile connected again has no
-  // location, and its posts fail until one is chosen, as Switch says.
+  // location, and its posts fail until one is chosen, as Switch says. R66
+  // client-journey L1: it names the platform, since "it" after "1 scheduled
+  // post" reads as the post.
   const until =
     platform === "google_business_profile"
-      ? "until it is connected again and its location chosen"
+      ? `until ${label} is connected again and its location chosen`
       : "until you reconnect it";
   if (chosenCount === null) {
     return `Scheduled posts, and posts waiting for approval, that chose ${label} will fail on it ${until}.`;
