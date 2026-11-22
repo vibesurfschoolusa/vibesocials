@@ -267,3 +267,54 @@ describe("Queue: the Edit dialog keeps a PATCH 400 on screen", () => {
     expect(findAll(container, (n) => n.attributes?.["data-dialog"] === "edit")).toHaveLength(0);
   }, 10_000);
 });
+
+// R66 publishing-flow L2: a caption or time changed while Save runs was lost
+// (the press sends what was there, then the dialog closes). Both lock during the
+// save, as the per-platform editor does; Save keeps focus, loading, not disabled.
+describe("Queue: the Edit dialog locks the caption and time while Save runs", () => {
+  const caption = () => findAll(dialog(), (n) => n.attributes?.id === "queue-edit-caption")[0]!;
+  const time = () => findAll(dialog(), (n) => n.attributes?.id === "queue-edit-time")[0]!;
+  const locked = () => [Boolean(props(caption()).disabled), Boolean(props(time()).disabled)];
+
+  it("during the save, both are locked, and Save stays enabled", async () => {
+    await mount();
+    await openEdit();
+    let answer: (response: Response) => void = () => {};
+    patchAnswers.push((() => new Promise<Response>((resolve) => (answer = resolve))) as unknown as Answer);
+    const save = dialogButton("Save changes");
+    await click(save);
+    expect(locked()).toEqual([true, true]);
+    expect(props(save).disabled).toBeFalsy();
+    answer(Response.json({ error: X_REFUSAL }, { status: 400 }));
+    await settle();
+  }, 10_000);
+
+  it("after a failed save, both are editable", async () => {
+    await mount();
+    await openEdit();
+    patchAnswers.push(() => Response.json({ error: "Something went wrong." }, { status: 500 }));
+    await click(dialogButton("Save changes"));
+    expect(findAll(container, (n) => n.attributes?.["data-dialog"] === "edit")).toHaveLength(1);
+    expect(locked()).toEqual([false, false]);
+  }, 10_000);
+
+  it("a 429: the toast as before, and both editable", async () => {
+    await mount();
+    await openEdit();
+    patchAnswers.push(() => Response.json({ error: "Too many requests. Try again in a minute." }, { status: 429 }));
+    await click(dialogButton("Save changes"));
+    expect(line()).toBeNull();
+    expect(toasts().some((text) => text.includes("Too many requests. Try again in a minute."))).toBe(true);
+    expect(locked()).toEqual([false, false]);
+  }, 10_000);
+
+  it("a 400: the line as before, and both editable", async () => {
+    await mount();
+    await openEdit();
+    patchAnswers.push(REFUSED);
+    await click(dialogButton("Save changes"));
+    expect(line()).toBe(X_REFUSAL);
+    expect(toasts()).toEqual([]);
+    expect(locked()).toEqual([false, false]);
+  }, 10_000);
+});

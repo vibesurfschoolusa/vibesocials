@@ -857,6 +857,9 @@ function QueueEditDialog({
             rows={4}
             aria-invalid={captionOver || undefined}
             aria-describedby="queue-edit-caption-count"
+            // R66 publishing-flow L2: Save sends what was here at the press, so a change made while it runs would be lost.
+            // Focus is on Save (loading, not disabled), and no key here saves, so disabling can't drop focus.
+            disabled={saving}
           />
           <CaptionCounter id="queue-edit-caption-count" text={caption} />
         </div>
@@ -879,6 +882,7 @@ function QueueEditDialog({
             min={minScheduleLocal || undefined}
             required={model.scheduleRequired}
             onChange={(event) => setScheduledForLocal(event.target.value)}
+            disabled={saving}
             className={cn(fieldBaseClasses, "h-10 px-3 py-2")}
           />
           <p className="text-xs text-muted-foreground">
