@@ -196,6 +196,16 @@ describe("listAdminWorkspaces", () => {
     expect(query.skip).toBe(100);
   });
 
+  // R67: cut in whole graphemes within 100 code points, never half an emoji.
+  it("keeps an emoji at the 100th place whole, and drops one past it whole", async () => {
+    db.workspaceFindMany.mockResolvedValue([]);
+    await listAdminWorkspaces({ search: `${"a".repeat(99)}🌊 more`, page: 0, now: NOW });
+    expect(db.workspaceFindMany.mock.calls[0][0].where.OR[0].name.contains).toBe(`${"a".repeat(99)}🌊`);
+
+    await listAdminWorkspaces({ search: `${"a".repeat(100)}🌊`, page: 0, now: NOW });
+    expect(db.workspaceFindMany.mock.calls[1][0].where.OR[0].name.contains).toBe("a".repeat(100));
+  });
+
   it("says when there is a next page and shows only 50", async () => {
     db.workspaceFindMany.mockResolvedValue(
       Array.from({ length: 51 }, (_, i) => workspaceRow(`ws-${i}`, CREATED_A, [])),

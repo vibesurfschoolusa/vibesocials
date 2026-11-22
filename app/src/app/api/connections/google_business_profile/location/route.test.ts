@@ -134,6 +134,18 @@ describe("POST /api/connections/google_business_profile/location", () => {
     expect(updateMock.mock.calls[1][0].data.metadata.locationTitle).toHaveLength(200);
   });
 
+  // R67: Google's business name is cut in whole graphemes, never half an emoji.
+  it("keeps an emoji at the 200th place of the title whole", async () => {
+    listMock.mockResolvedValue({
+      ok: true,
+      complete: true,
+      locations: [{ ...LISTED[0], title: `${"x".repeat(199)}🏄 Surf` }],
+    });
+
+    await post({ locationName: "accounts/1/locations/2" });
+    expect(updateMock.mock.calls[0][0].data.metadata.locationTitle).toBe(`${"x".repeat(199)}🏄`);
+  });
+
   it("400s without a location", async () => {
     const res = await post({ locationTitle: "Vibe Surf School" });
 

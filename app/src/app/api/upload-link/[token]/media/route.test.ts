@@ -284,6 +284,12 @@ describe("the request body", () => {
     await call(mediaRequest(goodBody({ filename: { a: 1 } })));
     expect(createdData().originalFilename).toBe("upload");
   });
+
+  // R67: a client's file name is cut in whole graphemes, never half an emoji.
+  it("keeps an emoji at the 255th place of the file name whole", async () => {
+    await call(mediaRequest(goodBody({ filename: `${"f".repeat(254)}🌊.jpg` })));
+    expect(createdData().originalFilename).toBe(`${"f".repeat(254)}🌊`);
+  });
 });
 
 describe("checking the file in storage", () => {

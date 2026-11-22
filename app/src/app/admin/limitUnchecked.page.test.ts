@@ -57,3 +57,13 @@ describe("operator pages and their hourly counter", () => {
     expect(html).not.toContain("a few minutes");
   });
 });
+
+// R67: the search is cut in whole graphemes, never half an emoji.
+describe("the workspace list's search", () => {
+  it("keeps an emoji at the 100th place whole", async () => {
+    h.checkAdminRateLimit.mockResolvedValue({ allowed: true });
+    h.list.mockResolvedValue({ rows: [], hasNextPage: false });
+    await AdminPage({ searchParams: Promise.resolve({ q: `${"a".repeat(99)}🌊 more` }) });
+    expect(h.list.mock.calls[0][0].search).toBe(`${"a".repeat(99)}🌊`);
+  });
+});

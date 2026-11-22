@@ -1547,12 +1547,14 @@ export const tiktokClient: PlatformClient = {
     // absorbs the trailing bytes so the entire file is uploaded.
     const { chunkSize: CHUNK_SIZE, totalChunks, ranges } = computeChunkPlan(size);
 
+    // Dots only when something was cut: the cut counts code points, not units.
+    const captionPreview = truncateGraphemesWithinCodePoints(tiktokCaption, 100);
     console.log('[TikTok] Initializing upload with FILE_UPLOAD (chunked)', {
       videoSize: size,
       chunkSize: CHUNK_SIZE,
       totalChunks,
       hasAccessToken: !!accessToken,
-      captionPreview: truncateGraphemesWithinCodePoints(tiktokCaption, 100) + (tiktokCaption.length > 100 ? '...' : ''),
+      captionPreview: captionPreview + (captionPreview !== tiktokCaption ? '...' : ''),
     });
 
     const postInfo = buildPostInfo(ctx, tiktokCaption);

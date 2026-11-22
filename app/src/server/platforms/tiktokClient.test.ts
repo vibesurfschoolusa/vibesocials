@@ -1947,6 +1947,34 @@ describe("tiktokClient.publishVideo", () => {
       expect(chunkPuts(fetchMock)).toHaveLength(2);
     });
   });
+
+  // R67 fix review L3: the log's caption preview adds "..." only when it cut something.
+  describe("the upload log's caption preview", () => {
+    async function previewFor(caption: string): Promise<unknown> {
+      stubFetch({
+        "creator_info/query": creatorInfoOk,
+        "blob.example.com": videoBlob,
+        "video/init": () => jsonResponse({ error: { code: "invalid_params", message: "no" } }, 400),
+      });
+      await tiktokClient.publishVideo({ ...makeCtx(), caption }).catch(() => null);
+      const call = vi
+        .mocked(console.log)
+        .mock.calls.find(([message]) => String(message).startsWith("[TikTok] Initializing upload"));
+      return (call?.[1] as { captionPreview?: unknown } | undefined)?.captionPreview;
+    }
+
+    it("60 emoji (120 units, 60 code points) are shown whole, with no dots", async () => {
+      expect(await previewFor("🌊".repeat(60))).toBe("🌊".repeat(60));
+    });
+
+    it("a longer caption is cut in whole graphemes, with dots", async () => {
+      expect(await previewFor(`${"a".repeat(99)}🌊 more`)).toBe(`${"a".repeat(99)}🌊...`);
+    });
+
+    it("a short caption is shown as it is", async () => {
+      expect(await previewFor("hello")).toBe("hello");
+    });
+  });
 });
 
 // 2026-11-02 scale audit (jobs B3): a video above 50 MiB on an enabled platform is read from
