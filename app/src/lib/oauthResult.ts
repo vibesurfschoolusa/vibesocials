@@ -299,12 +299,12 @@ function describeCode(
     // another workspace, so the start refused it before going to the platform
     // (lib/workspace.ts requireOwnerContextForOAuthStart). This page was
     // loaded fresh, so it already shows the workspace that is active now.
+    // R67 new-customer L2: the start checks this before the role, so a member
+    // of the active workspace reads it too; it names no button they can't press.
     if (error.endsWith("_workspace_changed")) {
       return {
         variant: "danger",
-        message: `That tab was for another workspace, so nothing ${shown === "connect" ? "was connected" : "changed"}. This page shows the workspace you are in now${
-          button ? `: ${pressAgain("click", button)} to ${button.toLowerCase()} it here.` : ", where it is already connected."
-        }`,
+        message: `That tab was for another workspace, so nothing ${shown === "connect" ? "was connected" : "changed"}. This page shows the workspace you are in now. Switch back to that workspace, then try again.`,
       };
     }
     const label = labelFromCode(error);

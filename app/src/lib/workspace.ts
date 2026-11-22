@@ -368,15 +368,16 @@ export async function requireOwnerContext(): Promise<WorkspaceContext | NextResp
  *     pre-existing `/login` redirect — every start route already had its own
  *     (slightly different) unauthenticated behavior before workspaces, and
  *     this preserves it unchanged rather than centralizing a new one.
+ *   - The request's `?workspaceId=` is absent or not the active workspace:
+ *     redirects to `/settings?error=<platform>_workspace_changed` (F3),
+ *     checked first, whatever the role (R67).
  *   - Authenticated but not owner: new territory these routes never had to
  *     handle pre-workspaces, so it uniformly redirects to
  *     `/settings?error=<errorCode>` (the OAuth-callback error-redirect
  *     convention every route already follows for its OTHER failure
  *     branches).
  *   - Owner: returns the {@link WorkspaceContext} so the route can embed
- *     `workspace.id` in the OAuth state, when the request's `?workspaceId=`
- *     is that workspace; otherwise redirects to
- *     `/settings?error=<platform>_workspace_changed` (F3).
+ *     `workspace.id` in the OAuth state.
  *
  * Usage:
  *   const contextOrRedirect = await requireOwnerContextForOAuthStart(request, "facebook_page_not_workspace_owner");
@@ -387,29 +388,29 @@ export async function requireOwnerContextForOAuthStart(
   request: Request,
   errorCode: string,
 ): Promise<WorkspaceContext | NextResponse | null> {
-  try {
-    const context = await getWorkspaceContext({ requireRole: "owner" });
-    // F3 (2026-11-14 review, R1 security H1): the active workspace is one
-    // cookie for every tab, so a Connect clicked in a tab rendered for
-    // another workspace would sign a state for the active one and attach the
-    // account there. The link carries the page's `?workspaceId=`; an absent
-    // or different one is refused here, before any state is signed. The
-    // callbacks keep trusting only the signed state.
-    if (context && new URL(request.url).searchParams.get("workspaceId") !== context.workspace.id) {
-      const url = new URL("/settings", request.url);
-      // "<platform>_not_workspace_owner" -> "<platform>_workspace_changed".
-      url.searchParams.set("error", errorCode.replace(/_not_workspace_owner$/, "_workspace_changed"));
-      return NextResponse.redirect(url);
-    }
-    return context;
-  } catch (error) {
-    if (error instanceof WorkspaceForbiddenError) {
-      const url = new URL("/settings", request.url);
-      url.searchParams.set("error", errorCode);
-      return NextResponse.redirect(url);
-    }
-    throw error;
+  const context = await getWorkspaceContext();
+  if (!context) return null;
+  // F3 (2026-11-14 review, R1 security H1): the active workspace is one
+  // cookie for every tab, so a Connect clicked in a tab rendered for
+  // another workspace would sign a state for the active one and attach the
+  // account there. The link carries the page's `?workspaceId=`; an absent
+  // or different one is refused here, before any state is signed. The
+  // callbacks keep trusting only the signed state.
+  // R67 new-customer L2: compared BEFORE the role, as R28 did for the JSON
+  // routes. An owner of A whose other tab switched to B, where they are a
+  // member, was told only the owner can connect.
+  if (new URL(request.url).searchParams.get("workspaceId") !== context.workspace.id) {
+    const url = new URL("/settings", request.url);
+    // "<platform>_not_workspace_owner" -> "<platform>_workspace_changed".
+    url.searchParams.set("error", errorCode.replace(/_not_workspace_owner$/, "_workspace_changed"));
+    return NextResponse.redirect(url);
   }
+  if (context.role !== "owner") {
+    const url = new URL("/settings", request.url);
+    url.searchParams.set("error", errorCode);
+    return NextResponse.redirect(url);
+  }
+  return context;
 }
 
 /**

@@ -59,8 +59,10 @@ describe("describeOAuthResult", () => {
   // is refused (lib/workspace.ts requireOwnerContextForOAuthStart) and lands
   // here on a fresh Settings page for the workspace that is active now.
   describe("_workspace_changed (a start from a stale tab)", () => {
+    // R67 new-customer L2: the start now checks the page's workspace before
+    // the role, so a member sees this too; it names no Connect they can't press.
     const MESSAGE =
-      "That tab was for another workspace, so nothing was connected. This page shows the workspace you are in now: click Connect again to connect it here.";
+      "That tab was for another workspace, so nothing was connected. This page shows the workspace you are in now. Switch back to that workspace, then try again.";
 
     it.each(["youtube", "x", "tiktok", "pinterest", "instagram", "facebook_page", "linkedin", "google_business_profile"])(
       "says what happened for %s, not a generic failure",
@@ -747,13 +749,16 @@ describe("describeOAuthResult — every sentence names only the button the row s
     );
   });
 
-  it("another workspace's tab: the button this page shows for it", () => {
-    expect(describe_("x_workspace_changed", "reconnect")).toBe(
-      "That tab was for another workspace, so nothing changed. This page shows the workspace you are in now: click Reconnect to reconnect it here.",
-    );
-    expect(describe_("x_workspace_changed", "connected")).toBe(
-      "That tab was for another workspace, so nothing changed. This page shows the workspace you are in now, where it is already connected.",
-    );
+  // R67 new-customer L2: an owner and a member both land here, so the
+  // sentence names a step either can take, whatever this page's row shows.
+  it("another workspace's tab: a step an owner and a member can both take", () => {
+    const changed =
+      "That tab was for another workspace, so nothing changed. This page shows the workspace you are in now. Switch back to that workspace, then try again.";
+    expect(describe_("x_workspace_changed", "reconnect")).toBe(changed);
+    expect(describe_("x_workspace_changed", "connected")).toBe(changed);
+    for (const shown of ["connect", "reconnect", "connected"] as const) {
+      expect(describe_("x_workspace_changed", shown)).not.toMatch(/\b(Re)?[Cc]onnect\b|[Cc]lick|[Pp]ress/);
+    }
   });
 
   it("the button's name is written in one place in the file", () => {

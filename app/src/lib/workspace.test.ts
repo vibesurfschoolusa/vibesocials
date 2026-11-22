@@ -705,12 +705,12 @@ describe("requireOwnerContextForOAuthStart", () => {
     expect(result).toBeNull();
   });
 
-  it("redirects to /settings?error=<errorCode> for an authenticated member", async () => {
+  it("redirects to /settings?error=<errorCode> for a member on their own active workspace", async () => {
     getCurrentUserMock.mockResolvedValue(makeUser());
     findManyMock.mockResolvedValue([makeMembership({ role: "member" })]);
 
     const result = await requireOwnerContextForOAuthStart(
-      request,
+      new Request("http://localhost/api/auth/facebook_page/start?workspaceId=workspace-1"),
       "facebook_page_not_workspace_owner",
     );
 
@@ -757,6 +757,58 @@ describe("requireOwnerContextForOAuthStart", () => {
     expect(response.headers.get("location")).toBe(
       "http://localhost/settings?error=facebook_page_workspace_changed",
     );
+  });
+
+  // R67 new-customer L2: the page's workspace is compared before the role. An
+  // owner of A whose other tab switched to B, where they are a member, was
+  // told only the owner can connect.
+  it("an owner of A whose active workspace is B (a member there) gets workspace_changed, not not_workspace_owner", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser());
+    findManyMock.mockResolvedValue([
+      makeMembership({ workspaceId: "workspace-a", role: "owner" }),
+      makeMembership({ workspaceId: "workspace-b", role: "member" }),
+    ]);
+    cookiesGetMock.mockReturnValue({ value: "workspace-b" });
+
+    const result = await requireOwnerContextForOAuthStart(
+      new Request("http://localhost/api/auth/x/start?workspaceId=workspace-a"),
+      "x_not_workspace_owner",
+    );
+
+    expect(result).toBeInstanceOf(NextResponse);
+    expect((result as NextResponse).headers.get("location")).toBe("http://localhost/settings?error=x_workspace_changed");
+  });
+
+  it("the same owner, once B's tab is back on A, connects as before", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser());
+    findManyMock.mockResolvedValue([
+      makeMembership({ workspaceId: "workspace-a", role: "owner" }),
+      makeMembership({ workspaceId: "workspace-b", role: "member" }),
+    ]);
+    cookiesGetMock.mockReturnValue({ value: "workspace-a" });
+
+    const result = await requireOwnerContextForOAuthStart(
+      new Request("http://localhost/api/auth/x/start?workspaceId=workspace-a"),
+      "x_not_workspace_owner",
+    );
+
+    expect(result).toMatchObject({ role: "owner", workspace: { id: "workspace-a" } });
+  });
+
+  it("a member of B pressing from B's page, with B active, is still not_workspace_owner", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser());
+    findManyMock.mockResolvedValue([
+      makeMembership({ workspaceId: "workspace-a", role: "owner" }),
+      makeMembership({ workspaceId: "workspace-b", role: "member" }),
+    ]);
+    cookiesGetMock.mockReturnValue({ value: "workspace-b" });
+
+    const result = await requireOwnerContextForOAuthStart(
+      new Request("http://localhost/api/auth/x/start?workspaceId=workspace-b"),
+      "x_not_workspace_owner",
+    );
+
+    expect((result as NextResponse).headers.get("location")).toBe("http://localhost/settings?error=x_not_workspace_owner");
   });
 
   it("rethrows unexpected errors instead of mapping them to a redirect", async () => {
