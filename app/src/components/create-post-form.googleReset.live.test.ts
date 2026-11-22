@@ -65,20 +65,15 @@ let container: FakeNode;
 let body: FakeNode;
 
 const posted: string[] = [];
-/** The next POST /api/posts answers; empty means 201. A stalled one waits for `postRelease`. */
+/** The next POST /api/posts answers; empty means 201. */
 let postAnswer: (() => Response) | null = null;
-let postStalls = false;
-let postRelease: (() => void) | null = null;
 const autoCaptionCalls: string[] = [];
 const fetchMock = vi.fn((input: unknown, init?: { method?: string }) => {
   const url = String(input);
   if (url === "/api/posts" && init?.method === "POST") {
     posted.push(url);
     const answer = postAnswer ?? (() => Response.json({ postJob: { id: "job-1" } }, { status: 201 }));
-    if (!postStalls) return Promise.resolve(answer());
-    return new Promise<Response>((resolve) => {
-      postRelease = () => resolve(answer());
-    });
+    return Promise.resolve(answer());
   }
   if (url.startsWith("/api/posts/auto-caption")) {
     autoCaptionCalls.push(url);
@@ -94,12 +89,6 @@ function find(node: FakeNode, test: (n: FakeNode) => boolean): FakeNode | null {
     if (hit) return hit;
   }
   return null;
-}
-
-function findAll(node: FakeNode, test: (n: FakeNode) => boolean, hits: FakeNode[] = []): FakeNode[] {
-  if (test(node)) hits.push(node);
-  for (const child of node.childNodes) findAll(child, test, hits);
-  return hits;
 }
 
 function props(node: FakeNode): Record<string, (arg?: unknown) => unknown> {
@@ -129,15 +118,9 @@ async function run(step: () => unknown) {
 }
 
 const pageSays = (text: string) => (body.textContent as string).includes(text);
-const pick = (...files: File[]) => run(() => props(byId("post-media")).onChange({ target: { files } }));
 function buttonTexted(text: string, within: FakeNode = container): FakeNode {
   const hit = find(within, (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() === text);
   if (!hit) throw new Error(`no button ${text}`);
-  return hit;
-}
-function buttonLabelled(label: string): FakeNode {
-  const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.["aria-label"] === label);
-  if (!hit) throw new Error(`no button ${label}`);
   return hit;
 }
 
@@ -185,8 +168,6 @@ beforeEach(async () => {
   release.clear();
   posted.length = 0;
   postAnswer = null;
-  postStalls = false;
-  postRelease = null;
   autoCaptionCalls.length = 0;
   prepareFail.length = 0;
   root = createRoot(container as unknown as HTMLElement);
@@ -205,11 +186,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-const photo = (name: string) => new File([name], `${name}.jpg`, { type: "image/jpeg" });
-const video = (name: string) => new File(["v"], `${name}.mp4`, { type: "video/mp4" });
-const uploadsOf = (name: string) => uploads.filter((u) => u.key.includes(`-${name}.`));
 const typeCaption = (value: string) => run(() => props(byId("post-caption")).onChange({ target: { value } }));
-const captionNow = () => String(props(byId("post-caption")).value);
 const UNEXPECTED = "Unexpected error while creating post.";
 
 function tomorrowNoon(): string {
@@ -219,57 +196,12 @@ function tomorrowNoon(): string {
   return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T12:00`;
 }
 
-const isDisabled = (node: FakeNode) => props(node).disabled === (true as never);
 
 async function pressSchedule() {
   await run(() => props(buttonTexted("Schedule")).onClick());
   await run(() => props(byId("post-schedule")).onChange({ target: { value: tomorrowNoon() } }));
 }
 const submit = () => run(() => props(byId("create-post-form")).onSubmit({ preventDefault() {} }));
-async function pressPublishAndConfirm() {
-  await submit();
-  const dialog = find(body, (n) => n.attributes?.role === "dialog");
-  if (!dialog) throw new Error("no Publish dialog");
-  const confirm = find(
-    dialog,
-    (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() !== "Cancel" && (n.textContent as string).trim() !== "",
-  );
-  if (!confirm) throw new Error("no confirm button");
-  await run(() => props(confirm).onClick());
-}
-/** Disabled itself, or inside a disabled fieldset (which disables every control in it). */
-function locked(node: FakeNode): boolean {
-  for (let at: FakeNode | null = node; at; at = at.parentNode) {
-    if (at === node && isDisabled(at)) return true;
-    if (at.nodeName === "FIELDSET" && isDisabled(at)) return true;
-  }
-  return false;
-}
-function labelled(label: string): FakeNode {
-  const hit = find(container, (n) => n.attributes?.["aria-label"] === label);
-  if (!hit) throw new Error(`no ${label}`);
-  return hit;
-}
-function storyRadios(platform: "Instagram" | "Facebook Page"): FakeNode[] {
-  const legend = find(container, (n) => n.nodeName === "LEGEND" && n.textContent === `${platform}: post to`);
-  const all = legend?.parentNode ? findAll(legend.parentNode, (n) => n.nodeName === "INPUT") : [];
-  if (all.length === 0) throw new Error(`no ${platform} placement`);
-  return all;
-}
-function coverControls(): FakeNode[] {
-  const group = find(container, (n) => n.attributes?.role === "radiogroup" && n.attributes?.["aria-label"] === "Video cover");
-  return group ? findAll(group, (n) => n.nodeName === "INPUT") : [];
-}
-function googleBoxButton(): FakeNode {
-  const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.["aria-controls"] === "google-post-box-settings");
-  if (!hit) throw new Error("no Google box button");
-  return hit;
-}
-function whenButtons(): FakeNode[] {
-  const group = find(container, (n) => n.attributes?.["aria-label"] === "When to publish" && n.attributes?.role === "group");
-  if (!group) throw new Error("no When to publish group");
-  return findAll(group, (n) => n.nodeName === "BUTTON");
-}
 const REFUSED = () => Response.json({ error: "Something went wrong saving this post. Try again." }, { status: 400 });
 
 /** The box's settings panel: always rendered while the box is, so a new node means a new mount. */
