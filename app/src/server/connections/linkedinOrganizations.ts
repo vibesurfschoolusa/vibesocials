@@ -148,12 +148,13 @@ export async function lookupOrganizationOutcome(
       LINKEDIN_LOOKUP_TIMEOUT_MS,
     );
     if (!response.ok) {
-      console.log("[LinkedIn OAuth] Organization lookup failed", { orgId: id, status: response.status });
+      // R67 pages-a-2 L1: the id can be the hint the person typed, so it is not logged.
+      console.log("[LinkedIn OAuth] Organization lookup failed", { status: response.status });
       return refusedOutcome(response.status);
     }
     return readOrFailed(readOrganization(await response.json(), id));
   } catch (error) {
-    console.log("[LinkedIn OAuth] Organization lookup error", { orgId: id, ...errorKind(error) });
+    console.log("[LinkedIn OAuth] Organization lookup error", errorKind(error));
     return { outcome: "failed" };
   }
 }

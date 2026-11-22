@@ -1660,6 +1660,27 @@ describe("youtube OAuth callback: the upload permission", () => {
     const args = createMock.mock.calls[0][0] as { data: { scopes: string[] } };
     expect(args.data.scopes).toContain("https://www.googleapis.com/auth/youtube.upload");
   });
+
+  // R67 pages-a-2 L1: the channel title is often the person's own name.
+  it("a connect never logs the channel title", async () => {
+    fetchMock.mockImplementation(async (input: string | URL) =>
+      youtubeProvider(
+        "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly",
+      )(String(input)),
+    );
+    const { logger } = await import("@/lib/logger");
+
+    const res = await youtubeGET(callbackRequest("youtube", signedState()));
+
+    expect(location(res).searchParams.get("success")).toBe("youtube_connected");
+    const logged = JSON.stringify(
+      [console.log, console.info, console.warn, console.error, logger.debug, logger.info, logger.warn, logger.error].map(
+        (method) => vi.mocked(method).mock.calls,
+      ),
+    );
+    expect(logged).toContain("Successfully connected");
+    expect(logged).not.toContain("My Channel");
+  });
 });
 
 // R36 platform-clients L1: every call a callback makes while the person waits

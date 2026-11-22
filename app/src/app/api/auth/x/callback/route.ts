@@ -189,9 +189,10 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
       return oauthErrorRedirect("x", "invalid_token_response", process.env.NEXTAUTH_URL!);
     }
 
+    // R67 pages-a-2 L1: whether X sent them, never the handle or X's user id.
     console.log("[X OAuth 1.0a] Access token received", {
-      screenName,
-      userIdFromX,
+      hasScreenName: screenName !== null,
+      hasUserId: userIdFromX !== null,
     });
 
     const saved = await saveSocialConnection({

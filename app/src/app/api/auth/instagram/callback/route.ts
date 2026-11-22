@@ -145,7 +145,6 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     console.log("[Instagram OAuth] Pages fetched:", {
       count: pagesRead.pages.length,
       cut: pagesRead.cut,
-      pages: pagesRead.pages.map((page) => ({ id: page.id, name: page.name })),
     });
 
     // The pages with an Instagram Business Account linked
@@ -228,11 +227,8 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       return NextResponse.redirect(refusedSaveSettingsUrl(request.url, Platform.instagram, saved));
     }
 
-    console.log("[Instagram OAuth] Connection successful", {
-      userId,
-      username: details.username,
-      igAccountId,
-    });
+    // R67 pages-a-2 L1: our own ids only, never the account's username or id.
+    console.log("[Instagram OAuth] Connection successful", { userId });
 
     return NextResponse.redirect(
       new URL("/settings?success=instagram_connected", request.url),

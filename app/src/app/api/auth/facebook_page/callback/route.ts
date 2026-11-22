@@ -124,7 +124,6 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     console.log("[FacebookPage OAuth] Pages fetched:", {
       count: pagesRead.pages.length,
       cut: pagesRead.cut,
-      pages: pagesRead.pages.map((page) => ({ id: page.id, name: page.name })),
     });
 
     if (pagesRead.pages.length === 0) {
@@ -158,8 +157,6 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     }
 
     const [page] = pages;
-    const pageId = page.id;
-    const pageName = page.name;
 
     const saved = await saveFacebookPageConnection({ userId, workspaceId, page, expiresAt });
     if (!saved.ok) {
@@ -168,11 +165,8 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       return NextResponse.redirect(refusedSaveSettingsUrl(request.url, Platform.facebook_page, saved));
     }
 
-    console.log("[FacebookPage OAuth] Connection successful", {
-      userId,
-      pageId,
-      pageName,
-    });
+    // R67 pages-a-2 L1: our own ids only, never the Page's name or id.
+    console.log("[FacebookPage OAuth] Connection successful", { userId });
 
     return NextResponse.redirect(
       new URL("/settings?success=facebook_page_connected", request.url),

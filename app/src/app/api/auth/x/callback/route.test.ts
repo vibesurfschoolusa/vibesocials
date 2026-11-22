@@ -416,3 +416,28 @@ describe("X OAuth callback: a link's handshake without the link's cookie", () =>
     expect(denied.searchParams.get("error")).toBe("x_cancelled");
   });
 });
+
+// R67 pages-a-2 L1: a client's @handle and X user id are theirs, not the log's.
+describe("X OAuth callback: the log holds no handle or X user id", () => {
+  it("a connect logs neither the screen name nor the user id", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: STARTER });
+    fetchMock.mockResolvedValue(
+      new Response("oauth_token=access-token&oauth_token_secret=access-secret&screen_name=janedoe_surf&user_id=9081726354", {
+        status: 200,
+      }),
+    );
+    const { logger } = await import("@/lib/logger");
+
+    const res = await GET(callbackRequest());
+
+    expect(location(res).searchParams.get("success")).toBe("x_connected");
+    const logged = JSON.stringify(
+      [console.log, console.info, console.warn, console.error, logger.debug, logger.info, logger.warn, logger.error].map(
+        (method) => vi.mocked(method).mock.calls,
+      ),
+    );
+    expect(logged).toContain("Access token received");
+    expect(logged).not.toContain("janedoe_surf");
+    expect(logged).not.toContain("9081726354");
+  });
+});

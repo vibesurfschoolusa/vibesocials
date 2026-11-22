@@ -101,12 +101,6 @@ exports[`'facebook_page' callback, signed in: unchanged > success 1`] = `
       {
         "count": 1,
         "cut": false,
-        "pages": [
-          {
-            "id": "page-1",
-            "name": "Page",
-          },
-        ],
       },
     ],
     [
@@ -152,8 +146,6 @@ exports[`'facebook_page' callback, signed in: unchanged > success 1`] = `
       "console.log",
       "[FacebookPage OAuth] Connection successful",
       {
-        "pageId": "page-1",
-        "pageName": "Page",
         "userId": "user-owner",
       },
     ],
@@ -438,12 +430,6 @@ exports[`'instagram' callback, signed in: unchanged > success 1`] = `
       {
         "count": 1,
         "cut": false,
-        "pages": [
-          {
-            "id": "page-1",
-            "name": "Page",
-          },
-        ],
       },
     ],
     [
@@ -496,9 +482,7 @@ exports[`'instagram' callback, signed in: unchanged > success 1`] = `
       "console.log",
       "[Instagram OAuth] Connection successful",
       {
-        "igAccountId": "ig-1",
         "userId": "user-owner",
-        "username": "brand",
       },
     ],
   ],
@@ -647,8 +631,8 @@ exports[`'linkedin' callback, signed in: unchanged > success 1`] = `
       "[LinkedIn OAuth] Profile data",
       {
         "hasEmail": false,
-        "name": "LinkedIn User",
-        "sub": "linkedin_1794384000000",
+        "hasName": true,
+        "hasSub": true,
       },
     ],
     [
@@ -670,12 +654,6 @@ exports[`'linkedin' callback, signed in: unchanged > success 1`] = `
       "[LinkedIn OAuth] Strategy 1 SUCCESS",
       {
         "count": 1,
-        "orgs": [
-          {
-            "id": "101",
-            "name": "Org",
-          },
-        ],
       },
     ],
     [
@@ -683,12 +661,6 @@ exports[`'linkedin' callback, signed in: unchanged > success 1`] = `
       "[LinkedIn OAuth] Final organizations result",
       {
         "count": 1,
-        "organizations": [
-          {
-            "id": "101",
-            "name": "Org",
-          },
-        ],
       },
     ],
     [
@@ -1270,8 +1242,8 @@ exports[`'x' callback, signed in: unchanged > success 1`] = `
       "console.log",
       "[X OAuth 1.0a] Access token received",
       {
-        "screenName": "brand",
-        "userIdFromX": "42",
+        "hasScreenName": true,
+        "hasUserId": true,
       },
     ],
     [
@@ -1507,8 +1479,7 @@ exports[`'youtube' callback, signed in: unchanged > success 1`] = `
     ],
     [
       "console.log",
-      "[YouTube OAuth] Successfully connected channel:",
-      "My Channel",
+      "[YouTube OAuth] Successfully connected the channel",
     ],
   ],
   "headers": {

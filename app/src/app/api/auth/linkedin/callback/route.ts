@@ -138,9 +138,10 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
       picture: null,
     };
 
+    // R67 pages-a-2 L1: whether LinkedIn sent them, never the member's id or name.
     console.log("[LinkedIn OAuth] Profile data", {
-      sub: profile.sub,
-      name: profile.name,
+      hasSub: !!profile.sub,
+      hasName: !!profile.name,
       hasEmail: !!profile.email,
     });
 
@@ -159,7 +160,6 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
       organizations = administered;
       console.log("[LinkedIn OAuth] Strategy 1 SUCCESS", {
         count: organizations.length,
-        orgs: organizations,
       });
     } else {
       console.log("[LinkedIn OAuth] Strategy 1 found no organizations", {
@@ -194,10 +194,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
           const previousOrgs = metadata.organizations || [];
           
           if (previousOrgs.length > 0 && previousOrgs[0].id !== undefined) {
-            console.log("[LinkedIn OAuth] Found organization from previous connection", {
-              orgId: previousOrgs[0].id,
-              orgName: previousOrgs[0].name,
-            });
+            console.log("[LinkedIn OAuth] Found organization from previous connection");
             
             // Verify the organization is still accessible with new token
             const org = await lookupOrganization(tokenData.access_token, String(previousOrgs[0].id));
@@ -207,7 +204,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
                 name: org.name || previousOrgs[0].name,
                 vanityName: org.vanityName || previousOrgs[0].vanityName || null,
               }];
-              console.log("[LinkedIn OAuth] Previous organization verified and reused!", organizations[0]);
+              console.log("[LinkedIn OAuth] Previous organization verified and reused!");
             } else {
               console.log("[LinkedIn OAuth] Previous organization verification failed");
             }
@@ -248,7 +245,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
               name: org.name,
               vanityName: org.vanityName || null,
             }];
-            console.log("[LinkedIn OAuth] Organization found by ID!", organizations[0]);
+            console.log("[LinkedIn OAuth] Organization found by ID!");
           }
         } else {
           // Strategy 3b: Lookup by vanity name
@@ -262,7 +259,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
               name: org.name,
               vanityName: org.vanityName,
             }];
-            console.log("[LinkedIn OAuth] Organization found by vanity name!", organizations[0]);
+            console.log("[LinkedIn OAuth] Organization found by vanity name!");
           }
         }
       }
@@ -282,7 +279,6 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
 
     console.log("[LinkedIn OAuth] Final organizations result", {
       count: organizations.length,
-      organizations,
     });
 
     // Calculate token expiry

@@ -196,7 +196,8 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       return NextResponse.redirect(refusedSaveSettingsUrl(request.url, "youtube", saved));
     }
 
-    console.log("[YouTube OAuth] Successfully connected channel:", accountIdentifier);
+    // R67 pages-a-2 L1: never the channel's title, often the person's own name.
+    console.log("[YouTube OAuth] Successfully connected the channel");
 
     return NextResponse.redirect(
       new URL("/settings?success=youtube_connected", request.url),
