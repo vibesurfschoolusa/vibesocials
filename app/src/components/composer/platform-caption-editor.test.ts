@@ -104,6 +104,47 @@ describe("PlatformCaptionEditor: the count line", () => {
   });
 });
 
+// R66 publishing-flow L1: TikTok's count is in UTF-16 units; its hint gets the
+// line Pinterest's has. ASCII reads as before.
+describe("PlatformCaptionEditor: TikTok's count line", () => {
+  const html = (text: string) =>
+    renderToStaticMarkup(
+      createElement(
+        ToastProvider,
+        null,
+        createElement(PlatformCaptionEditor, {
+          idPrefix: "t",
+          platforms: ["tiktok"],
+          caption: "main",
+          overrides: { tiktok: text },
+          onChange: () => {},
+          workspaceId: "ws",
+          footer: null,
+        }),
+      ),
+    );
+  const countLine = (markup: string) => markup.match(/<p id="t-tiktok-count"[^>]*>.*?<\/p>/)?.[0];
+
+  it("one wave: 2 / 2,200, the hint on its own line, both describing the box", () => {
+    const markup = html("\u{1F30A}");
+    expect(countLine(markup)).toBe(
+      '<p id="t-tiktok-count" class="ml-auto text-xs tabular-nums text-muted-foreground">2 / 2,200</p>',
+    );
+    expect(markup).toContain(
+      '<p id="t-tiktok-count-hint" class="text-xs text-muted-foreground">TikTok counts some characters, such as emoji, as 2 or more.</p>',
+    );
+    expect(markup).toContain('aria-describedby="t-tiktok-count t-tiktok-count-hint"');
+  });
+
+  it("plain ASCII: the count alone, as before", () => {
+    const markup = html("Dawn patrol");
+    expect(countLine(markup)).toBe(
+      '<p id="t-tiktok-count" class="ml-auto text-xs tabular-nums text-muted-foreground">11 / 2,200</p>',
+    );
+    expect(markup).not.toContain("t-tiktok-count-hint");
+  });
+});
+
 // R53 platform-clients L1: Pinterest's count is in code points, as its client
 // cuts; its hint gets the line YouTube's has. ASCII reads as before.
 describe("PlatformCaptionEditor: Pinterest's count line", () => {

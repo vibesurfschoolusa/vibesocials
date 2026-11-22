@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildCaptionWithFooter } from "./captionFooter";
-import { buildPlatformPreview, type PlatformPreviewInput } from "./platformPreview";
+import { buildPlatformPreview, type PlatformPreviewInput, unitCountText } from "./platformPreview";
 import { truncateGraphemes } from "./truncate";
 import { computeGbpPostSummary } from "@/server/platforms/googleBusinessProfileClient";
 import { computeInstagramCaption } from "@/server/platforms/instagramClient";
@@ -702,22 +702,77 @@ describe("buildPlatformPreview on the other platforms, unchanged by Pinterest's 
       // R65: UTF-16 units, so the four waves count 2 each.
       charCount: 193,
       limit: 2200,
+      // R66 publishing-flow L1: the waves make the count run ahead, so the hint shows.
+      countHint: TIKTOK_HINT,
+      countIncludesFooter: true,
       truncated: false,
       willTruncate: false,
     });
     const result = buildPlatformPreview({ platform: "tiktok", caption: long, user });
-    expect(Object.keys(result).sort()).toEqual(["charCount", "limit", "rendered", "truncated", "willTruncate"]);
+    expect(Object.keys(result).sort()).toEqual([
+      "charCount",
+      "countIncludesFooter",
+      "limit",
+      "rendered",
+      "truncated",
+      "willTruncate",
+    ]);
+    // Plain text with one-unit accents: no hint. Over the limit the footer isn't posted, so the count leaves it out.
+    expect(result).toMatchObject({ countIncludesFooter: false });
     // R63 platform-clients L1: cut at the last whole word, before "waves".
     expect(result.rendered.length).toBe(2196);
     expect(result).toMatchObject({ charCount: 3749, limit: 2200, truncated: true, willTruncate: true });
   });
 
+  // R66: TikTok has its own hint since ("TikTok's count hint" below).
   it("no other platform gets a hint", () => {
-    for (const platform of ["x", "tiktok", "instagram", "linkedin", "facebook_page", "google_business_profile"] as const) {
+    for (const platform of ["x", "instagram", "linkedin", "facebook_page", "google_business_profile"] as const) {
       for (const caption of [short, long, "é \u{1F468}‍\u{1F469}‍\u{1F467} ❤️"]) {
         expect(buildPlatformPreview({ platform, caption, user })).not.toHaveProperty("countHint");
       }
     }
+  });
+});
+
+// R66 publishing-flow L1: TikTok counts UTF-16 units, so an emoji counts 2 or
+// more; the card says so, as Pinterest's and YouTube's do, and its count line
+// is the counter's label (unitCountText), with no "characters".
+const TIKTOK_HINT = "TikTok counts some characters, such as emoji, as 2 or more.";
+describe("TikTok's count hint", () => {
+  it("one wave: the hint, and the count in units", () => {
+    const result = buildPlatformPreview({ platform: "tiktok", caption: "\u{1F30A}" });
+    expect(result).toMatchObject({ charCount: 2, countHint: TIKTOK_HINT, countIncludesFooter: false });
+    expect(unitCountText(result)).toBe("2 / 2,200");
+  });
+
+  it("plain ASCII: no hint", () => {
+    const result = buildPlatformPreview({ platform: "tiktok", caption: "Dawn patrol at Las Olas" });
+    expect(result).not.toHaveProperty("countHint");
+    expect(unitCountText(result)).toBe("23 / 2,200");
+  });
+
+  it("the card's label: the counter's, with incl. footer while the footer is posted", () => {
+    const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #waves", trackWebsiteLinks: true };
+    const posted = "hello\n\nFor more info visit vibesurfschool.com\n\n#surf #waves";
+    expect(unitCountText(buildPlatformPreview({ platform: "tiktok", caption: "hello", user }))).toBe(
+      `${posted.length} / 2,200 incl. footer`,
+    );
+    expect(unitCountText(buildPlatformPreview({ platform: "tiktok", caption: "a".repeat(2300), user }))).toBe(
+      "2,300 / 2,200",
+    );
+  });
+
+  it("Pinterest's and YouTube's hints: as before", () => {
+    // One wave is one code point, so Pinterest's hint needs a heart (two).
+    expect(buildPlatformPreview({ platform: "pinterest", caption: "\u{1F30A}" })).not.toHaveProperty("countHint");
+    expect(buildPlatformPreview({ platform: "pinterest", caption: "❤️" }).countHint).toBe(
+      "Pinterest counts some characters, such as emoji, as 2 or more.",
+    );
+    expect(buildPlatformPreview({ platform: "pinterest", caption: "a" })).not.toHaveProperty("countHint");
+    expect(buildPlatformPreview({ platform: "youtube", caption: "\u{1F30A}" }).countHint).toBe(
+      "YouTube counts accented letters, curly quotes and emoji as 2 or more.",
+    );
+    expect(buildPlatformPreview({ platform: "youtube", caption: "a" })).not.toHaveProperty("countHint");
   });
 });
 

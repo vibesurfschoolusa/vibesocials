@@ -198,6 +198,31 @@ describe("PlatformPreviewList Pinterest count line", () => {
   });
 });
 
+// R66 publishing-flow L1: TikTok counts UTF-16 units; its card shows its
+// counter's label, with no "characters", and the hint when an emoji counts 2.
+describe("PlatformPreviewList TikTok count line", () => {
+  const lines = (caption: string) =>
+    (
+      renderToStaticMarkup(
+        createElement(PlatformPreviewList, { platforms: ["tiktok"], caption, user: null, mediaUrl: null, mediaMimeType: null }),
+      ).match(/<p class="text-xs text-muted-foreground">[^<]*<\/p>/g) ?? []
+    ).slice(1);
+  const line = (text: string) => `<p class="text-xs text-muted-foreground">${text}</p>`;
+
+  it("one wave: 2 / 2,200 and the hint, as the counter shows", () => {
+    const counter = platformCaptionCounter("\u{1F30A}", "tiktok", null);
+    expect(lines("\u{1F30A}")).toEqual([
+      line("2 / 2,200"),
+      line("TikTok counts some characters, such as emoji, as 2 or more."),
+    ]);
+    expect([counter.label, counter.hint]).toEqual(["2 / 2,200", "TikTok counts some characters, such as emoji, as 2 or more."]);
+  });
+
+  it("plain ASCII: the count alone", () => {
+    expect(lines("Dawn patrol")).toEqual([line("11 / 2,200")]);
+  });
+});
+
 // R53 follow-up: every other platform's card line, pinned from main 632efda.
 describe("PlatformPreviewList count line on the other platforms, unchanged by Pinterest's", () => {
   const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #waves", trackWebsiteLinks: true };
@@ -213,8 +238,13 @@ describe("PlatformPreviewList count line on the other platforms, unchanged by Pi
 
   it.each([
     ["x", ["198 / 280 characters"], ["3749 / 280 characters"]],
-    // R65: TikTok counts UTF-16 units, so the four waves count 2 each.
-    ["tiktok", ["193 / 2200 characters"], ["3749 / 2200 characters"]],
+    // R65: TikTok counts UTF-16 units, so the four waves count 2 each. R66
+    // publishing-flow L1: the counter's label and its hint, as Pinterest's card shows.
+    [
+      "tiktok",
+      ["193 / 2,200 incl. footer", "TikTok counts some characters, such as emoji, as 2 or more."],
+      ["3,749 / 2,200"],
+    ],
     ["instagram", ["189 / 2200 characters"], ["3749 / 2200 characters"]],
     ["linkedin", ["253 / 3000 characters"], ["3749 / 3000 characters"]],
     ["facebook_page", ["253 characters"], ["3867 characters"]],

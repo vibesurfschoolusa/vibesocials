@@ -18,6 +18,15 @@ function countGraphemes(text: string): number {
   return [...graphemeSegmenter.segment(text)].length;
 }
 
+/**
+ * R66 publishing-flow L1: TikTok counts UTF-16 units, so an emoji counts 2 or
+ * more and the count runs ahead of what the person sees; say so, as Pinterest's
+ * hint does.
+ */
+function tiktokCountHint(text: string): string | null {
+  return text.length > countGraphemes(text) ? "TikTok counts some characters, such as emoji, as 2 or more." : null;
+}
+
 /** The text's length in the unit its platform's client cuts by (platformLimits.ts). */
 function countIn(unit: CaptionUnit | null, text: string): number {
   if (unit === "xWeight") return xWeightedLength(text);
@@ -76,15 +85,17 @@ export interface PlatformPreviewResult {
   byteLimit?: number;
   /**
    * Why the count runs ahead of the characters a person sees, when one counts
-   * as more than one: YouTube (bytes) and Pinterest (code points) only.
+   * as more than one: YouTube (bytes), Pinterest (code points) and TikTok
+   * (UTF-16 units) only.
    */
   countHint?: string;
   /**
    * Only on a platform whose card shows its counter's label (YouTube,
-   * Pinterest; see `unitCountText`): true when the count includes the
+   * Pinterest, TikTok; see `unitCountText`): true when the count includes the
    * workspace's footer. YouTube always keeps its footer (captionFooter.ts drops
    * none without a character limit), so this holds over the limit too, where
-   * the cut takes the footer; Pinterest's is false once the footer is dropped.
+   * the cut takes the footer; Pinterest's and TikTok's are false once the
+   * footer is dropped.
    */
   countIncludesFooter?: boolean;
   /** True when `rendered` is shorter than the full (pre-truncation) text. */
@@ -101,7 +112,8 @@ export interface PlatformPreviewResult {
 
 /**
  * "4,812 / 5,000 incl. footer" for a platform whose count is not the
- * characters a person sees: YouTube in bytes, Pinterest in code points (R53).
+ * characters a person sees: YouTube in bytes, Pinterest in code points (R53),
+ * TikTok in UTF-16 units (R66).
  * Null elsewhere, where the card keeps its own line. The caption counter and
  * the preview card both show this, with `countHint` beneath, so they can't differ.
  */
@@ -185,11 +197,16 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
     // R64 Google Business Profile, computeGbpPostSummary).
     else rendered = truncateGraphemesAtWord(fullCaption, charLimit, { ellipsis });
   }
-  const countHint = input.platform === "pinterest" ? pinterestCountHint(fullCaption) : null;
-  // Pinterest's card shows its counter's label (unitCountText): the footer is
-  // counted when publishing keeps it, as the counter decides.
-  const pinterest =
+  const countHint =
     input.platform === "pinterest"
+      ? pinterestCountHint(fullCaption)
+      : input.platform === "tiktok"
+        ? tiktokCountHint(fullCaption)
+        : null;
+  // Pinterest's and TikTok's cards show their counter's label (unitCountText):
+  // the footer is counted when publishing keeps it, as the counter decides.
+  const pinterest =
+    input.platform === "pinterest" || input.platform === "tiktok"
       ? {
           countIncludesFooter:
             buildCaptionWithFooter(effectiveCaption, input.user ?? {}, input.platform) !==

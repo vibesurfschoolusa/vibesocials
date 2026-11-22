@@ -550,20 +550,52 @@ describe("platformCaptionCounter on TikTok, unchanged by Pinterest's unit", () =
   const short = "Dawn patrol at Las Olas \u{1F30A} <3 café ".repeat(4).trim();
   const long = "Glassy waves é ".repeat(250);
 
+  // R66 publishing-flow L1: the waves and the family count more units than
+  // characters, so they have the hint; the long one's accents are one unit each.
   it("short, long, a family and an accent", () => {
     expect(platformCaptionCounter(short, "tiktok", user)).toEqual({
       length: 193,
       max: 2200,
       over: false,
       label: "193 / 2,200 incl. footer",
+      hint: TIKTOK_HINT,
     });
-    expect(platformCaptionCounter(long, "tiktok", user)).toEqual({ length: 3749, max: 2200, over: true, label: "3,749 / 2,200" });
+    expect(platformCaptionCounter(long, "tiktok", user)).toEqual({
+      length: 3749,
+      max: 2200,
+      over: true,
+      label: "3,749 / 2,200",
+    });
     expect(platformCaptionCounter("é \u{1F468}‍\u{1F469}‍\u{1F467}", "tiktok", null)).toEqual({
       length: 11,
       max: 2200,
       over: false,
       label: "11 / 2,200",
+      hint: TIKTOK_HINT,
     });
     expect(adaptMaxLength("tiktok", user)).toBe(2146);
+  });
+});
+
+// R66 publishing-flow L1: TikTok's own counter gives the hint its card gives.
+const TIKTOK_HINT = "TikTok counts some characters, such as emoji, as 2 or more.";
+describe("platformCaptionCounter: TikTok's count hint", () => {
+  it("one wave: 2 / 2,200, with the hint", () => {
+    expect(platformCaptionCounter("\u{1F30A}", "tiktok", null)).toEqual({
+      length: 2,
+      max: 2200,
+      over: false,
+      label: "2 / 2,200",
+      hint: TIKTOK_HINT,
+    });
+  });
+
+  it("plain ASCII: no hint, as before", () => {
+    expect(platformCaptionCounter("Dawn patrol", "tiktok", null)).toEqual({
+      length: 11,
+      max: 2200,
+      over: false,
+      label: "11 / 2,200",
+    });
   });
 });

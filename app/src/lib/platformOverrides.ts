@@ -164,7 +164,7 @@ export function platformCaptionCounter(
     const footerPosted =
       preview.rendered !== buildPlatformPreview({ platform, caption: text, user: null }).rendered;
     const incl = footerPosted ? " incl. footer" : "";
-    // YouTube and Pinterest: the same count, limit and hint as their preview card.
+    // YouTube, Pinterest and TikTok: the same count, limit and hint as their preview card.
     const unitText = unitCountText(preview);
     if (unitText !== null) {
       return {
