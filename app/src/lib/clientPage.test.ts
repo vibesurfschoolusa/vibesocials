@@ -18,6 +18,11 @@ describe("workspaceInitials", () => {
   it("counts an emoji as one character", () => {
     expect(workspaceInitials("🌊 Waves")).toBe("🌊W");
   });
+  // R66 (lead grep): the first code point of a flag is half of it.
+  it("keeps a flag or a skin-tone emoji whole", () => {
+    expect(workspaceInitials("\u{1F1FA}\u{1F1F8} Surf")).toBe("\u{1F1FA}\u{1F1F8}S");
+    expect(workspaceInitials("\u{1F44D}\u{1F3FD} Surf")).toBe("\u{1F44D}\u{1F3FD}S");
+  });
 });
 
 describe("formatFileSize", () => {

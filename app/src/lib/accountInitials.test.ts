@@ -67,6 +67,13 @@ describe("firstName", () => {
   it("is cut to 24 characters so a pasted sentence cannot flood the heading", () => {
     expect(firstName("Supercalifragilisticexpialidocious")).toBe("Supercalifragilisticexpi");
   });
+
+  // R66 publishing-flow-2 L1 (lead grep): cut by code point, the 24th place kept
+  // a hand without its skin tone, or half a flag.
+  it("keeps an emoji at the 24th place whole", () => {
+    expect(firstName(`${"a".repeat(23)}\u{1F44D}\u{1F3FD}bc`)).toBe(`${"a".repeat(23)}\u{1F44D}\u{1F3FD}`);
+    expect(firstName(`${"a".repeat(23)}\u{1F1FA}\u{1F1F8}bc`)).toBe(`${"a".repeat(23)}\u{1F1FA}\u{1F1F8}`);
+  });
 });
 
 describe("accountWorkspaceLine", () => {

@@ -797,6 +797,18 @@ describe("buildPostOutcomeEmail - names the workspace and the post (F4)", () => 
     expect(email.html).not.toContain("Reference");
   });
 
+  // R66 publishing-flow-2 L1: counted by code point, the cut left half a flag,
+  // a hand without its skin tone, or one person of a family.
+  it.each([
+    ["a flag", "\u{1F1FA}\u{1F1F8}"],
+    ["a skin-tone emoji", "\u{1F44D}\u{1F3FD}"],
+    ["a family emoji", "\u{1F468}‍\u{1F469}‍\u{1F467}"],
+  ])("keeps %s at the 80th place whole", (_name, emoji) => {
+    const caption = `${"a".repeat(79)}${emoji} surf all day`;
+    const email = buildPostOutcomeEmail({ results, appBaseUrl: null, ...WS, caption });
+    expect(email.html).toContain(`<p>Caption: ${"a".repeat(79)}${emoji}…</p>`);
+  });
+
   it("quotes a short caption whole and leaves the line out for an empty one", () => {
     expect(buildPostOutcomeEmail({ results, appBaseUrl: null, ...WS }).html).toContain(
       "<p>Caption: Dawn patrol tomorrow at 6</p>",

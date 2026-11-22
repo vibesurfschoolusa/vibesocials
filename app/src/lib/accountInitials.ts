@@ -1,3 +1,5 @@
+import { truncateGraphemes } from "@/lib/truncate";
+
 const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 
 function firstLetterOrDigit(text: string): string | null {
@@ -46,7 +48,8 @@ const FIRST_NAME_MAX = 24;
 export function firstName(name: string | null | undefined): string | null {
   for (const word of (name ?? "").split(/\s+/)) {
     const trimmed = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
-    if (trimmed) return Array.from(trimmed).slice(0, FIRST_NAME_MAX).join("");
+    // R66: by grapheme, so an emoji at the limit is kept whole.
+    if (trimmed) return truncateGraphemes(trimmed, FIRST_NAME_MAX);
   }
   return null;
 }

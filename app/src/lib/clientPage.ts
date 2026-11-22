@@ -3,11 +3,13 @@
  * the workspace's initials for the header tile, and the upload page's file list.
  */
 
+import { truncateGraphemes } from "@/lib/truncate";
+
 export function workspaceInitials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean).slice(0, 2);
   if (words.length === 0) return "?";
-  // Array.from so an emoji or other surrogate pair counts as one character.
-  return words.map((word) => Array.from(word)[0].toUpperCase()).join("");
+  // The first grapheme, so an emoji, a flag or a skin tone stays whole (R66).
+  return words.map((word) => truncateGraphemes(word, 1).toUpperCase()).join("");
 }
 
 export function formatFileSize(bytes: number): string {
