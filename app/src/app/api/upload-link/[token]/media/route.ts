@@ -12,6 +12,7 @@ import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { FILENAME_MAX_LENGTH, MAX_MEDIA_BYTES, UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
+import { truncateGraphemesWithinCodePoints } from "@/lib/truncate";
 import { unsupportedTypeMessage } from "@/lib/prepareUploadFile";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
@@ -82,7 +83,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
   const urlLinkId = uploadLinkIdOfBlobUrl(blobUrl, ownBlobStoreId());
   if (!urlLinkId) return refuse(NOT_THROUGH_LINK_MESSAGE);
   const filename =
-    (typeof body.filename === "string" ? body.filename.trim().slice(0, FILENAME_MAX_LENGTH) : "") ||
+    (typeof body.filename === "string" ? truncateGraphemesWithinCodePoints(body.filename.trim(), FILENAME_MAX_LENGTH) : "") ||
     "upload";
   const senderName = cleanSenderText(body.senderName, { singleLine: true });
   const note = cleanSenderText(body.note);

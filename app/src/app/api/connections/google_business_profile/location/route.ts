@@ -4,6 +4,7 @@ import { requireOwnerContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { truncateGraphemesWithinCodePoints } from "@/lib/truncate";
 import { Platform, Prisma } from "@prisma/client";
 
 import { STORE_CODE_NOT_UNIQUE_MESSAGE, exactStoreCodeMatches } from "@/server/platforms/gbpLocation";
@@ -100,7 +101,8 @@ export async function POST(request: Request) {
   // The business name comes from Google's list, never the browser: Save from
   // the Advanced field sends none, and wiped "Connected as <business>"
   // (lib/connectionSummary.ts) until the daily backfill (R56 new-customer-2 L1).
-  const locationTitle = matched.title?.trim().slice(0, MAX_LOCATION_TITLE_LENGTH) || null;
+  const title = matched.title?.trim();
+  const locationTitle = (title && truncateGraphemesWithinCodePoints(title, MAX_LOCATION_TITLE_LENGTH)) || null;
 
   const existingMetadata = (connection.metadata as Record<string, unknown> | null) ?? {};
 

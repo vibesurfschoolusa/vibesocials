@@ -19,6 +19,7 @@ import type { GoogleBusinessPostMetadata, YouTubePostMetadata } from "@/server/p
 import { answerLostText } from "@/lib/answerLost";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { tooManyTriesSentence, waitSecondsOf } from "@/lib/tooManyTriesText";
+import { truncateGraphemesWithinCodePoints } from "@/lib/truncate";
 
 /**
  * Add many's share of what makes Create pleasant (P1 parity): Improve, the
@@ -287,7 +288,11 @@ export async function describePhotoOnce(
   }
 }
 
-/** The auto-caption route takes at most this many sibling captions, each at most this long. */
+/**
+ * The auto-caption route takes at most this many sibling captions, each at most
+ * this many code points in whole graphemes, as its captionVariety keeps them
+ * (R67: a UTF-16 cut sent half an emoji).
+ */
 const AVOID_MAX = 10;
 const AVOID_LENGTH = 300;
 
@@ -298,7 +303,7 @@ export function siblingCaptions(rows: readonly { id: string; caption: string }[]
     .map((row) => row.caption.trim())
     .filter(Boolean)
     .slice(0, AVOID_MAX)
-    .map((caption) => caption.slice(0, AVOID_LENGTH));
+    .map((caption) => truncateGraphemesWithinCodePoints(caption, AVOID_LENGTH));
 }
 
 /**

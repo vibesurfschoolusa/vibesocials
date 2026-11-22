@@ -679,3 +679,40 @@ describe("routeSentenceAfter keeps the route sentence's case", () => {
     for (const error of [undefined, "", "   ", 42]) expect(routeSentenceAfter("No caption was written", error)).toBeNull();
   });
 });
+
+// R67 publishing-flow L2: the cut keeps whole graphemes within 300 code
+// points, the bound the server's captionVariety keeps, so no lone surrogate
+// reaches the request.
+describe("Add many: avoidCaptions keep whole graphemes (R67)", () => {
+  const rows = (captions: string[]) => captions.map((caption, index) => ({ id: `r${index}`, caption }));
+  const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+  it("299 characters and then 🌊: the wave is kept whole", () => {
+    const [caption] = siblingCaptions(rows(["Mine", `${"a".repeat(299)}🌊 more`]), "r0");
+    expect(caption).toBe(`${"a".repeat(299)}🌊`);
+    expect(loneSurrogate.test(caption)).toBe(false);
+  });
+
+  it("300 characters and then 🌊: the wave is dropped whole", () => {
+    const [caption] = siblingCaptions(rows(["Mine", `${"a".repeat(300)}🌊`]), "r0");
+    expect(caption).toBe("a".repeat(300));
+  });
+
+  it("no lone surrogate reaches the request body", () => {
+    const body = autoCaptionRequestBody(
+      rows(["Mine", `${"a".repeat(299)}🌊🌊🌊`]),
+      "r0",
+      { url: "https://example.com/a.jpg", mimeType: "image/jpeg" },
+      [],
+      null,
+    );
+    expect(body.avoidCaptions?.some((caption) => loneSurrogate.test(caption))).toBe(false);
+  });
+
+  it("is fast at 100k characters", () => {
+    const started = performance.now();
+    const [caption] = siblingCaptions(rows(["Mine", "🌊".repeat(100_000)]), "r0");
+    expect(caption).toBe("🌊".repeat(300));
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+});

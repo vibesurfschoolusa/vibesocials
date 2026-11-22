@@ -4,7 +4,7 @@ import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { asStorageReadFailure } from "@/lib/publishFailureText";
-import { truncateUtf16AtWord } from "@/lib/truncate";
+import { truncateGraphemesWithinCodePoints, truncateUtf16AtWord } from "@/lib/truncate";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 
 import { commitRequest, publishUnconfirmedError } from "./commitCall";
@@ -1552,7 +1552,7 @@ export const tiktokClient: PlatformClient = {
       chunkSize: CHUNK_SIZE,
       totalChunks,
       hasAccessToken: !!accessToken,
-      captionPreview: tiktokCaption.substring(0, 100) + (tiktokCaption.length > 100 ? '...' : ''),
+      captionPreview: truncateGraphemesWithinCodePoints(tiktokCaption, 100) + (tiktokCaption.length > 100 ? '...' : ''),
     });
 
     const postInfo = buildPostInfo(ctx, tiktokCaption);

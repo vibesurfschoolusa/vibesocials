@@ -9,6 +9,7 @@ import { buttonVariants } from "@/components/ui/buttonVariants";
 import { PLAN_STATE_LABELS } from "@/lib/billing";
 import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
 import { tooManyTriesSentence } from "@/lib/tooManyTriesText";
+import { truncateGraphemesWithinCodePoints } from "@/lib/truncate";
 import { checkAdminRateLimit, getOperator } from "@/lib/operator";
 import { countWord } from "@/lib/plural";
 import { platformLabel } from "@/lib/platforms";
@@ -107,7 +108,7 @@ export default async function AdminPage({
 
   const params = await searchParams;
   const rawSearch = Array.isArray(params.q) ? params.q[0] : params.q;
-  const search = (rawSearch ?? "").trim().slice(0, ADMIN_SEARCH_MAX_LENGTH);
+  const search = truncateGraphemesWithinCodePoints((rawSearch ?? "").trim(), ADMIN_SEARCH_MAX_LENGTH);
   const rawPage = Number(Array.isArray(params.page) ? params.page[0] : params.page);
   const page = Number.isSafeInteger(rawPage) && rawPage > 1 ? rawPage - 1 : 0;
 

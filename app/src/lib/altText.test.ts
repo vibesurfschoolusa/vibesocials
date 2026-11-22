@@ -79,3 +79,42 @@ describe("altTextOf", () => {
     expect(altTextOf({ mimeType: "video/mp4", altText: "A clip." }, 500)).toBeUndefined();
   });
 });
+
+// R67 platform-clients L1: whole graphemes, a word end found at most 100
+// graphemes back, never over the bound in UTF-16 units.
+describe("fitAltText cuts whole graphemes (R67)", () => {
+  const FAMILY = "\u{1F468}‍\u{1F469}‍\u{1F467}"; // 8 units, one grapheme
+
+  it("drops the family emoji whole at Pinterest's 500 when it would cross the bound", () => {
+    const cut = fitAltText(`${"あ".repeat(498)}${FAMILY}${"い".repeat(50)}`, 500);
+    expect(cut).toBe("あ".repeat(498));
+  });
+
+  it("keeps the family emoji whole at 500 when it fits", () => {
+    const cut = fitAltText(`${"あ".repeat(490)}${FAMILY}${"い".repeat(50)}`, 500);
+    expect(cut).toBe(`${"あ".repeat(490)}${FAMILY}${"い".repeat(2)}`);
+    expect(cut.length).toBe(500);
+  });
+
+  it("keeps the CJK text after \"Photo: \" up to the bound, not just \"Photo:\"", () => {
+    const cut = fitAltText(`Photo: ${"写".repeat(800)}`, 500);
+    expect(cut).toBe(`Photo: ${"写".repeat(493)}`);
+  });
+
+  it("still ends at a word within the look-back", () => {
+    expect(fitAltText(`${"word ".repeat(99)}wordwordword`, 500)).toBe(`${"word ".repeat(98)}word`);
+  });
+
+  it("stores at 1,000 with the family emoji kept or dropped whole", () => {
+    const cleaned = cleanAltText(`${"あ".repeat(998)}${FAMILY}`);
+    expect(cleaned).toBe("あ".repeat(998));
+  });
+
+  it("is fast at 100k characters", () => {
+    const text = `${"写".repeat(50_000)}${"🌊".repeat(25_000)}`;
+    const started = performance.now();
+    expect(fitAltText(text, 1000).length).toBeLessThanOrEqual(1000);
+    expect(cleanAltText(text).length).toBeLessThanOrEqual(1000);
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+});

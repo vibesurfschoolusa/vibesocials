@@ -20,6 +20,7 @@ import {
 } from "@/lib/pinterestApi";
 import { mediaKindOf } from "@/lib/platformLimits";
 import { trackedWebsiteLink } from "@/lib/trackingTags";
+import { truncateGraphemesWithinCodePoints } from "@/lib/truncate";
 import type { UploadStateStore } from "@/server/jobs/uploadState";
 
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
@@ -150,7 +151,7 @@ async function failPinterestCall(
   console.error(`[Pinterest] ${failure.message}`, {
     status: response.status,
     errorCode: readPinterestErrorCode(body),
-    error: body.slice(0, 500),
+    error: truncateGraphemesWithinCodePoints(body, 500),
   });
   if (response.status === 401) await throwPinterestReconnect(connection);
   throw codedError(`${failure.message} (status ${response.status})`, failure.code, response.status);
@@ -422,7 +423,7 @@ async function createPin(args: {
     console.error("[Pinterest] Pin creation failed", {
       status: response.status,
       errorCode: readPinterestErrorCode(errorBody),
-      error: errorBody.slice(0, 500),
+      error: truncateGraphemesWithinCodePoints(errorBody, 500),
     });
     if (response.status === 401) await throwPinterestReconnect(connection);
     if (response.status === 404) {

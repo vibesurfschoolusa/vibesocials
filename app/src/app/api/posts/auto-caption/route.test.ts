@@ -1108,3 +1108,35 @@ describe("POST /api/posts/auto-caption: the page's workspace id", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// R67 publishing-flow L2: a sent maxLength cuts whole graphemes, never past
+// the bound in UTF-16 units, so no half emoji comes back.
+describe("POST /api/posts/auto-caption - maxLength (R67)", () => {
+  it("drops an emoji that would cross the bound whole", async () => {
+    fetchMock.mockImplementation(async () => providerOk("abcdefghi🌊 more"));
+
+    const response = await post({ ...validBody, maxLength: 10 });
+
+    await expect(response.json()).resolves.toEqual({ caption: "abcdefghi" });
+  });
+
+  it("keeps a family emoji whole when it fits", async () => {
+    fetchMock.mockImplementation(async () => providerOk("Hi 👨‍👩‍👧 all of you"));
+
+    const response = await post({ ...validBody, maxLength: 12 });
+
+    await expect(response.json()).resolves.toEqual({ caption: "Hi 👨‍👩‍👧" });
+  });
+
+  it("cuts plain text as before", async () => {
+    const response = await post({ ...validBody, maxLength: 12 });
+
+    await expect(response.json()).resolves.toEqual({ caption: "Fresh bread," });
+  });
+
+  it("leaves a caption within the bound alone", async () => {
+    const response = await post({ ...validBody, maxLength: 500 });
+
+    await expect(response.json()).resolves.toEqual({ caption: "Fresh bread, warm smiles." });
+  });
+});

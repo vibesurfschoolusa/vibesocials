@@ -4,6 +4,7 @@ import { billingEnabled, planState, type PlanState } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { PLATFORM_ORDER } from "@/lib/platforms";
 import { resolveWorkspaceLimits, type WorkspaceLimits } from "@/lib/usageLimits";
+import { truncateGraphemesWithinCodePoints } from "@/lib/truncate";
 import { getWorkspaceUsageOrNull, type WorkspaceUsage } from "@/server/usage/workspaceUsage";
 
 import { LIMIT_FIELDS, type LimitField } from "./actions";
@@ -157,7 +158,7 @@ function toRow(
 
 /** Name or an owner's email contains the text, ignoring case. Nothing else is searched. */
 function searchWhere(search: string): Prisma.WorkspaceWhereInput {
-  const text = search.trim().slice(0, ADMIN_SEARCH_MAX_LENGTH);
+  const text = truncateGraphemesWithinCodePoints(search.trim(), ADMIN_SEARCH_MAX_LENGTH);
   if (!text) return {};
   return {
     OR: [

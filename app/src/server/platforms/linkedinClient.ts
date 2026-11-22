@@ -7,7 +7,7 @@ import { mediaKindOf, photoSetFormatsReason, PLATFORM_CAPTION_LIMITS, unsupporte
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { asStorageReadFailure } from "@/lib/publishFailureText";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders, toLinkedInLittleText } from "@/lib/linkedinApi";
-import { truncateKeepingLinksAtWord } from "@/lib/truncate";
+import { truncateGraphemesWithinCodePoints, truncateKeepingLinksAtWord } from "@/lib/truncate";
 import type { PostCover } from "@/lib/videoCover";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 import {
@@ -1400,7 +1400,7 @@ async function checkVideoStatus(args: {
     console.error("[LinkedIn] Video processing failed", {
       videoUrn: video,
       videoStatus: status,
-      ...(typeof reason === "string" ? { processingFailureReason: reason.slice(0, 200) } : {}),
+      ...(typeof reason === "string" ? { processingFailureReason: truncateGraphemesWithinCodePoints(reason, 200) } : {}),
     });
     throw processingFailed();
   }

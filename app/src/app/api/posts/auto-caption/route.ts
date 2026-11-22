@@ -25,6 +25,7 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { tooManyTriesResponse } from "@/lib/tooManyTries";
+import { truncateUtf16AtWord } from "@/lib/truncate";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { MAX_VIDEO_FRAMES, parseVideoFrames } from "@/lib/videoFrames";
 import { getWorkspaceContext } from "@/lib/workspace";
@@ -387,7 +388,8 @@ The media is a short social media video. You do not have direct access to the vi
     caption = withoutHashtagSigns(caption).trim();
 
     if (typeof maxLength === "number" && maxLength > 0 && caption.length > maxLength) {
-      caption = caption.slice(0, maxLength).trim();
+      // R67: whole graphemes at a word end, never past the bound in units.
+      caption = truncateUtf16AtWord(caption, maxLength).trim();
     }
 
     if (!caption) {

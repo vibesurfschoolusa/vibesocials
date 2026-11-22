@@ -6,6 +6,8 @@
  * Pure: shared by the Create page, POST /api/posts and the platform clients.
  */
 
+import { truncateUtf16AtWord } from "@/lib/truncate";
+
 /** The most the app stores: X's limit, the largest of the platforms' that we confirmed. */
 export const ALT_TEXT_MAX = 1000;
 
@@ -17,19 +19,13 @@ const CONTROL_CHARACTERS = /[\x00-\x1f\x7f-\x9f]/g;
 
 /**
  * Cut `text` to at most `max` UTF-16 code units (the strictest way a platform
- * may count), at the last space that fits. A single word longer than `max` is
- * cut where it must be, never inside a surrogate pair.
+ * may count), in whole graphemes, at the last word end within 100 graphemes
+ * of the bound. R67 platform-clients L1: a code-point cut sent half a family
+ * emoji, and an unbounded look-back cut "Photo: " plus a long run of Japanese
+ * to "Photo:".
  */
 export function fitAltText(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const lastSpace = text.slice(0, max + 1).lastIndexOf(" ");
-  if (lastSpace > 0) return text.slice(0, lastSpace).trimEnd();
-  let cut = "";
-  for (const codePoint of text) {
-    if (cut.length + codePoint.length > max) break;
-    cut += codePoint;
-  }
-  return cut;
+  return truncateUtf16AtWord(text, max);
 }
 
 /**
