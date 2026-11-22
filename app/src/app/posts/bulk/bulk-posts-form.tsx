@@ -1267,7 +1267,7 @@ export function BulkPostsForm({
               {offeredPlatforms.map((platform) => (
                 <label
                   key={platform}
-                  className="flex min-h-11 cursor-pointer items-center gap-2 rounded-[var(--radius)] border border-input px-3 text-sm"
+                  className={`flex min-h-11 ${sendingMode !== null ? "cursor-not-allowed opacity-50" : "cursor-pointer"} items-center gap-2 rounded-[var(--radius)] border border-input px-3 text-sm`}
                 >
                   <input
                     type="checkbox"
@@ -1317,6 +1317,7 @@ export function BulkPostsForm({
               fileCount={1}
               videoDurationSec={null}
               onChange={setInstagramPlacement}
+              disabled={sendingMode !== null}
             />
           ) : null}
           {selectedPlatforms.includes("facebook_page") ? (
@@ -1326,6 +1327,7 @@ export function BulkPostsForm({
               fileCount={1}
               videoDurationSec={null}
               onChange={setFacebookPlacement}
+              disabled={sendingMode !== null}
             />
           ) : null}
           {googleShown ? (
