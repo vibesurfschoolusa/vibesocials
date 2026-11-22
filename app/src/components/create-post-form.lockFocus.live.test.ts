@@ -453,6 +453,44 @@ describe("Create: the lock keeps keyboard focus (R65 new-customer L1, pages-b L1
     await releaseUpload("enter1");
   }, 10_000);
 
+  /** The publish bar's button: a submit for the form that sits outside it. */
+  const barSubmit = () => {
+    const form = byId("create-post-form");
+    const hit = find(
+      container,
+      (n) => isSubmitButton(n) && n.attributes?.form === "create-post-form" && find(form, (m) => m === n) === null,
+    );
+    if (!hit) throw new Error("no publish bar button");
+    return hit;
+  };
+
+  it("R66 new-customer L1, a phone: the form's button is hidden and takes no focus, so Enter in Publish at moves focus to the publish bar's button", async () => {
+    await scheduleWithStalledPhoto("phone8");
+    // As below md: the form's button is inside hidden md:inline, so focus() does nothing.
+    Object.assign(formSubmit(), { focus() {} });
+    await focus(byId("post-schedule"));
+    expect(active()).toBe(byId("post-schedule"));
+    await submit();
+    expect(posted).toHaveLength(0);
+    expect(disabledNow(byId("post-schedule"))).toBe(true);
+
+    expect(active()).toBe(barSubmit());
+    expect(active()).not.toBe(formSubmit());
+    expect(disabledNow(active())).toBe(false);
+    await releaseUpload("phone8");
+  }, 10_000);
+
+  it("R66 new-customer L1, desktop: with both buttons focusable, focus goes to the form's own button, not the bar's", async () => {
+    await scheduleWithStalledPhoto("desk9");
+    await focus(byId("post-schedule"));
+    await submit();
+    expect(posted).toHaveLength(0);
+
+    expect(active()).toBe(formSubmit());
+    expect(active()).not.toBe(barSubmit());
+    await releaseUpload("desk9");
+  }, 10_000);
+
   it("Enter in the alt text during Schedule: focus is on the submit button", async () => {
     await scheduleWithStalledPhoto("alt2");
     await focus(byId("post-alt-text"));
