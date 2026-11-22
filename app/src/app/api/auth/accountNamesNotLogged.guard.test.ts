@@ -52,7 +52,37 @@ const ACCOUNT_OBJECTS = new Set([
   "channel",
   "channels",
   "me",
+  // R67 review L2: a provider's raw reply holds the tokens. errorText (a
+  // failed reply's body) stays allowed.
+  "responseText",
+  "params",
+  "data",
+  "json",
+  "body",
+  "text",
 ]);
+
+const COMPARISONS = new Set([
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+  ts.SyntaxKind.LessThanToken,
+  ts.SyntaxKind.GreaterThanToken,
+  ts.SyntaxKind.LessThanEqualsToken,
+  ts.SyntaxKind.GreaterThanEqualsToken,
+  ts.SyntaxKind.InstanceOfKeyword,
+  ts.SyntaxKind.InKeyword,
+]);
+
+/** R67 review L1: a value that can only be yes or no: `!!x`, `x !== null`, `Boolean(x)`, true, false. */
+function isYesNo(node: ts.Expression): boolean {
+  if (ts.isParenthesizedExpression(node)) return isYesNo(node.expression);
+  if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) return true;
+  if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) return true;
+  if (ts.isBinaryExpression(node) && COMPARISONS.has(node.operatorToken.kind)) return true;
+  return ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Boolean";
+}
 
 function words(identifier: string): string[] {
   return identifier
@@ -101,8 +131,9 @@ export function loggedNames(source: string, fileName = "planted.ts"): string[] {
   };
   const inArgument = (node: ts.Node): void => {
     if (ts.isPropertyAssignment(node) && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name))) {
-      // `hasEmail: !!profile.email` logs a boolean, whatever its value reads.
-      if (isBooleanName(node.name.text)) return;
+      // `hasEmail: !!profile.email` logs a boolean, whatever its value reads;
+      // `hasToken: accessToken` logs the token, so a has- name alone is not enough.
+      if (isBooleanName(node.name.text) && isYesNo(node.initializer)) return;
       if (saysWhoItIs(node.name.text)) record(node.name, node.name.text);
       inArgument(node.initializer);
       return;
@@ -172,6 +203,8 @@ const SAFE: Record<string, string> = {
   "server/connections/gbpLocationTitle.ts code": ERROR_CODE,
   "server/connections/saveConnection.ts code": ERROR_CODE,
   "app/api/auth/tiktok/callback/route.ts tokenType": TOKEN_TYPE,
+  "app/api/auth/youtube/callback/route.ts text":
+    "the body of a FAILED token reply (await tokenResponse.text() under !tokenResponse.ok), as errorText elsewhere",
   "app/api/auth/tiktok/callback/route.ts token_type": TOKEN_TYPE,
 };
 
