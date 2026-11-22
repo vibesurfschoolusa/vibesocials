@@ -3,6 +3,7 @@ import type { Prisma, SocialConnection } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
+import { truncateGraphemesWithinCodePoints } from "@/lib/truncate";
 import { flagIfTokenRejected } from "@/server/googleFailure";
 import { refreshConnectionToken } from "@/server/platforms/connectionRefresh";
 import { resolveGbpLocationName } from "@/server/platforms/gbpLocation";
@@ -103,7 +104,8 @@ async function readTitleWith(current: SocialConnection, locationName: string): P
     return null;
   }
   const body = (await response.json().catch(() => null)) as { title?: unknown } | null;
-  return nonEmptyString(body?.title)?.slice(0, MAX_LOCATION_TITLE_LENGTH) ?? null;
+  const title = nonEmptyString(body?.title);
+  return (title && truncateGraphemesWithinCodePoints(title, MAX_LOCATION_TITLE_LENGTH)) || null;
 }
 
 /**

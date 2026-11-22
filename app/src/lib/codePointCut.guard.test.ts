@@ -329,8 +329,6 @@ const LISTED: Record<string, string> = {
   'server/billing/stripeApi.ts: `vs-${all.join("-")}`.slice(0, 255)': "an idempotency key built from our own ids",
   "server/billing/stripeSignature.ts: entry.slice(0, at)": "a Stripe-Signature entry cut at its '='",
   "server/connectLink/cookie.ts: part.slice(0, index)": "a cookie pair cut at its '='",
-  "server/connections/gbpLocationTitle.ts: nonEmptyString(body?.title)?.slice(0, MAX_LOCATION_TITLE_LENGTH)":
-    "BC3 owns this file in R67: the lead moves it to truncateGraphemesWithinCodePoints after the merge",
   "server/jobs/inngest-functions.ts: startedAt.slice(0, 10)": "an ISO date string (toISOString in the step above)",
   "server/platforms/instagramClient.ts: text.slice(0, start)": "removes a matched hashtag at the space before it",
 };

@@ -127,7 +127,8 @@ describe("backfillGbpLocationTitles", () => {
   // route's own title, so an emoji at the bound is kept or dropped whole.
   it("cuts a long title in whole graphemes, never half an emoji", async () => {
     useRows([connection()]);
-    fetchMock.mockResolvedValue(json({ title: `${"a".repeat(199)}🌊 Surf` }));
+    // 👍🏽 is 2 code points, so it crosses the bound of 200 and is dropped whole.
+    fetchMock.mockResolvedValue(json({ title: `${"a".repeat(199)}👍🏽 Surf` }));
 
     await backfillGbpLocationTitles();
 
