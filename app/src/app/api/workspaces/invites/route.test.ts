@@ -81,7 +81,7 @@ const OWNER_CONTEXT = {
 const unauthorizedResponse = () =>
   NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 const forbiddenResponse = () =>
-  NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 });
+  NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 });
 
 /** The Team card sends the workspace its page was rendered for (F3). */
 function inviteRequest(method: "POST" | "DELETE", body: unknown = { workspaceId: "ws-1" }): Request {
@@ -179,7 +179,7 @@ describe("GET /api/workspaces/invites", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
-      error: "Only the workspace owner can do that.",
+      error: "Your role or workspace changed. Reload the page.",
     });
   });
 

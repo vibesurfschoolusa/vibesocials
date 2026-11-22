@@ -630,7 +630,7 @@ describe("getWorkspaceMemberCount", () => {
 // Review fix round 1 (Minor 1): the shared owner gate the 4 owner-gated
 // routes import — hoisted here from 4 byte-identical per-route copies. The
 // route contract it must preserve: 401 { error: "You were signed out. Sign in again." } when
-// unauthenticated, 403 { error: "Only the workspace owner can do that." }
+// unauthenticated, 403 { error: "Your role or workspace changed. Reload the page." }
 // for a non-owner, the context object for an owner, and anything unexpected
 // rethrown (routes let it become a 500 via their own error handling).
 describe("requireOwnerContext", () => {
@@ -655,8 +655,14 @@ describe("requireOwnerContext", () => {
     const response = result as NextResponse;
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
-      error: "Only the workspace owner can do that.",
+      error: "Your role or workspace changed. Reload the page.",
     });
+  });
+
+  // R66 pages-a-2 L1: members never see owner controls, so this 403 means the
+  // page was drawn for an owner; the sentence says to reload, as the Team reads do.
+  it("the error's default sentence is the reload sentence", () => {
+    expect(new WorkspaceForbiddenError().message).toBe("Your role or workspace changed. Reload the page.");
   });
 
   it("returns the workspace context (not a response) for an owner", async () => {

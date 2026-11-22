@@ -55,7 +55,7 @@ const OWNER_CONTEXT = {
   role: "owner" as const,
 };
 const forbidden = () =>
-  NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 });
+  NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 });
 
 const URL_BASE = "http://localhost/api/workspaces/upload-link";
 

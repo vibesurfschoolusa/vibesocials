@@ -116,14 +116,14 @@ describe("PATCH /api/workspaces/active", () => {
 
   it("returns the gate's 403 response as-is when a member (not owner) calls it", async () => {
     requireOwnerContextMock.mockResolvedValue(
-      NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }),
+      NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 }),
     );
 
     const response = await PATCH(jsonRequest({ name: "New name" }));
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
-      error: "Only the workspace owner can do that.",
+      error: "Your role or workspace changed. Reload the page.",
     });
     expect(updateMock).not.toHaveBeenCalled();
   });
@@ -350,12 +350,14 @@ describe("DELETE /api/workspaces/active", () => {
 
   it("returns the gate's 403 as-is when a member calls it, and changes nothing", async () => {
     requireOwnerContextMock.mockResolvedValue(
-      NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }),
+      NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 }),
     );
 
     const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
 
     expect(response.status).toBe(403);
+    // R66 pages-a-2 L1: the gate's reload sentence, as Team's Delete shows it.
+    await expect(response.json()).resolves.toEqual({ error: "Your role or workspace changed. Reload the page." });
     nothingWritten();
   });
 

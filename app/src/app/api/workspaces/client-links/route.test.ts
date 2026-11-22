@@ -216,7 +216,7 @@ describe("POST /api/workspaces/client-links", () => {
   });
 
   it("answers the gate's response for a member, and changes nothing", async () => {
-    m.requireOwnerContext.mockResolvedValue(NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }));
+    m.requireOwnerContext.mockResolvedValue(NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 }));
     expect((await POST(request())).status).toBe(403);
     expect(m.transaction).not.toHaveBeenCalled();
   });
@@ -410,7 +410,7 @@ describe("GET /api/workspaces/client-links", () => {
   });
 
   it("answers the gate's response for a member, and another workspace's id with 409", async () => {
-    m.requireOwnerContext.mockResolvedValue(NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }));
+    m.requireOwnerContext.mockResolvedValue(NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 }));
     expect((await get()).status).toBe(403);
     m.requireOwnerContext.mockResolvedValue(OWNER_CONTEXT);
     expect((await get("?workspaceId=ws-other")).status).toBe(409);
@@ -456,7 +456,7 @@ describe("DELETE /api/workspaces/client-links", () => {
   });
 
   it("answers the gate's response for a member, refuses another workspace's id, and changes nothing", async () => {
-    m.requireOwnerContext.mockResolvedValue(NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }));
+    m.requireOwnerContext.mockResolvedValue(NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 }));
     expect((await del()).status).toBe(403);
     m.requireOwnerContext.mockResolvedValue(OWNER_CONTEXT);
     expect((await del({ workspaceId: "ws-other" })).status).toBe(409);

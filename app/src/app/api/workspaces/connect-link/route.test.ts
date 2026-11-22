@@ -106,7 +106,7 @@ afterEach(() => {
 describe("owner only, as the review link's routes", () => {
   it.each([
     ["signed out", NextResponse.json({ error: "Unauthorized" }, { status: 401 }), 401],
-    ["a member", NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }), 403],
+    ["a member", NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 }), 403],
   ])("%s gets the owner gate's answer from GET, POST and DELETE, and nothing is read or written", async (_n, gate, status) => {
     h.requireOwnerContext.mockResolvedValue(gate);
     for (const res of [

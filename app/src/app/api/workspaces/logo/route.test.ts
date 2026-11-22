@@ -66,7 +66,7 @@ import { DELETE, POST } from "./route";
 const OWNER = { user: { id: "user-1" }, workspace: { id: "ws-1", name: "Surf Co" }, role: "owner" as const };
 const OLD = "https://abc.public.blob.vercel-storage.com/logos/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png";
 const blobUrl = (pathname: string) => `https://abc.public.blob.vercel-storage.com/${pathname}`;
-const forbidden = () => NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 });
+const forbidden = () => NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 });
 
 const BASE = "http://localhost/api/workspaces/logo";
 /** The workspace the Settings page was rendered for; null sends none. */

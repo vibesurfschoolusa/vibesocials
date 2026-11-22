@@ -3,7 +3,7 @@ import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
-import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { renderedWorkspaceRefusal, ROLE_CHANGED_MESSAGE } from "@/lib/workspaceChanged";
 import { parseGoogleButton } from "@/lib/googlePostOptions";
 import { cleanBrandVoice, cleanBrandVoiceExamples } from "@/lib/brandVoice";
 import { normalizePostingSlots, type PostingSlot } from "@/lib/postingSlots";
@@ -15,14 +15,14 @@ export const DEFAULT_HASHTAGS_MAX_LENGTH = 1024;
 // Roadmap Phase 6: matches the Prisma schema's `@default(true)` so an omitted
 // field behaves the same at the API layer as a never-touched DB row.
 export const NOTIFY_ON_POST_COMPLETE_DEFAULT = true;
-// Team Workspaces (Task 6, design §4). Mirrors WorkspaceForbiddenError's
-// default message (src/lib/workspace.ts) for one consistent "you're not the
-// owner" string app-wide. Duplicated rather than imported: this route's gate
+// Team Workspaces (Task 6, design §4). The same sentence as
+// WorkspaceForbiddenError's default (src/lib/workspace.ts). This route's gate
 // is CONDITIONAL (only the footer fields are owner-only — notifyOnPostComplete
 // is open to any member), so it can't just delegate the whole route to
 // requireOwnerContext()/WorkspaceForbiddenError the way the fully owner-gated
-// routes do.
-export const OWNER_ONLY_FOOTER_ERROR = "Only the workspace owner can do that.";
+// routes do. R66 pages-a-2 L1: members never see the owner fields, so a member
+// who sends one had a page drawn for an owner; the sentence says to reload.
+export const OWNER_ONLY_FOOTER_ERROR = ROLE_CHANGED_MESSAGE;
 
 /**
  * Team Workspaces (Task 6, design §4): the caption footer moved to the

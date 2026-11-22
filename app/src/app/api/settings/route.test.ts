@@ -1077,3 +1077,25 @@ describe("postingSlots (posting times)", () => {
     expect(workspaceUpdateMock).not.toHaveBeenCalled();
   });
 });
+
+// R66 pages-a-2 L1: members never see the owner fields, so a member who sends
+// one had a page drawn for an owner: their role changed while it was open.
+describe("POST /api/settings: an owner demoted while the page was open", () => {
+  const ROLE_CHANGED = "Your role or workspace changed. Reload the page.";
+
+  it("Settings Save: 403 with the reload sentence, writing nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+    const response = await POST(jsonRequest({ brandVoice: "Friendly", notifyOnPostComplete: true }));
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: ROLE_CHANGED });
+    expect(OWNER_ONLY_FOOTER_ERROR).toBe(ROLE_CHANGED);
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("Posting times: 403 with the reload sentence", async () => {
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+    const response = await POST(jsonRequest({ postingSlots: [{ day: 1, time: "09:00" }] }));
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: ROLE_CHANGED });
+  });
+});

@@ -155,14 +155,14 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
 
   it("returns the gate's 403 response as-is for a member (owner-gated)", async () => {
     requireOwnerContextMock.mockResolvedValue(
-      NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }),
+      NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 }),
     );
 
     const response = await DELETE(deleteReq(), ctx("user-2"));
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
-      error: "Only the workspace owner can do that.",
+      error: "Your role or workspace changed. Reload the page.",
     });
     expect(deleteManyMock).not.toHaveBeenCalled();
   });
@@ -328,14 +328,14 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
 
   it("returns the gate's 403 response as-is for a member (owner-gated)", async () => {
     requireOwnerContextMock.mockResolvedValue(
-      NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }),
+      NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 }),
     );
 
     const response = await PATCH(patchReq("owner"), ctx("user-2"));
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
-      error: "Only the workspace owner can do that.",
+      error: "Your role or workspace changed. Reload the page.",
     });
     expect(checkRateLimitMock).not.toHaveBeenCalled();
     expect(findFirstMock).not.toHaveBeenCalled();

@@ -247,7 +247,7 @@ describe.each(HANDLERS)("%s /api/connections/pending/[id]: access", (_method, ha
 
   it("returns the owner gate's 403 as-is for a member, touching nothing", async () => {
     requireOwnerContextMock.mockResolvedValue(
-      NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }),
+      NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 }),
     );
 
     const response = await handler(request(), ctx());
@@ -1254,7 +1254,7 @@ describe("pending/[id]: a choice that is gone", () => {
 
   it("a member still gets the owner gate's 403, with no step", async () => {
     requireOwnerContextMock.mockResolvedValue(
-      NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }),
+      NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 }),
     );
     const response = await GET(hinted("GET", "facebook_page"), ctx());
     expect(response.status).toBe(403);

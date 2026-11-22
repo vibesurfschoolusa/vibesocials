@@ -10,19 +10,14 @@ import {
   INVALID_WORKSPACE_ID_CODE,
   MISSING_WORKSPACE_ID_CODE,
   pageWorkspaceRefusalText,
+  ROLE_CHANGED_MESSAGE,
   WORKSPACE_CHANGED_CODE,
   WORKSPACE_CHANGED_MESSAGE,
 } from "@/lib/workspaceChanged";
 
-/**
- * R41 second look L3: an owner-only read refused (403). The members route
- * checks the owner role before the workspace, so this is true both when the
- * viewer's role changed and when another tab switched workspace. The page was
- * drawn for an owner of this workspace; only reloading draws it for now.
- * R42 pages-b L2: no "in another tab", since another owner may have changed
- * the role.
- */
-export const ROLE_CHANGED_MESSAGE = "Your role or workspace changed. Reload the page.";
+// R66: moved to lib/workspaceChanged.ts, which the server routes can read;
+// re-exported so the client imports keep working.
+export { ROLE_CHANGED_MESSAGE };
 
 /**
  * R33 pages L5: the sentences a read is refused with when the page was drawn

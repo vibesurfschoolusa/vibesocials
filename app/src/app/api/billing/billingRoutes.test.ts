@@ -117,7 +117,7 @@ describe("POST /api/billing/checkout", () => {
 
   it("owner only: a member's 403 is answered as is", async () => {
     m.requireOwnerContext.mockResolvedValue(
-      NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }),
+      NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 }),
     );
     const res = await checkout.POST(post("/api/billing/checkout", { plan: "starter" }));
     expect(res.status).toBe(403);
@@ -169,7 +169,7 @@ describe("POST /api/billing/portal", () => {
   });
 
   it("owner only", async () => {
-    m.requireOwnerContext.mockResolvedValue(NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }));
+    m.requireOwnerContext.mockResolvedValue(NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 }));
     expect((await portal.POST(post("/api/billing/portal"))).status).toBe(403);
     expect(m.openPortal).not.toHaveBeenCalled();
   });

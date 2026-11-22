@@ -226,6 +226,8 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     const res = await POST(req({ decision: "approve" }), ctx("job-1"));
 
     expect(res.status).toBe(403);
+    // R66 pages-a-2 L1: only an owner's page shows Approve, so this member's role changed.
+    await expect(res.json()).resolves.toEqual({ error: "Your role or workspace changed. Reload the page." });
     expect(updateManyMock).not.toHaveBeenCalled();
     expect(inngestSendMock).not.toHaveBeenCalled();
   });

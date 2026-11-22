@@ -19,6 +19,18 @@ export const WORKSPACE_CHANGED_MESSAGE =
 export const INVALID_WORKSPACE_ID_MESSAGE = "workspaceId must be a string if provided";
 
 /**
+ * R41 second look L3: an owner-only read refused (403). The members route
+ * checks the owner role before the workspace, so this is true both when the
+ * viewer's role changed and when another tab switched workspace. The page was
+ * drawn for an owner of this workspace; only reloading draws it for now.
+ * R42 pages-b L2: no "in another tab", since another owner may have changed
+ * the role. R66 pages-a-2 L1: every owner gate answers its 403 with it too,
+ * since members never see the controls. Here, not in load-error.tsx, because
+ * that file is "use client" and the server routes read this value.
+ */
+export const ROLE_CHANGED_MESSAGE = "Your role or workspace changed. Reload the page.";
+
+/**
  * F3 (2026-11-14 review, R1 security H1): the owner and member writes outside
  * Create (Settings, posting times, team, connections, the Google location,
  * rename and delete) REQUIRE the id; an absent one is this 400, so a write

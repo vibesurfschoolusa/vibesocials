@@ -40,7 +40,7 @@ import {
 } from "../pairRule";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 import { POST_GONE_TEXT, postMovedOnText } from "@/lib/postMovedOn";
-import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { renderedWorkspaceRefusal, ROLE_CHANGED_MESSAGE } from "@/lib/workspaceChanged";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -196,7 +196,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // member probing a decided job can't distinguish 403 from 409.
   if (workspaceContext.role !== "owner") {
     return NextResponse.json(
-      { error: "Only the workspace owner can do that." },
+      // R66 pages-a-2 L1: only an owner's page shows Approve and Reject, so the role changed.
+      { error: ROLE_CHANGED_MESSAGE },
       { status: 403 },
     );
   }

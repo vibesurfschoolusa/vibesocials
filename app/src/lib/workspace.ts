@@ -8,6 +8,7 @@ import { newWorkspaceBillingData, type TrialClient } from "@/server/billing/newW
 import { billingEnabled } from "./billing";
 import { prisma } from "./db";
 import { signedOutResponse } from "./signedOutResponse";
+import { ROLE_CHANGED_MESSAGE } from "./workspaceChanged";
 
 /**
  * httpOnly cookie holding the active workspace id (design doc §1). Written by
@@ -80,11 +81,12 @@ async function billingDataFor(tx: PrismaClientLike, userId: string): Promise<Rec
 
 /**
  * Thrown by {@link getWorkspaceContext} when `opts.requireRole` isn't met.
- * API routes catch this and map it to `403 { error: "Only the workspace
- * owner can do that." }` (design §3).
+ * API routes catch this and map it to `403 { error: ROLE_CHANGED_MESSAGE }`
+ * (design §3). R66 pages-a-2 L1: members never see owner controls, so whoever
+ * meets this had a page drawn for an owner; the sentence says to reload.
  */
 export class WorkspaceForbiddenError extends Error {
-  constructor(message = "Only the workspace owner can do that.") {
+  constructor(message = ROLE_CHANGED_MESSAGE) {
     super(message);
     this.name = "WorkspaceForbiddenError";
   }

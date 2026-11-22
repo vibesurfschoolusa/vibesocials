@@ -90,14 +90,14 @@ describe("GET /api/workspaces/members", () => {
 
   it("returns the gate's 403 response as-is for a member (owner-gated)", async () => {
     requireOwnerContextMock.mockResolvedValue(
-      NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }),
+      NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 }),
     );
 
     const response = await GET(req());
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
-      error: "Only the workspace owner can do that.",
+      error: "Your role or workspace changed. Reload the page.",
     });
     expect(findManyMock).not.toHaveBeenCalled();
   });

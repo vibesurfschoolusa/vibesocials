@@ -45,7 +45,7 @@ afterEach(() => vi.unstubAllEnvs());
 // cancel) after being made a member, so the refusal to leave has a way out.
 describe("POST /api/billing/portal for the payer who is no longer an owner", () => {
   const MEMBER = { user: { id: "user-2", email: "payer@example.com" }, workspace: { id: "ws-1" }, role: "member" };
-  const forbidden = () => NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 });
+  const forbidden = () => NextResponse.json({ error: "Your role or workspace changed. Reload the page." }, { status: 403 });
 
   it("opens the portal for the recorded payer", async () => {
     h.requireOwnerContext.mockResolvedValue(forbidden());
