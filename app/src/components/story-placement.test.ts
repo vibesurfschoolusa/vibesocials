@@ -117,4 +117,33 @@ describe("StoryPlacementSettings - disabled", () => {
     expect(input(html(undefined, 2), "story")).toContain('disabled=""');
     expect(input(html(undefined, 2), "feed")).not.toContain(" disabled=\"\"");
   });
+
+  // R66 pages-b L3: under disabled each label looks disabled, with no hover.
+  const LABEL_BASE = "inline-flex items-center gap-2 rounded-[var(--radius)] border px-3 py-1.5 text-sm transition-colors";
+  const labelClasses = (markup: string) => (markup.match(/<label class="[^"]*"/g) ?? []).map((tag) => tag.slice(14, -1));
+
+  it("with disabled: every label has the disabled look and no hover; the chosen one still shows it is chosen", () => {
+    const classes = labelClasses(html(true));
+    expect(classes).toHaveLength(3);
+    for (const cls of classes) {
+      const list = cls.split(" ");
+      expect(list).toEqual(expect.arrayContaining(["cursor-not-allowed", "opacity-50"]));
+      expect(list).not.toContain("cursor-pointer");
+      expect(list.filter((c) => c.startsWith("hover:"))).toEqual([]);
+    }
+    expect(classes[0]).toContain("bg-primary/10");
+    expect(classes[1]).not.toContain("bg-primary/10");
+  });
+
+  it("without disabled: the label classes are as now", () => {
+    for (const markup of [html(), html(false)]) {
+      expect(labelClasses(markup)).toEqual([
+        `${LABEL_BASE} cursor-pointer border-primary/40 bg-primary/10 text-foreground`,
+        `${LABEL_BASE} cursor-pointer border-input text-muted-foreground hover:text-foreground`,
+        `${LABEL_BASE} cursor-pointer border-input text-muted-foreground hover:text-foreground`,
+      ]);
+    }
+    // Story blocked by several files: as now.
+    expect(labelClasses(html(undefined, 2))[1]).toBe(`${LABEL_BASE} cursor-not-allowed border-input text-muted-foreground opacity-60`);
+  });
 });

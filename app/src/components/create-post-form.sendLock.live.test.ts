@@ -393,3 +393,99 @@ describe("Create: a waiting Schedule locks every control that shapes the post (R
     );
   }, 15_000);
 });
+
+/**
+ * R66 pages-b L3: a control the lock disables looks disabled while it is (the
+ * app's disabled:cursor-not-allowed disabled:opacity-50, or the label's
+ * equivalent read from the lock), with no hover change. Enabled, it looks as before.
+ */
+describe("Create: controls the lock disables look disabled (R66 pages-b L3)", () => {
+  const classesOf = (node: FakeNode) => String(node.attributes.class ?? "").split(/\s+/).filter(Boolean);
+  const WHEN_BASE =
+    "rounded-[calc(var(--radius)-0.125rem)] px-3 py-1.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
+  const WHEN_PRESSED = `${WHEN_BASE} bg-primary text-primary-foreground`.split(" ");
+  const WHEN_OTHER = `${WHEN_BASE} text-muted-foreground enabled:hover:text-foreground`.split(" ");
+  // The chip and Story label classes as they were before the lock read them.
+  const LABEL_BASE = "inline-flex items-center gap-2 rounded-[var(--radius)] border px-3 py-1.5 text-sm transition-colors";
+  const LABEL_CHECKED = `${LABEL_BASE} cursor-pointer border-primary/40 bg-primary/10 text-foreground`;
+  const LABEL_UNCHECKED = `${LABEL_BASE} cursor-pointer border-input text-muted-foreground hover:text-foreground`;
+
+  function chips(): FakeNode[] {
+    const legend = find(container, (n) => n.nodeName === "LEGEND" && n.textContent === "Publish to");
+    const all = legend?.parentNode ? findAll(legend.parentNode, (n) => n.nodeName === "LABEL") : [];
+    if (all.length === 0) throw new Error("no Publish to chips");
+    return all;
+  }
+  function chipFor(name: string): FakeNode {
+    const hit = chips().find((n) => (n.textContent as string).includes(name));
+    if (!hit) throw new Error(`no ${name} chip`);
+    return hit;
+  }
+  function storyLabels(): FakeNode[] {
+    const legend = find(container, (n) => n.nodeName === "LEGEND" && n.textContent === "Instagram: post to");
+    const all = legend?.parentNode ? findAll(legend.parentNode, (n) => n.nodeName === "LABEL") : [];
+    if (all.length === 0) throw new Error("no Instagram placement labels");
+    return all;
+  }
+  const checkboxIn = (label: FakeNode) => find(label, (n) => n.nodeName === "INPUT")!;
+  const noBareHover = (node: FakeNode) => classesOf(node).filter((c) => c.startsWith("hover:"));
+
+  /** Schedule on a video whose upload stalls, LinkedIn unticked; the send is pressed. */
+  async function waitingSchedule(name: string) {
+    stall.add(name);
+    postAnswer = REFUSED;
+    await typeCaption("Surf lesson today");
+    await run(() => props(checkboxIn(chipFor("LinkedIn"))).onChange({ target: { checked: false } }));
+    await pressSchedule();
+    await pick(video(name));
+  }
+  function expectAsNow() {
+    for (const button of whenButtons()) {
+      expect(isDisabled(button)).toBe(false);
+      expect(classesOf(button)).toEqual(button.attributes["aria-pressed"] === "true" ? WHEN_PRESSED : WHEN_OTHER);
+    }
+    for (const chip of chips()) {
+      expect(isDisabled(checkboxIn(chip))).toBe(false);
+      const checked = props(checkboxIn(chip)).checked === (true as never);
+      expect(chip.attributes.class, chip.textContent as string).toBe(checked ? LABEL_CHECKED : LABEL_UNCHECKED);
+    }
+    for (const label of storyLabels()) {
+      expect(locked(checkboxIn(label))).toBe(false);
+      const checked = props(checkboxIn(label)).checked === (true as never);
+      expect(label.attributes.class, label.textContent as string).toBe(checked ? LABEL_CHECKED : LABEL_UNCHECKED);
+    }
+  }
+
+  it("with no send: the classes are as now", async () => {
+    await waitingSchedule("look1");
+    expectAsNow();
+    await act(async () => release.get(uploadsOf("look1")[0]!.key)!());
+    await settle();
+  }, 15_000);
+
+  it("during a waiting Schedule each control is disabled with the disabled look; after the send, each is as now", async () => {
+    await waitingSchedule("look2");
+    await submit();
+    expect(posted).toHaveLength(0);
+
+    for (const button of whenButtons()) {
+      expect(isDisabled(button)).toBe(true);
+      expect(classesOf(button)).toEqual(expect.arrayContaining(["disabled:cursor-not-allowed", "disabled:opacity-50"]));
+      expect(noBareHover(button)).toEqual([]);
+    }
+    for (const label of [...chips(), ...storyLabels()]) {
+      expect(locked(checkboxIn(label)), label.textContent as string).toBe(true);
+      expect(classesOf(label), label.textContent as string).toEqual(expect.arrayContaining(["cursor-not-allowed", "opacity-50"]));
+      expect(classesOf(label)).not.toContain("cursor-pointer");
+      expect(noBareHover(label)).toEqual([]);
+    }
+    // A ticked chip still shows it is ticked; an unticked one shows it is not.
+    expect(classesOf(chipFor("X"))).toContain("bg-primary/10");
+    expect(classesOf(chipFor("LinkedIn"))).not.toContain("bg-primary/10");
+
+    await act(async () => release.get(uploadsOf("look2")[0]!.key)!());
+    await settle();
+    expect(posted).toHaveLength(1);
+    expectAsNow();
+  }, 15_000);
+});

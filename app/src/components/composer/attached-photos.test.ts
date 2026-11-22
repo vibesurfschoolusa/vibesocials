@@ -338,6 +338,40 @@ describe("AttachedPhotos", () => {
     expect(html.match(/>Retry</g)).toHaveLength(2);
   });
 
+  // R66 pages-b L3: the send lock disables Retry, and it looks it.
+  const retryTag = (disabled: boolean | undefined) => {
+    const html = renderToStaticMarkup(
+      createElement(AttachedPhotos, {
+        writeDescription: () => Promise.resolve(null),
+        photos: [photo("a", { status: "failed", blob: null, error: "No." })],
+        onRemove: noop,
+        onMove: noop,
+        onRetry: noop,
+        onRemoveAll: noop,
+        removeAllClearsCaption: false,
+        onDescribe: noop,
+        ...(disabled === undefined ? {} : { disabled }),
+      }),
+    );
+    return html.match(/<button[^>]*aria-label="Retry photo 1"[^>]*>/)?.[0] ?? "";
+  };
+  const classesIn = (tag: string) => (tag.match(/class="([^"]*)"/)?.[1] ?? "").split(" ");
+
+  it("Retry while the send lock holds: disabled, with the disabled look and no hover", () => {
+    const tag = retryTag(true);
+    expect(tag).toContain('disabled=""');
+    expect(classesIn(tag)).toEqual(expect.arrayContaining(["disabled:cursor-not-allowed", "disabled:opacity-50"]));
+    expect(classesIn(tag).filter((c) => c.startsWith("hover:"))).toEqual([]);
+  });
+
+  it("Retry after the send, and with no send: enabled, and underlined on hover as now", () => {
+    for (const disabled of [false, undefined]) {
+      const tag = retryTag(disabled);
+      expect(tag).not.toContain("disabled=");
+      expect(classesIn(tag)).toEqual(expect.arrayContaining(["text-xs", "font-medium", "text-primary", "underline-offset-4", "enabled:hover:underline"]));
+    }
+  });
+
   it("marks photos still being prepared, and shows no upload bar for them", () => {
     const html = render([photo("a", { status: "preparing", blob: null }), photo("b", { status: "preparing", blob: null })]);
     expect(html.match(/>Preparing</g)).toHaveLength(2);
