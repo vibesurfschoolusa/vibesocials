@@ -406,3 +406,25 @@ describe("hashtags in examples: numbers are not tags", () => {
     expect(cleanBrandVoiceExamples("Score #_ today")).toEqual({ ok: true, value: "Score #_ today" });
   });
 });
+
+// R66 (lead): the cap keeps whole graphemes within its code-point bound.
+describe("brand voice cap: whole graphemes, still bounded", () => {
+  const flag = "\u{1F1FA}\u{1F1F8}";
+  const heavy = `a${"́".repeat(10_000)}`;
+
+  it("a flag at the bound is dropped whole, not halved", () => {
+    const voice = cleanBrandVoice(`${"a".repeat(BRAND_VOICE_MAX_LENGTH - 1)}${flag}`);
+    expect(voice).toEqual({ ok: true, value: "a".repeat(BRAND_VOICE_MAX_LENGTH - 1) });
+    const example = cleanBrandVoiceExamples(`${"b".repeat(BRAND_VOICE_EXAMPLE_MAX_LENGTH - 2)}${flag}x`);
+    expect(example).toEqual({ ok: true, value: `${"b".repeat(BRAND_VOICE_EXAMPLE_MAX_LENGTH - 2)}${flag}` });
+  });
+
+  it("a 10,000-mark grapheme stays within the bound", () => {
+    const voice = cleanBrandVoice(`Friendly ${heavy}`);
+    expect(voice).toEqual({ ok: true, value: "Friendly" });
+  });
+
+  it("plain ASCII is cut as before", () => {
+    expect(cleanBrandVoice("a".repeat(BRAND_VOICE_MAX_LENGTH + 5))).toEqual({ ok: true, value: "a".repeat(BRAND_VOICE_MAX_LENGTH) });
+  });
+});

@@ -5,6 +5,7 @@ import {
   textUnits,
   trimLinkTrailing,
   truncateGraphemes,
+  truncateGraphemesWithinCodePoints,
   truncateGraphemesAtWord,
   truncateKeepingLinks,
   truncateKeepingLinksAtWord,
@@ -337,5 +338,37 @@ describe("truncateUtf16AtWord", () => {
     const cut = truncateUtf16AtWord("surf waves ".repeat(30), 50, { ellipsis: "..." });
     expect(cut.length).toBeLessThanOrEqual(50);
     expect(cut).toMatch(/(surf|waves)\.\.\.$/);
+  });
+});
+
+// R66 (lead): a cut that keeps whole graphemes AND stays within a size bound,
+// for input with no other cap. A grapheme that would cross the bound is dropped
+// whole, so one letter with any number of combining marks can't exceed it.
+describe("truncateGraphemesWithinCodePoints", () => {
+  const codePoints = (text: string) => [...text].length;
+
+  it("plain ASCII: unchanged when it fits, cut to the bound when not", () => {
+    expect(truncateGraphemesWithinCodePoints("Dawn patrol", 11)).toBe("Dawn patrol");
+    expect(truncateGraphemesWithinCodePoints("a".repeat(300), 200)).toBe("a".repeat(200));
+  });
+
+  it("an emoji at the bound is kept whole when it fits, dropped whole when it doesn't", () => {
+    const flag = "\u{1F1FA}\u{1F1F8}";
+    expect(truncateGraphemesWithinCodePoints(`${"a".repeat(8)}${flag}b`, 10)).toBe(`${"a".repeat(8)}${flag}`);
+    expect(truncateGraphemesWithinCodePoints(`${"a".repeat(9)}${flag}b`, 10)).toBe("a".repeat(9));
+    const family = "\u{1F468}‍\u{1F469}‍\u{1F467}";
+    expect(truncateGraphemesWithinCodePoints(`${"a".repeat(7)}${family}`, 10)).toBe("a".repeat(7));
+  });
+
+  it("a 10,000-combining-mark grapheme stays within the bound", () => {
+    const heavy = `a${"́".repeat(10_000)}`;
+    const cut = truncateGraphemesWithinCodePoints(`ok ${heavy} done`, 200);
+    expect(codePoints(cut)).toBeLessThanOrEqual(200);
+    expect(cut).toBe("ok ");
+    expect(truncateGraphemesWithinCodePoints(heavy, 200)).toBe("");
+  });
+
+  it("a bound of 0 or less gives an empty string", () => {
+    expect(truncateGraphemesWithinCodePoints("abc", 0)).toBe("");
   });
 });

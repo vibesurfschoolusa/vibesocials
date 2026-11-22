@@ -89,6 +89,38 @@ export function truncateGraphemes(
   return graphemes.slice(0, budget).join("") + ellipsis;
 }
 
+/** How many code points `text` holds: a surrogate pair counts once. */
+function codePointsIn(text: string): number {
+  let count = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if ((text.codePointAt(index) ?? 0) > 0xffff) index += 1;
+    count += 1;
+  }
+  return count;
+}
+
+/**
+ * R66: the leading whole graphemes of `text` that fit in `maxCodePoints` code
+ * points, for input with no other size cap (a brand voice, a public sender's
+ * note). A grapheme that would cross the bound is dropped whole, so one letter
+ * with any number of combining marks can never exceed it, and no emoji is
+ * split. Text that fits comes back unchanged.
+ */
+export function truncateGraphemesWithinCodePoints(text: string, maxCodePoints: number): string {
+  const max = Math.max(0, Math.floor(maxCodePoints));
+  if (codePointsIn(text) <= max) return text;
+
+  let used = 0;
+  let end = 0;
+  for (const { segment } of graphemeSegmenter.segment(text)) {
+    const size = codePointsIn(segment);
+    if (used + size > max) break;
+    used += size;
+    end += segment.length;
+  }
+  return text.slice(0, end);
+}
+
 const WHITESPACE = /^\s+$/u;
 /** How far back a word end is looked for (R62 review low 1): a script without spaces is cut by graphemes. */
 const WORD_LOOKBACK = 100;

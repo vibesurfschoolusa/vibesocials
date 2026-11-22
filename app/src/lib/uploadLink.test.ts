@@ -266,3 +266,19 @@ describe("requestIp", () => {
     expect(requestIp(new Request("http://x", { headers: { "x-forwarded-for": "" } }))).toBe("unknown");
   });
 });
+
+// R66 (lead): a public sender's name and note keep whole graphemes within the bound.
+describe("cleanSenderText: whole graphemes, still bounded", () => {
+  const flag = "\u{1F1FA}\u{1F1F8}";
+  it("a flag at the bound is kept whole when it fits, dropped whole when it doesn't", () => {
+    expect(cleanSenderText(`${"a".repeat(UPLOAD_LINK_TEXT_MAX - 2)}${flag}x`)).toBe(`${"a".repeat(UPLOAD_LINK_TEXT_MAX - 2)}${flag}`);
+    expect(cleanSenderText(`${"a".repeat(UPLOAD_LINK_TEXT_MAX - 1)}${flag}`)).toBe("a".repeat(UPLOAD_LINK_TEXT_MAX - 1));
+  });
+  it("a 10,000-mark grapheme stays within the bound", () => {
+    const cut = cleanSenderText(`Ana ${"a"}${"́".repeat(10_000)}`, { singleLine: true });
+    expect(cut).toBe("Ana");
+  });
+  it("plain ASCII is cut as before", () => {
+    expect(cleanSenderText("a".repeat(UPLOAD_LINK_TEXT_MAX + 3))).toBe("a".repeat(UPLOAD_LINK_TEXT_MAX));
+  });
+});

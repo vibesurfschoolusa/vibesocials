@@ -13,21 +13,6 @@ import { describe, expect, it } from "vitest";
  * new code-point cut fails here.
  */
 
-/** Code-point cuts kept on purpose, and why. Each must still hold the text named. */
-const EXCEPTIONS: Record<string, { why: string; mustContain: string[] }> = {
-  // These three bound input the server stores or sends to the AI, with no body
-  // cap before them. A grapheme has no size limit (one letter can carry any
-  // number of combining marks), so a grapheme cut would lift the bound. They
-  // stay until lib/truncate.ts has a cut that keeps whole graphemes within a
-  // code-point budget (see the R66 BB2 report).
-  "lib/brandVoice.ts": { why: "bounds the stored brand voice and its examples", mustContain: ["function capLength("] },
-  "lib/captionVariety.ts": { why: "bounds the captions sent to the AI to avoid", mustContain: ["CAPTION_VARIETY_MAX_LENGTH"] },
-  "lib/uploadLink.ts": {
-    why: "bounds a public upload link's sender name and note, as its form counts them",
-    mustContain: ["UPLOAD_LINK_TEXT_MAX"],
-  },
-};
-
 /** The text from the opening character at `open` to its matching close. */
 function balancedAt(text: string, open: number, opener: string, closer: string): string {
   let depth = 0;
@@ -98,19 +83,13 @@ function sourceFiles(dir: string, root: string, out: { rel: string; text: string
 const SRC = path.resolve(__dirname, "..");
 
 describe("no user text is cut by code point", () => {
-  it("every non-test file under src cuts by grapheme, apart from the listed exceptions", () => {
+  // R66 (lead): no exceptions. Input that needs a size bound uses
+  // truncateGraphemesWithinCodePoints, which keeps whole graphemes within it.
+  it("every non-test file under src cuts by grapheme, with no exceptions", () => {
     const found = sourceFiles(SRC, SRC)
       .filter((file) => codePointCuts(file.text).length > 0)
-      .map((file) => file.rel)
-      .sort();
-    expect(found).toEqual(Object.keys(EXCEPTIONS).sort());
-  });
-
-  it("each exception is still the cut it names", () => {
-    for (const [rel, { mustContain }] of Object.entries(EXCEPTIONS)) {
-      const text = readFileSync(path.join(SRC, rel), "utf8");
-      for (const part of mustContain) expect(text, rel).toContain(part);
-    }
+      .map((file) => `${file.rel}: ${codePointCuts(file.text).join(", ")}`);
+    expect(found).toEqual([]);
   });
 
   it("fails on a planted code-point cut", () => {

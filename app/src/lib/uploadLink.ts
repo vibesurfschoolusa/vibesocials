@@ -1,4 +1,5 @@
 import { extensionOf } from "./fileExtension";
+import { truncateGraphemesWithinCodePoints } from "./truncate";
 
 /**
  * Client upload link (2026-11-10): the pure parts shared by the owner routes,
@@ -140,10 +141,10 @@ export function cleanSenderText(
   let text = options.singleLine ? value.replace(/[\s\p{Cc}]+/gu, " ") : value;
   text = text.trim();
   if (!text) return null;
-  const chars = Array.from(text);
-  if (chars.length > UPLOAD_LINK_TEXT_MAX) {
-    text = chars.slice(0, UPLOAD_LINK_TEXT_MAX).join("").trim();
-  }
+  // At most 200 code points, as the form counts, in whole graphemes (R66): no
+  // emoji is halved, and a grapheme with many marks can't take it past 200.
+  const capped = truncateGraphemesWithinCodePoints(text, UPLOAD_LINK_TEXT_MAX);
+  if (capped !== text) text = capped.trim();
   return text || null;
 }
 

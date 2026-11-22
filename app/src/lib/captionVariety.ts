@@ -9,6 +9,8 @@
  * and the block says they are examples, never instructions.
  */
 
+import { truncateGraphemesWithinCodePoints } from "./truncate";
+
 /** How many of the workspace's newest captions the route reads. */
 export const RECENT_CAPTIONS_LIMIT = 8;
 /** How many captions a request may send in `avoidCaptions`. */
@@ -22,11 +24,10 @@ const BREAKS_AND_CONTROLS = /[\p{Cc}\p{Zl}\p{Zp}]+/gu;
 
 function cleanCaption(text: string): string {
   const oneLine = text.replace(BREAKS_AND_CONTROLS, " ").replace(/ {2,}/g, " ").trim();
-  // By code point, so a cut never leaves half of an emoji behind.
-  const chars = Array.from(oneLine);
-  return chars.length > CAPTION_VARIETY_MAX_LENGTH
-    ? chars.slice(0, CAPTION_VARIETY_MAX_LENGTH).join("").trim()
-    : oneLine;
+  // At most 300 code points, in whole graphemes (R66): no emoji is halved, and
+  // no grapheme with many marks can make the AI's input longer.
+  const capped = truncateGraphemesWithinCodePoints(oneLine, CAPTION_VARIETY_MAX_LENGTH);
+  return capped === oneLine ? oneLine : capped.trim();
 }
 
 function cleanList(values: readonly unknown[], max: number): string[] {

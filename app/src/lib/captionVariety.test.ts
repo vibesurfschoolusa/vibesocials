@@ -104,3 +104,19 @@ describe("captionVarietyBlock", () => {
     expect(block).not.toContain("Batch 7");
   });
 });
+
+// R66 (lead): the cap keeps whole graphemes within its code-point bound.
+describe("avoid captions cap: whole graphemes, still bounded", () => {
+  const flag = "\u{1F1FA}\u{1F1F8}";
+  it("a flag at the bound is dropped whole, not halved", () => {
+    expect(cleanAvoidCaptions([`${"a".repeat(CAPTION_VARIETY_MAX_LENGTH - 1)}${flag}`])).toEqual([
+      "a".repeat(CAPTION_VARIETY_MAX_LENGTH - 1),
+    ]);
+  });
+  it("a 10,000-mark grapheme stays within the bound", () => {
+    expect(cleanAvoidCaptions([`Waves ${"a"}${"́".repeat(10_000)}`])).toEqual(["Waves"]);
+  });
+  it("plain ASCII is cut as before", () => {
+    expect(cleanAvoidCaptions(["a".repeat(CAPTION_VARIETY_MAX_LENGTH + 9)])).toEqual(["a".repeat(CAPTION_VARIETY_MAX_LENGTH)]);
+  });
+});

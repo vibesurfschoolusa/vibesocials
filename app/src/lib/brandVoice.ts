@@ -9,6 +9,7 @@
 
 import type { BillingEnv, BillingFields } from "./billing";
 import { planIncludes } from "./planFeatures";
+import { truncateGraphemesWithinCodePoints } from "./truncate";
 
 export const BRAND_VOICE_MAX_LENGTH = 600;
 export const BRAND_VOICE_EXAMPLE_MAX_LENGTH = 500;
@@ -34,10 +35,11 @@ const HASHTAG = /#[\p{L}\p{M}\p{N}_]+/gu;
 // "Voted #1 surf school" keeps its "#1" (and "#2024" and "#_" stay too).
 export const TAG_WORD = /[\p{L}\p{M}]/u;
 
-// Caps by code point so a cut never leaves half of an emoji behind.
+// Caps at `max` code points, in whole graphemes (R66): no emoji is halved, and
+// no grapheme, however many marks it carries, takes the text past the cap.
 function capLength(text: string, max: number): string {
-  const chars = Array.from(text);
-  return chars.length > max ? chars.slice(0, max).join("").trim() : text;
+  const capped = truncateGraphemesWithinCodePoints(text, max);
+  return capped === text ? text : capped.trim();
 }
 
 /** One line of text: tabs become spaces, control characters go, then trim. */
