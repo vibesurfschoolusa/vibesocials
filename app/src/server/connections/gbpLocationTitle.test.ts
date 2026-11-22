@@ -123,6 +123,20 @@ describe("backfillGbpLocationTitles", () => {
     });
   });
 
+  // R67: the title is cut to 200 code points in whole graphemes, like the location
+  // route's own title, so an emoji at the bound is kept or dropped whole.
+  it("cuts a long title in whole graphemes, never half an emoji", async () => {
+    useRows([connection()]);
+    fetchMock.mockResolvedValue(json({ title: `${"a".repeat(199)}🌊 Surf` }));
+
+    await backfillGbpLocationTitles();
+
+    const saved = (updateMock.mock.calls[0]?.[0] as { data: { metadata: { locationTitle: string } } }).data
+      .metadata.locationTitle;
+    expect(saved).toBe("a".repeat(199));
+    expect(saved).not.toMatch(/[\uD800-\uDBFF]$/);
+  });
+
   it("only looks at working Business Profile connections, oldest first", async () => {
     useRows([]);
 
