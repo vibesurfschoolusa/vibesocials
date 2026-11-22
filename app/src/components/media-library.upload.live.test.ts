@@ -196,6 +196,51 @@ describe("Media library upload: changes made while it runs", () => {
     expect(fileShown("second.jpg")).toBe(true);
   }, 5_000);
 
+  // R66 pages-b L1: what is typed after picking another file belongs to that
+  // file, so the uploading one keeps the caption it had at the pick.
+  it("A uploading, pick B, type B: A is saved with A's caption, the box keeps B, and B stays picked", async () => {
+    const blob = deferred<{ url: string }>();
+    h.upload.mockReturnValue(blob.promise);
+    await type("A");
+    await pick(photo("a.jpg"));
+    await submit();
+
+    await pick(photo("b.jpg"));
+    await type("B");
+    blob.resolve({ url: "https://blob.example/a.jpg" });
+    await settle();
+
+    expect(posted()).toEqual([expect.objectContaining({ filename: "a.jpg", baseCaption: "A" })]);
+    expect(h.success).toHaveBeenCalledWith("Media uploaded successfully.");
+    expect(props(captionBox()).value).toBe("B");
+    expect(fileShown("b.jpg")).toBe(true);
+  }, 5_000);
+
+  it("the next upload, with no file change, reads the caption when the POST is built again", async () => {
+    const first = deferred<{ url: string }>();
+    h.upload.mockReturnValueOnce(first.promise);
+    await type("A");
+    await pick(photo("a.jpg"));
+    await submit();
+    await pick(photo("b.jpg"));
+    await type("B");
+    first.resolve({ url: "https://blob.example/a.jpg" });
+    await settle();
+
+    const second = deferred<{ url: string }>();
+    h.upload.mockReturnValueOnce(second.promise);
+    await submit();
+    await type("B, typed while uploading");
+    second.resolve({ url: "https://blob.example/b.jpg" });
+    await settle();
+
+    expect(posted()).toEqual([
+      expect.objectContaining({ filename: "a.jpg", baseCaption: "A" }),
+      expect.objectContaining({ filename: "b.jpg", baseCaption: "B, typed while uploading" }),
+    ]);
+    expect(props(captionBox()).value).toBe("");
+  }, 5_000);
+
   // R65 fix review L1: rebuilding the input would drop focus to the page body.
   it("a file picked during the upload: after success the input is the same element, and focus stays on it", async () => {
     const blob = deferred<{ url: string }>();

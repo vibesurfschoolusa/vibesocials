@@ -786,6 +786,17 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     fileRef.current = file;
   }, [file]);
+  // R66 pages-b L1: the file being uploaded, and the caption as it was when
+  // another file was picked during that upload (null when none was). What is
+  // typed after the pick is for the new file, so the POST sends this instead.
+  const uploadingFileRef = useRef<File | null>(null);
+  const captionAtPickRef = useRef<string | null>(null);
+  const pickFile = useCallback((picked: File) => {
+    if (uploadingFileRef.current !== null && picked !== uploadingFileRef.current && captionAtPickRef.current === null) {
+      captionAtPickRef.current = captionRef.current;
+    }
+    setFile(picked);
+  }, []);
   // 2026-11-01 scale audit (jobs, event size): over the 10,000-character cap, which
   // POST /api/media rejects - blocks Upload (lib/captionLimits.ts).
   const captionOver = captionCounter(baseCaption).over;
@@ -906,6 +917,8 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
 
     setUploading(true);
     setUploadProgress(0);
+    uploadingFileRef.current = file;
+    captionAtPickRef.current = null;
 
     try {
       // iPhone HEIC -> JPEG, big photos shrunk, unsupported types refused with
@@ -922,7 +935,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
         throw await explainUploadFailure(uploadError, workspaceId);
       });
 
-      const sentCaption = captionRef.current;
+      const sentCaption = captionAtPickRef.current ?? captionRef.current;
       const response = await fetchOrNoAnswer("/api/media", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -967,6 +980,8 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
     } catch (err) {
       toast.error(uploadErrorMessage(err));
     } finally {
+      uploadingFileRef.current = null;
+      captionAtPickRef.current = null;
       setUploading(false);
       setUploadProgress(null);
     }
@@ -1051,7 +1066,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
               <MediaFilePicker
                 file={file}
                 inputKey={fileInputKey}
-                onFile={setFile}
+                onFile={pickFile}
                 onReject={(message) => toast.error(message)}
               />
               {uploadProgress !== null && (
