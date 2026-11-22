@@ -50,7 +50,10 @@ const KEPT_IN = /(?:const|let)\s+(\w+)\s*(?::[^=;]+)?=\s*$/;
 /** Destructured on the spot, which takes its first code points: `const [first] =`. */
 const DESTRUCTURED = /(?:const|let)\s*\[[^\]]*\]\s*(?::[^=;]+)?=\s*$/;
 
-/** Each `Array.from(x)` or `[...x]` in `text`: where it ends and what it spreads. */
+/**
+ * Each `Array.from(x)`, `[...x]` or `x.split("")` in `text`: where it ends and
+ * what it spreads. R67 review: split("") cuts by UTF-16 unit, worse still.
+ */
 function spreads(text: string): { start: number; end: number; source: string }[] {
   const found: { start: number; end: number; source: string }[] = [];
   for (const match of text.matchAll(/Array\.from\(|\[\.\.\./g)) {
@@ -60,6 +63,12 @@ function spreads(text: string): { start: number; end: number; source: string }[]
     const whole = isFrom ? balancedAt(text, open, "(", ")") : balancedAt(text, open, "[", "]");
     const inner = isFrom ? whole.slice(1, -1) : whole.slice(4, -1);
     found.push({ start, end: open + whole.length, source: inner });
+  }
+  for (const match of text.matchAll(/\.split\(\s*(?:""|''|``)\s*\)/g)) {
+    // From the start of the receiver (`caption.trim()`), so `const chars =` comes before it.
+    const receiver = /[\w$.?()]+$/.exec(text.slice(0, match.index))?.[0] ?? "";
+    const start = match.index - receiver.length;
+    found.push({ start, end: match.index + match[0].length, source: receiver });
   }
   return found;
 }
@@ -131,6 +140,10 @@ describe("no user text is cut by code point", () => {
     ["destructuring Array.from", "const [a, b] = Array.from(name);"],
     ["at(0) on the spot", "return Array.from(text).at(0);"],
     ["at() on a kept variable", "const chars = [...text];\nreturn chars.at(-1);"],
+    // R67 fix review L1: split("") cuts by UTF-16 unit.
+    ['split("") cut on the spot', 'return text.split("").slice(0, 10).join("");'],
+    ["split('') kept, then cut", "const chars = caption.trim().split('');\nreturn chars.slice(0, 80).join('');"],
+    ['split("") destructured', 'const [first] = name.split("");'],
   ])("fails on %s", (_form, text) => {
     expect(codePointCuts(text)).toHaveLength(1);
   });
@@ -152,11 +165,19 @@ describe("no user text is cut by code point", () => {
 
 // R67: every prefix cut of a string, found by the receiver's type.
 
-/** A string, or a value the checker cannot type (`any`), which may be one. */
+/**
+ * A string, or a value the checker cannot type (`any`), which may be one. A
+ * type parameter counts by its constraint (`<T extends string>`).
+ */
 function mayBeString(checker: ts.TypeChecker, node: ts.Node): boolean {
   const type = checker.getNonNullableType(checker.getTypeAtLocation(node));
   const parts = type.isUnion() ? type.types : [type];
-  return parts.every((part) => (part.flags & (ts.TypeFlags.StringLike | ts.TypeFlags.Any)) !== 0);
+  return parts.every((part) => {
+    const resolved = part.flags & ts.TypeFlags.TypeParameter ? checker.getBaseConstraintOfType(part) : part;
+    if (!resolved) return false;
+    const pieces = resolved.isUnion() ? resolved.types : [resolved];
+    return pieces.every((piece) => (piece.flags & (ts.TypeFlags.StringLike | ts.TypeFlags.Any)) !== 0);
+  });
 }
 
 /** `x`, without the parentheses, `as` and `!` around it. */
@@ -166,6 +187,19 @@ function bare(node: ts.Expression): ts.Expression {
     inner = inner.expression;
   }
   return inner;
+}
+
+/** The checker types it as the number 0: `0`, `-0`, or `const ZERO = 0`. */
+function isZero(checker: ts.TypeChecker, node: ts.Expression): boolean {
+  const inner = bare(node);
+  if (
+    ts.isPrefixUnaryExpression(inner) &&
+    (inner.operator === ts.SyntaxKind.MinusToken || inner.operator === ts.SyntaxKind.PlusToken)
+  ) {
+    return isZero(checker, inner.operand);
+  }
+  const type = checker.getTypeAtLocation(inner);
+  return type.isNumberLiteral() && type.value === 0;
 }
 
 /** ASCII by construction: an ISO date (`toISOString()`) or a hash (`digest("hex")`). */
@@ -186,43 +220,81 @@ function dropsKnownSuffix(node: ts.Expression): boolean {
   return ts.isPropertyAccessExpression(operand) && operand.name.text === "length";
 }
 
-/** A loop body that can stop early: a break or a return outside any function inside it. */
-function canStop(body: ts.Node): boolean {
-  let found = false;
-  const visit = (node: ts.Node) => {
-    if (found || ts.isFunctionLike(node)) return;
-    if (ts.isBreakStatement(node) || ts.isReturnStatement(node)) found = true;
-    else ts.forEachChild(node, visit);
-  };
-  visit(body);
-  return found;
+/** A call's method name and receiver: `x.slice(...)`, `x?.slice(...)` or `x["slice"](...)`. */
+function methodCall(node: ts.CallExpression): { name: string; receiver: ts.Expression } | null {
+  const callee = bare(node.expression);
+  if (ts.isPropertyAccessExpression(callee)) return { name: callee.name.text, receiver: callee.expression };
+  if (ts.isElementAccessExpression(callee) && ts.isStringLiteralLike(callee.argumentExpression)) {
+    return { name: callee.argumentExpression.text, receiver: callee.expression };
+  }
+  return null;
 }
 
-const PREFIX_CUTS = new Set(["slice", "substring", "substr"]);
+/** `slice(0, n)` and `substr(0, n)` start at 0; `substring` swaps its arguments, so either may be 0. */
+function isPrefixCut(checker: ts.TypeChecker, name: string, args: readonly ts.Expression[]): boolean {
+  if (args.length !== 2) return false;
+  if (name === "substring") return isZero(checker, args[0]) || isZero(checker, args[1]);
+  if (name === "slice") return isZero(checker, args[0]) && !dropsKnownSuffix(args[1]);
+  return name === "substr" && isZero(checker, args[0]);
+}
 
 /**
- * The prefix cuts of a string in one file, as their source text:
- * `.slice(0, n)`, `.substring(0, n)` and `.substr(0, n)` on a string-typed
- * receiver, and a for-of loop over a string that can stop early (a code-point
- * cut). An ISO date, a hash and a known suffix are left alone (see above).
+ * What `node` splits a string into code points or units from:
+ * `Array.from(x)`, `[...x]` or `x.split("")`. Null for anything else.
+ */
+function splitSource(checker: ts.TypeChecker, node: ts.Node): ts.Expression | null {
+  if (ts.isCallExpression(node)) {
+    const callee = bare(node.expression);
+    if (ts.isPropertyAccessExpression(callee) && callee.getText() === "Array.from" && node.arguments.length >= 1) {
+      return node.arguments[0];
+    }
+    const method = methodCall(node);
+    if (method?.name === "split" && node.arguments.length >= 1) {
+      const type = checker.getTypeAtLocation(node.arguments[0]);
+      if (type.isStringLiteral() && type.value === "") return method.receiver;
+    }
+  }
+  if (ts.isArrayLiteralExpression(node) && node.elements.length === 1 && ts.isSpreadElement(node.elements[0])) {
+    return node.elements[0].expression;
+  }
+  return null;
+}
+
+/** Only counted, never cut: `Array.from(text).length`. */
+function onlyCounted(node: ts.Node): boolean {
+  let outer = node;
+  while (ts.isParenthesizedExpression(outer.parent)) outer = outer.parent;
+  return ts.isPropertyAccessExpression(outer.parent) && outer.parent.name.text === "length";
+}
+
+/**
+ * The cuts of a string in one file, as their source text:
+ * - `.slice(0, n)`, `.substring(0, n)` (either way round) and `.substr(0, n)`
+ *   on a string-typed receiver, a start the checker types as 0 included;
+ * - every for-of over a string (code points);
+ * - every `Array.from(text)`, `[...text]` and `text.split("")` that is not
+ *   just counted, so a for-of, an index loop or a cut over it is found.
+ * An ISO date, a hash and a known suffix are left alone (see above).
  */
 function stringPrefixCuts(checker: ts.TypeChecker, file: ts.SourceFile): string[] {
   const cuts: string[] = [];
   const visit = (node: ts.Node) => {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isPropertyAccessExpression(node.expression) &&
-      PREFIX_CUTS.has(node.expression.name.text) &&
-      node.arguments.length === 2 &&
-      ts.isNumericLiteral(node.arguments[0]) &&
-      node.arguments[0].text === "0" &&
-      !dropsKnownSuffix(node.arguments[1]) &&
-      !isAsciiByConstruction(node.expression.expression) &&
-      mayBeString(checker, node.expression.expression)
-    ) {
+    if (ts.isCallExpression(node)) {
+      const method = methodCall(node);
+      if (
+        method &&
+        isPrefixCut(checker, method.name, node.arguments) &&
+        !isAsciiByConstruction(method.receiver) &&
+        mayBeString(checker, method.receiver)
+      ) {
+        cuts.push(node.getText(file).replace(/\s+/g, " "));
+      }
+    }
+    const source = splitSource(checker, node);
+    if (source && !onlyCounted(node) && mayBeString(checker, source)) {
       cuts.push(node.getText(file).replace(/\s+/g, " "));
     }
-    if (ts.isForOfStatement(node) && mayBeString(checker, node.expression) && canStop(node.statement)) {
+    if (ts.isForOfStatement(node) && !splitSource(checker, bare(node.expression)) && mayBeString(checker, node.expression)) {
       cuts.push(`for of ${node.expression.getText(file)}`);
     }
     ts.forEachChild(node, visit);
@@ -253,6 +325,7 @@ const LISTED: Record<string, string> = {
   "lib/uploadLink.ts: safe.slice(0, STORED_NAME_MAX - ext.length)": "a storage name already reduced to [A-Za-z0-9._-]",
   'lib/xMentions.ts: name.slice(0, name.indexOf("."))': "an X handle cut at its own '.'",
   "lib/xMentions.ts: line.slice(0, line.length - end.length)": "drops the line's own trailing carriage return",
+  "lib/xWeightedLength.ts: for of text": "adds up every code point's weight for the X count; it never cuts",
   'server/billing/stripeApi.ts: `vs-${all.join("-")}`.slice(0, 255)': "an idempotency key built from our own ids",
   "server/billing/stripeSignature.ts: entry.slice(0, at)": "a Stripe-Signature entry cut at its '='",
   "server/connectLink/cookie.ts: part.slice(0, index)": "a cookie pair cut at its '='",
@@ -330,18 +403,66 @@ export { caption };`,
   return out;
 }`,
   ],
+  // R67 fix review L1: a for-of in any spelling, and the unit and index forms.
+  [
+    "a for-of over a string that only counts (every for-of over a string is listed)",
+    "export function f(text: string): number {\n  let n = 0;\n  for (const ch of text) n += ch.length;\n  return n;\n}",
+  ],
+  [
+    "a for-of over Array.from(text) that counts and breaks",
+    `export function f(text: string, max: number): string {
+  let out = "";
+  let n = 0;
+  for (const ch of Array.from(text)) {
+    if (++n > max) break;
+    out += ch;
+  }
+  return out;
+}`,
+  ],
+  [
+    "a for-of over [...text] that counts and breaks",
+    `export function f(text: string, max: number): string {
+  let out = "";
+  for (const ch of [...text]) {
+    if (out.length >= max) break;
+    out += ch;
+  }
+  return out;
+}`,
+  ],
+  ['text.split("").slice(0, n)', 'export const f = (text: string) => text.split("").slice(0, 10).join("");'],
+  [
+    "an index loop over Array.from(text)",
+    `export function f(text: string, max: number): string {
+  const chars = Array.from(text);
+  let out = "";
+  for (let i = 0; i < max && i < chars.length; i++) out += chars[i];
+  return out;
+}`,
+  ],
+  // R67 fix review L2: a start that is 0 but not the literal 0.
+  ["a const ZERO", "const ZERO = 0;\nexport const f = (t: string, n: number) => t.slice(ZERO, n);"],
+  ["a -0 start", "export const f = (t: string, n: number) => t.slice(-0, n);"],
+  ['t["slice"](0, n)', 'export const f = (t: string, n: number) => t["slice"](0, n);'],
+  ["substring(n, 0), which swaps its arguments", "export const f = (t: string, n: number) => t.substring(n, 0);"],
+  ["a receiver typed <T extends string>", "export const f = <T extends string>(t: T, n: number) => t.slice(0, n);"],
 ];
 
 const LEFT_ALONE: [string, string][] = [
+  // Out of the rule by design: not a prefix cut to a count.
+  ["slice(-n)", "export const f = (t: string, n: number) => t.slice(-n);"],
+  ["substring(n, m)", "export const f = (t: string, n: number, m: number) => t.substring(n, m);"],
+  ["slice(start, start + n)", "export const f = (t: string, start: number, n: number) => t.slice(start, start + n);"],
+  ["Array.from(text).length, a count", "export const f = (t: string) => Array.from(t).length;"],
+  ["[...text].length, a count", "export const f = (t: string) => [...t].length;"],
+  ['split(",")', 'export const f = (t: string) => t.split(",").slice(0, 2);'],
+  ["a spread of a list", "export const f = (ids: string[]) => [...ids].slice(0, 2);"],
   ["an ISO date", "export const day = new Date().toISOString().slice(0, 10);"],
   ["a hash", 'declare const hash: { digest(encoding: string): string };\nexport const id = hash.digest("hex").slice(0, 16);'],
   ["a known suffix dropped", 'const SUFFIX = "_failed";\nexport const f = (code: string) => code.slice(0, -SUFFIX.length);'],
   ["a list", "export const f = (ids: string[]) => ids.slice(0, 5);"],
   ["a cut that is not a prefix", "export const f = (text: string) => text.slice(1);"],
-  [
-    "a for-of over a string that never stops (a count)",
-    "export function f(text: string): number {\n  let n = 0;\n  for (const ch of text) n += ch.length;\n  return n;\n}",
-  ],
   [
     "a for-of over a list that stops",
     "export function f(ids: string[]): string {\n  for (const id of ids) {\n    if (id) return id;\n  }\n  return '';\n}",
