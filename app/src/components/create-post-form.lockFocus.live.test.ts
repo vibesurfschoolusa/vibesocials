@@ -273,6 +273,31 @@ describe('Create: "Use a different file instead" during a waiting send (R65 publ
     expect(classes).toEqual(expect.arrayContaining(["disabled:cursor-not-allowed", "disabled:opacity-50"]));
   }, 10_000);
 
+  // R67 pages-b L1: a disabled button still matches :hover, so a bare hover: class would underline it while locked.
+  const DIFFERENT_FILE_CLASSES =
+    "text-xs font-medium text-primary underline-offset-4 enabled:hover:underline disabled:cursor-not-allowed disabled:opacity-50";
+  const bareHover = (node: FakeNode) => String(node.attributes.class).split(/\s+/).filter((c) => c.startsWith("hover:"));
+
+  it("locked during a waiting send: it has no bare hover class (R67 pages-b L1)", async () => {
+    await reuseWithUploadedCover();
+    await submit();
+    const button = buttonTexted(DIFFERENT_FILE);
+    expect(disabledNow(button)).toBe(true);
+    expect(bareHover(button)).toEqual([]);
+    expect(String(button.attributes.class).split(/\s+/)).toEqual(
+      expect.arrayContaining(["disabled:cursor-not-allowed", "disabled:opacity-50"]),
+    );
+    await releaseCover();
+  }, 10_000);
+
+  it("enabled: it looks as now, underlining on hover (R67 pages-b L1)", async () => {
+    query.search = "mediaItemId=item-1";
+    await mount();
+    const button = buttonTexted(DIFFERENT_FILE);
+    expect(disabledNow(button)).toBe(false);
+    expect(button.attributes.class).toBe(DIFFERENT_FILE_CLASSES);
+  }, 10_000);
+
   it("a waiting send locks the cover on the reused video, and focus in it moves to the submit button", async () => {
     postAnswer = REFUSED;
     await reuseWithUploadedCover();

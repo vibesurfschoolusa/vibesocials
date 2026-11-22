@@ -3149,7 +3149,7 @@ function CreatePostFormInner({
                   type="button"
                   onClick={handleDismissReuse}
                   disabled={sendLocksFields}
-                  className="text-xs font-medium text-primary underline-offset-4 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                  className="text-xs font-medium text-primary underline-offset-4 enabled:hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Use a different file instead
                 </button>
