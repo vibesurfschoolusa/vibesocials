@@ -936,6 +936,10 @@ export function BulkPostsForm({
   function removeRow(id: string) {
     uploadAbortsRef.current.get(id)?.abort();
     uploadAbortsRef.current.delete(id);
+    // R67 publishing-flow-2 L1: the work loop waits on this row's AI answer, which
+    // would be dropped anyway; letting it go moves the loop to the next row.
+    rowRequests.letGo(id, "caption");
+    rowRequests.letGo(id, "altText");
     filesRef.current.delete(id);
     revokeThumbnail(id);
     setTooMany(false);
