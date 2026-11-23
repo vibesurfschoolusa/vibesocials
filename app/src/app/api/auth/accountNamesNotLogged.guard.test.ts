@@ -311,6 +311,10 @@ describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
       ['console.log("[Instagram] Carousel", { igAccountId });', "igAccountId"],
       ['console.log("[LinkedIn] Upload", { upload: session.data });', "data"],
       ['console.log("[TikTok] Refreshed", { rotated: data.refreshToken });', "refreshToken"],
+      // R68 lead follow-up: a post's author can be a person (urn:li:person:…).
+      ['logger.info("[LinkedIn] Creating post", { authorUrn });', "authorUrn"],
+      ['console.log("[LinkedIn] Sending", { author: postBody.author });', "author"],
+      ['console.log("[LinkedIn] Registering video", { ownerUrn });', "ownerUrn"],
     ])("%s", (source, name) => {
       expect(loggedNames(source).map((hit) => hit.replace(/^\d+: /, ""))).toContain(name);
     });

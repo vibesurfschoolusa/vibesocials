@@ -21,6 +21,7 @@ import {
   LINKEDIN_UPLOAD_STATE_KIND,
   LINKEDIN_URL_EXPIRY_SAFETY_MS,
   linkedinClient,
+  loggedAuthor,
   refreshLinkedInToken,
 } from "@/server/platforms/linkedinClient";
 import {
@@ -1174,6 +1175,25 @@ describe("linkedinClient — Posts, Images and Videos APIs", () => {
 
     expect(everythingLogged()).not.toContain("Kai Surf School");
     expect(everythingLogged()).toContain('"organizationCount":1');
+  });
+
+  // R68 lead follow-up: an organization's URN is a company page id and stays;
+  // the post-body log names the fields and the length, never the caption.
+  it("an organization-authored post logs its URN as before, and no caption text", async () => {
+    stub();
+
+    await linkedinClient.publishVideo(ctx("image/jpeg", "Private note for Maria"));
+
+    expect(everythingLogged()).toContain("urn:li:organization:123");
+    expect(everythingLogged()).not.toContain("Private note for Maria");
+    expect(everythingLogged()).toContain("[LinkedIn] Post body");
+  });
+
+  // Every post here is an organization's today; a person's URN is a platform
+  // user id, so a log names only its kind.
+  it("a person-authored post's log has no person id", () => {
+    expect(loggedAuthor("urn:li:person:Ab12Cd34")).toBe("person");
+    expect(loggedAuthor("urn:li:organization:123")).toBe("urn:li:organization:123");
   });
 
   it("an image post: initializeUpload as the page, a PUT of the bytes with the token, then POST /rest/posts with the image URN", async () => {
@@ -4505,8 +4525,8 @@ describe("linkedinClient — alt text (07d)", () => {
   });
 });
 
-// 07d fix round 1: the "Full post body" log line stays what it was on main: the
-// body without any description, and nothing added.
+// 07d fix round 1: the post body log carries no description. R68 lead
+// follow-up: it now names only the fields and the length.
 describe("linkedinClient — the post body log carries no description (07d)", () => {
   const REST = "https://api.linkedin.com/rest";
   const INIT = `${REST}/images?action=initializeUpload`;
@@ -4560,11 +4580,9 @@ describe("linkedinClient — the post body log carries no description (07d)", ()
       caption: "hello",
     }) as unknown as PublishContext;
 
-  /** The logged body, parsed back from the "Full post body:" line. */
-  const loggedBody = () => {
-    const line = vi.mocked(console.log).mock.calls.find((c) => c[0] === "[LinkedIn] Full post body:");
-    return JSON.parse(String(line?.[1])) as Record<string, unknown>;
-  };
+  /** What the post body line logged. */
+  const loggedBody = () =>
+    vi.mocked(console.log).mock.calls.find((c) => c[0] === "[LinkedIn] Post body")?.[1] as Record<string, unknown>;
 
   beforeEach(() => {
     for (const level of ["log", "warn", "error"] as const) vi.spyOn(console, level).mockImplementation(() => {});
@@ -4579,7 +4597,9 @@ describe("linkedinClient — the post body log carries no description (07d)", ()
 
     await linkedinClient.publishVideo(ctx([photo(1, "Secret single description.")]));
 
-    expect(loggedBody().content).toEqual({ media: { id: imageUrn(1) } });
+    expect(loggedBody()).toMatchObject({ contentFields: ["media"] });
+    expect(loggedBody().fields).toContain("commentary");
+    expect(typeof loggedBody().length).toBe("number");
     expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain("Secret single description.");
   });
 
@@ -4588,7 +4608,7 @@ describe("linkedinClient — the post body log carries no description (07d)", ()
 
     await linkedinClient.publishVideo(ctx([photo(1, "Secret one."), photo(2, null)]));
 
-    expect(loggedBody().content).toEqual({ multiImage: { images: [{ id: imageUrn(1) }, { id: imageUrn(2) }] } });
+    expect(loggedBody()).toMatchObject({ contentFields: ["multiImage"] });
     expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain("Secret one.");
   });
 });

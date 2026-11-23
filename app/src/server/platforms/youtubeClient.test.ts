@@ -225,6 +225,19 @@ describe("youtubeClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     expect(error?.retryAt).toBe(Date.UTC(2026, 10, 2, 8, 5, 0));
   });
 
+  // R68 lead follow-up: the video title is the customer's own text.
+  it("the publish logs carry no title", async () => {
+    const title = "Kai's private lesson with Maria";
+    stubYouTube(() => new Response(JSON.stringify({ id: "vid-1", snippet: { title } }), { status: 200 }));
+    const base = ytCtx();
+
+    await youtubeClient.publishVideo({ ...base, mediaItem: { ...base.mediaItem, baseCaption: title } } as PublishContext);
+
+    const logged = JSON.stringify(vi.mocked(console.log).mock.calls);
+    expect(logged).toContain("Video uploaded successfully");
+    expect(logged).not.toContain("private lesson");
+  });
+
   it("insert 400 uploadLimitExceeded -> daily_limit", async () => {
     stubYouTube(() => googleError(400, "uploadLimitExceeded"));
     expect(await failure()).toMatchObject({ code: "RATE_LIMITED", kind: "daily_limit" });
