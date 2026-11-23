@@ -33,6 +33,12 @@ const NAME_WORDS = new Set([
   "author",
   "tags",
   "hashtags",
+  // R68 review: a caption, a description and a file name are the customer's own text.
+  "caption",
+  "description",
+  "commentary",
+  "preview",
+  "filename",
 ]);
 /**
  * The same, joined into one word in any case (userIdFromX, accountIdentifier),
@@ -112,8 +118,12 @@ function isBooleanName(identifier: string): boolean {
   return first === "has" || first === "is";
 }
 
+/** R68 review: a length, a count or an extension (captionLength, fileExtension) says nothing about who. */
+const MEASURE_WORDS = new Set(["length", "count", "extension"]);
+
 export function saysWhoItIs(identifier: string): boolean {
   if (isBooleanName(identifier)) return false;
+  if (MEASURE_WORDS.has(words(identifier).at(-1) ?? "")) return false;
   return (
     PLATFORM_ID_NAMES.has(identifier) ||
     TOKEN_NAMES.has(identifier) ||
@@ -124,6 +134,9 @@ export function saysWhoItIs(identifier: string): boolean {
 }
 
 const LOG_METHODS = new Set(["log", "info", "warn", "error", "debug"]);
+
+/** R68 review: what these return says nothing about who, whatever they are given. */
+const SAFE_READERS = new Set(["extensionOf", "loggedAuthor"]);
 
 function isLogCall(node: ts.CallExpression): boolean {
   const callee = node.expression;
@@ -154,16 +167,22 @@ export function loggedNames(source: string, fileName = "planted.ts"): string[] {
       inArgument(node.initializer);
       return;
     }
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && SAFE_READERS.has(node.expression.text)) return;
     if (ts.isIdentifier(node)) {
       const parent = node.parent;
       // `tokenResponse.status` logs the status: a value whose field is read
       // is judged by that field's name, not its own.
-      // R68: so is a field in the middle of a chain (`session.data.video` logs the video).
-      const readsAField =
+      const readsAField = ts.isPropertyAccessExpression(parent) && parent.expression === node;
+      // R68: a field in the middle of a chain is no whole object (`session.data.video`
+      // logs the video), but its name still counts (`channel.snippet.title.slice(0, 50)`).
+      const midChain =
         ts.isPropertyAccessExpression(parent) &&
-        (parent.expression === node ||
-          (ts.isPropertyAccessExpression(parent.parent) && parent.parent.expression === parent));
-      if (!readsAField && (saysWhoItIs(node.text) || ACCOUNT_OBJECTS.has(node.text))) record(node, node.text);
+        parent.name === node &&
+        ts.isPropertyAccessExpression(parent.parent) &&
+        parent.parent.expression === parent;
+      // `ctx.caption?.length` logs a length.
+      if (midChain && MEASURE_WORDS.has((parent.parent as ts.PropertyAccessExpression).name.text.toLowerCase())) return;
+      if (!readsAField && (saysWhoItIs(node.text) || (!midChain && ACCOUNT_OBJECTS.has(node.text)))) record(node, node.text);
     }
     ts.forEachChild(node, inArgument);
   };
@@ -216,6 +235,7 @@ const OWN_USER_ID = "our own user id (Vibe Socials' User.id), never the platform
 const ERROR_CODE = "an Error's own code (error.code), never an OAuth code";
 const TOKEN_TYPE = "the kind of token TikTok sent (Bearer), never the token";
 const ERROR_NAME = "an Error's class name (error.name), never a person's";
+const TIKTOK_ERROR_DESCRIPTION = "TikTok's own sentence for a failed token reply (error_description), never customer text";
 const FAILED_REPLY = "the body of a FAILED reply (read under !response.ok), as errorText elsewhere";
 const SAFE: Record<string, string> = {
   "app/api/auth/facebook_page/callback/route.ts userId": OWN_USER_ID,
@@ -233,6 +253,10 @@ const SAFE: Record<string, string> = {
   "app/api/auth/youtube/callback/route.ts text":
     "the body of a FAILED token reply (await tokenResponse.text() under !tokenResponse.ok), as errorText elsewhere",
   "app/api/auth/tiktok/callback/route.ts token_type": TOKEN_TYPE,
+  "app/api/auth/tiktok/callback/route.ts errorDescription": TIKTOK_ERROR_DESCRIPTION,
+  "app/api/auth/tiktok/callback/route.ts error_description": TIKTOK_ERROR_DESCRIPTION,
+  "server/platforms/tiktokClient.ts errorDescription": TIKTOK_ERROR_DESCRIPTION,
+  "server/platforms/tiktokClient.ts error_description": TIKTOK_ERROR_DESCRIPTION,
   // R68 platform-clients L1: the publish logs.
   "server/platforms/facebookPageClient.ts code": ERROR_CODE,
   "server/platforms/facebookPageClient.ts pageId": "a business Page's id, never a person's (lead decision, R68)",
@@ -248,8 +272,6 @@ const SAFE: Record<string, string> = {
   "server/platforms/tiktokClient.ts code": ERROR_CODE,
   "server/platforms/xClient.ts code": "an Error's code or the code X's reply sent (an API error number), never an OAuth code",
   "server/platforms/xClient.ts name": ERROR_NAME,
-  "server/platforms/xClient.ts accessTokenLength": "the token's length, a count, never the token",
-  "server/platforms/xClient.ts accessTokenSecretLength": "the secret's length, a count, never the secret",
   "server/platforms/youtubeClient.ts code": ERROR_CODE,
 };
 
@@ -329,6 +351,13 @@ describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
       ['console.log("[LinkedIn] Registering video", { ownerUrn });', "ownerUrn"],
       ['console.log("[YouTube] Uploading with metadata", { tags: tags });', "tags"],
       ['console.log("[Instagram] Caption", { hashtags });', "hashtags"],
+      // R68 review: the caption and the file name, and a name read in the middle of a chain.
+      ['console.log("[TikTok] Init", { caption });', "caption"],
+      ['console.log("[TikTok] Init", { captionPreview: preview });', "captionPreview"],
+      ['console.log("[X] Media", { originalFilename: mediaItem.originalFilename });', "originalFilename"],
+      ['console.log("[LinkedIn] Video", { filename });', "filename"],
+      ['console.log("[YouTube] Channel", { c: channel.snippet.title.slice(0, 50) });', "title"],
+      ['console.log("[TikTok] Me", { me: me.display_name.trim() });', "display_name"],
     ])("%s", (source, name) => {
       expect(loggedNames(source).map((hit) => hit.replace(/^\d+: /, ""))).toContain(name);
     });
@@ -345,7 +374,7 @@ describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
   it("passes a yes/no under any key and a field read in the middle of a chain (R68)", () => {
     expect(
       loggedNames(
-        'console.log("[TikTok] Refreshed", { refreshTokenRotated: data.refreshToken !== undefined, videoUrn: session.data.video, parts: current.data.partCount, tagCount: tags.length });',
+        'console.log("[TikTok] Refreshed", { refreshTokenRotated: data.refreshToken !== undefined, videoUrn: session.data.video, parts: current.data.partCount, tagCount: tags.length, captionLength: caption.length, fileExtension: extensionOf(mediaItem.originalFilename), titleLength: 3, postedAs: loggedAuthor(authorUrn), n: ctx.caption?.length });',
       ),
     ).toEqual([]);
   });

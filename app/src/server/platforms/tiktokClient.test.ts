@@ -1964,31 +1964,37 @@ describe("tiktokClient.publishVideo", () => {
     });
   });
 
-  // R67 fix review L3: the log's caption preview adds "..." only when it cut something.
-  describe("the upload log's caption preview", () => {
-    async function previewFor(caption: string): Promise<unknown> {
+  // R68 review: the caption and the file name are the customer's own text; the
+  // upload log says the caption's length and whether it was cut, and the file's extension.
+  describe("the upload log's caption", () => {
+    async function loggedFor(caption: string): Promise<{ init: Record<string, unknown>; all: string }> {
       stubFetch({
         "creator_info/query": creatorInfoOk,
         "blob.example.com": videoBlob,
         "video/init": () => jsonResponse({ error: { code: "invalid_params", message: "no" } }, 400),
       });
       await tiktokClient.publishVideo({ ...makeCtx(), caption }).catch(() => null);
-      const call = vi
-        .mocked(console.log)
-        .mock.calls.find(([message]) => String(message).startsWith("[TikTok] Initializing upload"));
-      return (call?.[1] as { captionPreview?: unknown } | undefined)?.captionPreview;
+      const calls = vi.mocked(console.log).mock.calls;
+      const call = calls.find(([message]) => String(message).startsWith("[TikTok] Initializing upload"));
+      return { init: call?.[1] as Record<string, unknown>, all: JSON.stringify(calls) };
     }
 
-    it("60 emoji (120 units, 60 code points) are shown whole, with no dots", async () => {
-      expect(await previewFor("🌊".repeat(60))).toBe("🌊".repeat(60));
+    it("a short caption: its length, not cut, and never its text", async () => {
+      const { init, all } = await loggedFor("Lesson with Maria");
+      expect(init).toMatchObject({ captionLength: 17, wasCut: false });
+      expect(all).not.toContain("Maria");
     });
 
-    it("a longer caption is cut in whole graphemes, with dots", async () => {
-      expect(await previewFor(`${"a".repeat(99)}🌊 more`)).toBe(`${"a".repeat(99)}🌊...`);
+    it("a caption over TikTok's limit: cut, and never its text", async () => {
+      const { init, all } = await loggedFor(`Maria ${"a".repeat(2_300)}`);
+      expect(init.wasCut).toBe(true);
+      expect(all).not.toContain("Maria");
     });
 
-    it("a short caption is shown as it is", async () => {
-      expect(await previewFor("hello")).toBe("hello");
+    it("the file name is never logged, only its extension", async () => {
+      const { all } = await loggedFor("hello");
+      expect(all).not.toContain("clip.mp4");
+      expect(all).toContain('"fileExtension":"mp4"');
     });
   });
 });
