@@ -290,3 +290,48 @@ describe("removeXMentions: the full-width ＠", () => {
     expect(removeXMentions("Write to info@surf.com or ＠kai")).toBe("Write to info@surf.com or kai");
   });
 });
+
+// R68 pages-a-3 L1: /[,;]+$/ restarted at every comma of a run that was not at
+// the very end, so a 100,000-comma run cost about 11 s. The trims are now a
+// backward walk, linear in the token.
+describe("removeXMentions with a long run of commas", () => {
+  const timed = (text: string) => {
+    const started = performance.now();
+    const result = removeXMentions(text);
+    return { result, ms: performance.now() - started };
+  };
+
+  it("@kai + 100,000 commas + x: fast, and the text as before", () => {
+    const text = `@kai ${",".repeat(100_000)}x`;
+    const { result, ms } = timed(text);
+    expect(ms).toBeLessThan(1_000);
+    expect(result).toBe(`kai ${",".repeat(100_000)}x`);
+  }, 15_000);
+
+  it("#a + 100,000 commas + @kai #b: fast, and the text as before", () => {
+    const text = `#a ${",".repeat(100_000)} @kai #b`;
+    const { result, ms } = timed(text);
+    expect(ms).toBeLessThan(1_000);
+    expect(result).toBe(`#a ${",".repeat(100_000)} #b`);
+  }, 15_000);
+
+  it("a run of semicolons in running text: fast, and as before", () => {
+    const text = `Dawn patrol\n\n#a ${";".repeat(50_000)}#b @kai ${",;".repeat(25_000)}`;
+    const { result, ms } = timed(text);
+    expect(ms).toBeLessThan(1_000);
+    expect(result).toBe(`Dawn patrol\n\n#a ${";".repeat(50_000)}#b kai ${",;".repeat(25_000)}`);
+  }, 15_000);
+
+  it("a footer with a semicolon separator and a tag ending in commas: fast, and trimmed as before", () => {
+    const text = `Dawn patrol\n\n#a ${";".repeat(50_000)} @kai #b${",;".repeat(25_000)}`;
+    const { result, ms } = timed(text);
+    expect(ms).toBeLessThan(1_000);
+    expect(result).toBe(`Dawn patrol\n\n#a ${";".repeat(50_000)} #b`);
+  }, 15_000);
+
+  it("short tags with trailing commas and semicolons: trimmed as before", () => {
+    expect(removeXMentions("Great day\n\n#surf, @kai, #fl;,")).toBe("Great day\n\n#surf, #fl");
+    expect(removeXMentions("Great day\n\n#surf @kai,;")).toBe("Great day\n\n#surf");
+    expect(removeXMentions("Great day\n\n#surf,; @kai")).toBe("Great day\n\n#surf");
+  });
+});
