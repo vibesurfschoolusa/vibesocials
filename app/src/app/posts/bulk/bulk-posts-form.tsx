@@ -1436,7 +1436,9 @@ export function BulkPostsForm({
             "refused" in slotData ? (
               <Alert variant="warning">{slotData.refused}</Alert>
             ) : slotData.slots.length > 0 ? (
-              <label className="flex items-center gap-2 text-sm text-foreground">
+              <label
+                className={`flex items-center gap-2 text-sm text-foreground${sendingMode !== null ? " cursor-not-allowed opacity-50" : ""}`}
+              >
                 <input
                   type="checkbox"
                   checked={useSlots}
