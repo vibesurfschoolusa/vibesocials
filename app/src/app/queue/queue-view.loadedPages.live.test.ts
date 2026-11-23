@@ -89,8 +89,8 @@ let patchAnswer: (() => Response) | null = null;
 const reads: string[] = [];
 /** A page read at this cursor fails. */
 let failCursor: string | null = null;
-/** While set, a page-1 read waits here until the test lets it go. */
-let holdPageOne = false;
+/** A page read at this cursor waits here until the test lets it go. */
+let holdCursor: string | null = null;
 const heldReads: (() => void)[] = [];
 
 const fetchMock = vi.fn(async (input: unknown, init?: { method?: string }) => {
@@ -101,7 +101,7 @@ const fetchMock = vi.fn(async (input: unknown, init?: { method?: string }) => {
     reads.push(url);
     const cursor = new URLSearchParams(url.split("?")[1]).get("cursor");
     if (cursor !== null && cursor === failCursor) return Response.json({ error: "Something went wrong." }, { status: 500 });
-    if (cursor === null && holdPageOne) await new Promise<void>((resolve) => heldReads.push(resolve));
+    if (cursor !== null && cursor === holdCursor) await new Promise<void>((resolve) => heldReads.push(resolve));
     const from = cursor ? Number(cursor) : 0;
     return Response.json({
       jobs: store.slice(from, from + PAGE),
@@ -172,7 +172,7 @@ beforeEach(() => {
   patchAnswer = null;
   reads.length = 0;
   failCursor = null;
-  holdPageOne = false;
+  holdCursor = null;
   heldReads.length = 0;
   const made = makeDocument();
   container = made.container;
@@ -284,7 +284,8 @@ describe("Queue: a quiet reload keeps the pages loaded with Load more (R68 publi
     await click(loadMoreButton(), "Load more");
     expect(shown()).toEqual([1, 2, 3, 4, 5, 6]);
     cancelAnswer = () => Response.json({ error: "This post changed in the meantime. Try again." }, { status: 409 });
-    holdPageOne = true;
+    // The reload's page-2 read waits, after it has counted the pages loaded.
+    holdCursor = "2";
 
     await click(labelled('Cancel "Post 1'), "Cancel on Post 1");
     await click(buttons((n) => n.attributes?.["data-confirm"] === "Cancel post")[0], "Cancel post");
@@ -292,7 +293,7 @@ describe("Queue: a quiet reload keeps the pages loaded with Load more (R68 publi
     await click(loadMoreButton(), "Load more");
     expect(shown()).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
 
-    holdPageOne = false;
+    holdCursor = null;
     await act(async () => heldReads.shift()!());
     await settle();
     expect(shown()).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
