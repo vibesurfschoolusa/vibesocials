@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * looks disabled too, as Create's do since #309: the "Post every row to"
  * choices and the Story settings show the locked look, with no hover. Enabled,
  * their classes are as before.
+ * R68 pages-b L2: the "Use my posting times" label too.
  */
 
 vi.mock("next/link", async () => {
@@ -51,6 +52,10 @@ const fetchMock = vi.fn((input: unknown, init?: { method?: string }) => {
     posts += 1;
     const id = `post-${posts}`;
     return new Promise<Response>((resolve) => waiting.push(() => resolve(Response.json({ postJob: { id } }))));
+  }
+  // One posting time, so "Use my posting times" shows.
+  if (url.startsWith("/api/posts/scheduled-times")) {
+    return Promise.resolve(Response.json({ times: [], slots: [{ day: 1, time: "09:00" }] }));
   }
   return Promise.resolve(Response.json({}));
 });
@@ -131,6 +136,13 @@ const storyLabels = () => STORY_LEGENDS.flatMap(labelsUnder);
 const storyFieldsets = () =>
   STORY_LEGENDS.map((text) => findAll(container, (n) => n.nodeName === "LEGEND" && n.textContent === text)[0]!.parentNode!);
 
+function slotsLabel(): FakeNode {
+  const hit = findAll(container, (n) => n.nodeName === "LABEL" && (n.textContent as string).includes("Use my posting times"))[0];
+  if (!hit) throw new Error("no Use my posting times label");
+  return hit;
+}
+const SLOTS_AS_NOW = "flex items-center gap-2 text-sm text-foreground";
+
 const CHOICE_AS_NOW = "flex min-h-11 cursor-pointer items-center gap-2 rounded-[var(--radius)] border border-input px-3 text-sm";
 const STORY_BASE = "inline-flex items-center gap-2 rounded-[var(--radius)] border px-3 py-1.5 text-sm transition-colors";
 const STORY_CHECKED = `${STORY_BASE} cursor-pointer border-primary/40 bg-primary/10 text-foreground`;
@@ -149,6 +161,8 @@ function expectAsNow() {
     const checked = (props(inputIn(label)).checked as unknown) === true;
     expect(label.attributes.class, label.textContent as string).toBe(checked ? STORY_CHECKED : STORY_UNCHECKED);
   }
+  expect(locked(inputIn(slotsLabel()))).toBe(false);
+  expect(slotsLabel().attributes.class).toBe(SLOTS_AS_NOW);
 }
 
 beforeEach(() => {
@@ -212,6 +226,9 @@ describe("Add many: the settings Schedule all locks look locked (R67 pages-a L1)
       expect(classesOf(label)).not.toContain("cursor-pointer");
       expect(bareHover(label)).toEqual([]);
     }
+    expect(locked(inputIn(slotsLabel()))).toBe(true);
+    expect(classesOf(slotsLabel())).toEqual(expect.arrayContaining(["cursor-not-allowed", "opacity-50"]));
+    expect(bareHover(slotsLabel())).toEqual([]);
     await answerEveryPost();
   }, 10_000);
 
