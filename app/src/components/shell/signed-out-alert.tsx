@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { SessionContext } from "next-auth/react";
 
 import { readServerSession, type ServerSession } from "@/components/signed-in-swap";
@@ -13,11 +13,19 @@ import { rereadSessionHere } from "@/lib/staleSignOut";
  * FF1 review: true only once the server itself says this tab is signed out.
  * next-auth 4.24.15 also reports "unauthenticated" after a failed session
  * fetch (offline, a 5xx), for someone still signed in, so `nobody` (what the
- * client session says) is only the cue to ask. The server is read once each
- * time the client session changes while it names nobody (a later focus or
- * another tab's broadcast gives a new session, so it is read again); an
- * answer for an earlier session is ignored. "signedIn" and "unknown" answers
- * leave the page as it is.
+ * client session says) is only the cue to ask. The server is read each time
+ * the client session changes while it names nobody (another tab's broadcast);
+ * an answer for an earlier session is ignored.
+ *
+ * R69 new-customer-2 L1: next-auth never re-reads a null session on focus
+ * (react/index.js:410), so nothing else brings the person back:
+ * - "signedIn": this tab's session is re-read (rereadSessionHere). At most
+ *   once per question the person's own return asked (the first, then each
+ *   online or visible event), never for a session that re-read gave, so a
+ *   re-read can never start another.
+ * - "unknown", or "signedIn" while the session still names nobody: asked
+ *   again on the next online event or return to the tab.
+ * - "signedOut": known; the line shows and this stops asking.
  */
 export function useServerSaysSignedOut(
   nobody: boolean,
@@ -25,14 +33,48 @@ export function useServerSaysSignedOut(
 ): boolean {
   const session = useContext(SessionContext);
   const [answer, setAnswer] = useState<{ about: unknown; signedOut: boolean } | null>(null);
+  // Whether a "signedIn" answer may re-read the session; armed again when the
+  // session names someone, and by each online or visible event.
+  const mayReread = useRef(true);
   useEffect(() => {
-    if (!nobody) return;
+    if (!nobody) {
+      mayReread.current = true;
+      return;
+    }
     let live = true;
-    void read().then((server) => {
-      if (live) setAnswer({ about: session, signedOut: server.kind === "signedOut" });
-    });
+    let asking = false;
+    let known = false;
+    function ask() {
+      if (asking || known) return;
+      asking = true;
+      void read().then((server) => {
+        asking = false;
+        if (!live) return;
+        // Only "signedOut" ends the asking: after "signedIn" the session may
+        // still name nobody (its re-read failed too), and the next return asks again.
+        const signedOut = server.kind === "signedOut";
+        known = signedOut;
+        setAnswer({ about: session, signedOut });
+        if (server.kind === "signedIn" && mayReread.current) {
+          mayReread.current = false;
+          rereadSessionHere(window);
+        }
+      });
+    }
+    function onReturn() {
+      mayReread.current = true;
+      ask();
+    }
+    function onVisible() {
+      if (document.visibilityState === "visible") onReturn();
+    }
+    ask();
+    window.addEventListener("online", onReturn);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       live = false;
+      window.removeEventListener("online", onReturn);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [nobody, session, read]);
   return nobody && answer !== null && answer.about === session && answer.signedOut;
