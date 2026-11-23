@@ -445,3 +445,74 @@ describe("LinkedIn: a link that ends inside a grapheme", () => {
     expect(cut(long)).toBe(`${"wave ".repeat(598)}see...`);
   });
 });
+
+// R68 publishing-flow L1: fitAltText cuts with truncateUtf16AtWord, and
+// POST /api/posts cleans an alt text of any size, so the cut used to split
+// a 4 MB text into graphemes first (about 0.9 s). It now walks only as far as
+// the budget and the one grapheme after it.
+describe("truncateUtf16AtWord on a huge text", () => {
+  // The function as it was before R68, kept as the reference.
+  const WS = /^\s+$/u;
+  const oldTruncateUtf16AtWord = (text: string, maxUnits: number, opts?: { ellipsis?: string }): string => {
+    const max = Math.max(0, Math.floor(maxUnits));
+    if (text.length <= max) return text;
+    const ellipsis = opts?.ellipsis ?? "";
+    const budget = max - ellipsis.length;
+    if (budget <= 0) return "";
+    const graphemes = Array.from(seg.segment(text), (s) => s.segment);
+    let fit = 0;
+    let used = 0;
+    while (fit < graphemes.length && used + graphemes[fit].length <= budget) {
+      used += graphemes[fit].length;
+      fit += 1;
+    }
+    let end = fit;
+    if (!WS.test(graphemes[fit])) {
+      const stop = Math.max(0, fit - 100);
+      let space = fit - 1;
+      while (space > stop && !WS.test(graphemes[space])) space -= 1;
+      if (space > 0 && WS.test(graphemes[space])) end = space;
+    }
+    while (end > 0 && WS.test(graphemes[end - 1])) end -= 1;
+    if (end === 0) end = fit;
+    return graphemes.slice(0, end).join("") + ellipsis;
+  };
+
+  it.each([
+    ["words", "Glassy waves at dawn ".repeat(200_000)],
+    ["emoji", "\u{1F468}‍\u{1F469}‍\u{1F467}\u{1F30A}".repeat(400_000)],
+  ])("4 MB of %s: under 50 ms, and the same cut as before", (_name, text) => {
+    expect(text.length).toBeGreaterThanOrEqual(4_000_000);
+    const started = performance.now();
+    const result = truncateUtf16AtWord(text, 1000);
+    expect(performance.now() - started).toBeLessThan(50);
+    expect(result).toBe(oldTruncateUtf16AtWord(text, 1000));
+  }, 10_000);
+
+  it("20,000 random inputs: the same result as the old function", () => {
+    // A seeded generator, so a failure can be replayed.
+    let state = 0x68_68_68;
+    const random = () => {
+      state = (state * 1_103_515_245 + 12_345) % 2 ** 31;
+      return state / 2 ** 31;
+    };
+    const pieces = [
+      "a", "b", "Z", "1", " ", "  ", "\n", "\t", " ", "　", "é", "é", "́", "あ", "漢",
+      "\u{1F30A}", "\u{1F468}‍\u{1F469}‍\u{1F467}", "\u{1F44D}\u{1F3FB}", "1️⃣", "\u{1F1FF}\u{1F1E6}",
+      "‍", "\uD83C", "\uDF0A", "\r\n", ".", "#tag", "@kai", "vibesurf.com/1",
+    ];
+    for (let i = 0; i < 20_000; i += 1) {
+      const count = Math.floor(random() * 60);
+      let text = "";
+      for (let j = 0; j < count; j += 1) text += pieces[Math.floor(random() * pieces.length)];
+      const max = Math.floor(random() * (text.length + 4)) - 2;
+      const opts = random() < 0.3 ? { ellipsis: random() < 0.5 ? "…" : "..." } : random() < 0.5 ? undefined : {};
+      expect(truncateUtf16AtWord(text, max, opts), JSON.stringify([text, max, opts])).toBe(
+        oldTruncateUtf16AtWord(text, max, opts),
+      );
+    }
+    for (const max of [Number.NaN, Number.POSITIVE_INFINITY, 2.7, -1]) {
+      expect(truncateUtf16AtWord("Glassy waves", max)).toBe(oldTruncateUtf16AtWord("Glassy waves", max));
+    }
+  }, 30_000);
+});

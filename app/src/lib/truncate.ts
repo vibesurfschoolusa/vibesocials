@@ -171,11 +171,16 @@ export function truncateUtf16AtWord(text: string, maxUnits: number, opts?: Trunc
   const budget = max - ellipsis.length;
   if (budget <= 0) return "";
 
-  const graphemes = toGraphemes(text);
+  // R68 publishing-flow L1: only the graphemes that fit and the one after them
+  // are needed (the look-back stays among those that fit), so the walk stops
+  // there: a 4 MB alt text is cut in a few ms, not split whole first.
+  const graphemes: string[] = [];
   let fit = 0;
   let used = 0;
-  while (fit < graphemes.length && used + graphemes[fit].length <= budget) {
-    used += graphemes[fit].length;
+  for (const { segment } of graphemeSegmenter.segment(text)) {
+    graphemes.push(segment);
+    if (!(used + segment.length <= budget)) break;
+    used += segment.length;
     fit += 1;
   }
 
