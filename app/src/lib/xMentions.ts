@@ -19,7 +19,7 @@ const SEPARATOR_TOKEN = /^[·•|,;/–—-]+$/;
 // R68 pages-a-3 L1: /[,;]+$/ restarted at every comma of a run not at the very
 // end, so 100,000 commas cost about 11 s. The look-behind lets a match start
 // only where a run starts, so each run is read once: linear, same result.
-// (A backward walk would end in a prefix slice, which codePointCut.guard lists.)
+// (A backward walk would end in a prefix slice, which codePointCut.guard flags.)
 const TRAILING_COMMAS = /(?<![,;])[,;]+$/;
 
 /** `text` without its trailing commas and semicolons. */

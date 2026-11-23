@@ -292,8 +292,8 @@ describe("removeXMentions: the full-width ＠", () => {
 });
 
 // R68 pages-a-3 L1: /[,;]+$/ restarted at every comma of a run that was not at
-// the very end, so a 100,000-comma run cost about 11 s. The trims are now a
-// backward walk, linear in the token.
+// the very end, so a 100,000-comma run cost about 11 s. The trims now use a
+// look-behind, so a match starts only where a run starts: linear in the token.
 describe("removeXMentions with a long run of commas", () => {
   const timed = (text: string) => {
     const started = performance.now();
