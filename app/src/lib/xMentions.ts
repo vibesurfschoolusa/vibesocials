@@ -16,8 +16,19 @@ function hasMentionSign(text: string): boolean {
 // Characters people put between footer tags: "#surf · @kai | @mia, @ana".
 const SEPARATOR_TOKEN = /^[·•|,;/–—-]+$/;
 
+/**
+ * `text` without its trailing commas and semicolons. R68 pages-a-3 L1: a
+ * backward walk, as trimLinkTrailing; /[,;]+$/ restarted at every comma of a
+ * run not at the very end, so 100,000 commas cost about 11 s.
+ */
+function withoutTrailingCommas(text: string): string {
+  let end = text.length;
+  while (end > 0 && (text[end - 1] === "," || text[end - 1] === ";")) end -= 1;
+  return text.slice(0, end);
+}
+
 function isHashtagToken(token: string): boolean {
-  const bare = token.replace(/[,;]+$/, "");
+  const bare = withoutTrailingCommas(token);
   return hashtagsIn(bare)[0]?.[0] === bare;
 }
 
@@ -44,7 +55,7 @@ function withoutMentions(tokens: readonly string[]): string {
     separator = null;
     kept.push(token);
   }
-  return kept.join(" ").replace(/[,;]+$/, "");
+  return withoutTrailingCommas(kept.join(" "));
 }
 
 /**

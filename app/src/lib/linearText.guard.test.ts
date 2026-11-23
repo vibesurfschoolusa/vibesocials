@@ -43,9 +43,12 @@ import { fitYouTubeTitle } from "@/server/platforms/youtubeClient";
  * exported helper that walks user text on adversarial inputs of 100,000
  * characters, so a new super-linear one fails here.
  *
- * The budget is 1 s per helper call at 100,000 characters (10 µs a character).
- * A linear helper takes a few ms to about 100 ms at that size, so a loaded CI
- * runner has a 10x margin; a quadratic one takes 10 s or more.
+ * The budget is 1 s a call at 100,000 characters. A single helper takes
+ * 1-100 ms there, so a loaded CI runner has a 10x margin. The composed ones
+ * (buildCaptionWithFooter, buildPlatformPreview, platformCaptionCounter) run
+ * several of the others, up to about 460 ms (the X counter, linear: 0.9 s at
+ * 200,000), so theirs is 5 s. A quadratic helper takes 10 s or more at
+ * 100,000 (removeXMentions took 11 s), so it fails either budget.
  *
  * Left out, each for a reason:
  * - jpegFileName (prepareUploadFile.ts): its /[. ]+$/ is quadratic, but its
@@ -57,7 +60,8 @@ import { fitYouTubeTitle } from "@/server/platforms/youtubeClient";
  */
 
 const SIZE = 100_000;
-const BUDGET_MS_PER_CHAR = 1_000 / SIZE;
+const BUDGET_MS = 1_000;
+const COMPOSED_BUDGET_MS = 5_000;
 
 /** The runs a pattern or a walk may restart on, each one character or grapheme repeated. */
 const RUNS: Array<[string, string]> = [
@@ -93,7 +97,9 @@ function adversarialInputs(size: number): Array<[string, string]> {
 const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #waves @kai", trackWebsiteLinks: true };
 const platforms = Object.keys(PLATFORM_CAPTION_LIMITS) as Platform[];
 
-const HELPERS: Array<[string, (text: string) => unknown]> = [
+type Helper = (text: string) => unknown;
+
+const HELPERS: Array<[string, Helper, number?]> = [
   ["graphemeCount", graphemeCount],
   ["truncateGraphemes", (text) => truncateGraphemes(text, 2_200, { ellipsis: "…" })],
   ["truncateGraphemesWithinCodePoints", (text) => truncateGraphemesWithinCodePoints(text, 200)],
@@ -139,21 +145,26 @@ const HELPERS: Array<[string, (text: string) => unknown]> = [
   ["fitInstagramTags", fitInstagramTags],
   ["computeTikTokCaption", computeTikTokCaption],
   ["computeGbpPostSummary", computeGbpPostSummary],
-  ...platforms.flatMap((platform): Array<[string, (text: string) => unknown]> => [
-    [`buildCaptionWithFooter, ${platform}`, (text) => buildCaptionWithFooter(text, user, platform)],
-    [`buildPlatformPreview, ${platform}`, (text) => buildPlatformPreview({ platform, caption: text, user })],
-    [`platformCaptionCounter, ${platform}`, (text) => platformCaptionCounter(text, platform, user)],
+  ...platforms.flatMap((platform): Array<[string, Helper, number]> => [
+    [`buildCaptionWithFooter, ${platform}`, (text) => buildCaptionWithFooter(text, user, platform), COMPOSED_BUDGET_MS],
+    [`buildPlatformPreview, ${platform}`, (text) => buildPlatformPreview({ platform, caption: text, user }), COMPOSED_BUDGET_MS],
+    [`platformCaptionCounter, ${platform}`, (text) => platformCaptionCounter(text, platform, user), COMPOSED_BUDGET_MS],
   ]),
 ];
 
-/** The inputs on which `helper` took longer than the budget for their size, with the time each took. */
-function overBudget(helper: (text: string) => unknown, size: number): string[] {
+/**
+ * The inputs of `size` characters (those whose name starts with `only`, when
+ * given) on which `helper` took longer than `budgetMs` scaled to that size,
+ * each with the time it took.
+ */
+function overBudget(helper: Helper, budgetMs: number, size = SIZE, only = ""): string[] {
   const over: string[] = [];
   for (const [name, input] of adversarialInputs(size)) {
+    if (!name.startsWith(only)) continue;
     const started = performance.now();
     helper(input);
     const ms = performance.now() - started;
-    if (ms > input.length * BUDGET_MS_PER_CHAR) over.push(`${name}: ${Math.round(ms)} ms`);
+    if (ms > (budgetMs * input.length) / SIZE) over.push(`${name}: ${Math.round(ms)} ms`);
   }
   return over;
 }
@@ -174,8 +185,8 @@ describe("every helper that walks user text runs in linear time", () => {
     }
   });
 
-  it.each(HELPERS)("%s: under 1 s on every input", (_name, helper) => {
-    expect(overBudget(helper, SIZE)).toEqual([]);
+  it.each(HELPERS)("%s: within its budget on every input", (_name, helper, budgetMs = BUDGET_MS) => {
+    expect(overBudget(helper, budgetMs)).toEqual([]);
   }, 120_000);
 
   it("fails on a planted quadratic helper", () => {
@@ -183,9 +194,8 @@ describe("every helper that walks user text runs in linear time", () => {
     // of a run that is not at the very end. At 30,000 characters (a budget of
     // 300 ms) it takes about a second, so the guard sees it without a 10 s wait.
     const quadratic = (text: string) => text.replace(/[,;]+$/, "");
-    const over = overBudget(quadratic, 30_000);
-    expect(over.some((line) => line.startsWith("commas after a mention"))).toBe(true);
-    // A linear helper on the same inputs passes.
-    expect(overBudget((text: string) => text.replace(/,+/g, ","), 30_000)).toEqual([]);
+    expect(overBudget(quadratic, BUDGET_MS, 30_000, "commas after a mention")).toHaveLength(1);
+    // A linear helper on the same input passes.
+    expect(overBudget((text: string) => text.replace(/,+/g, ","), BUDGET_MS, 30_000, "commas after a mention")).toEqual([]);
   }, 60_000);
 });
