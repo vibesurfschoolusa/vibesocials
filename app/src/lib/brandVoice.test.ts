@@ -428,3 +428,21 @@ describe("brand voice cap: whole graphemes, still bounded", () => {
     expect(cleanBrandVoice("a".repeat(BRAND_VOICE_MAX_LENGTH + 5))).toEqual({ ok: true, value: "a".repeat(BRAND_VOICE_MAX_LENGTH) });
   });
 });
+
+// R68 review L1: /[\r\n\u2028\u2029]+$/ restarted at every line break of a run
+// that was not at the very end, so a box with 30,000 blank lines before its
+// last word took about a second and froze Settings.
+describe("mergeExampleCaptions with a long run of blank lines", () => {
+  it("Glassy morning + 30,000 blank lines + x: fast, and merged as before", () => {
+    const current = `Glassy morning${"\n".repeat(30_000)}x`;
+    const started = performance.now();
+    const result = mergeExampleCaptions(current, ["Dawn patrol"]);
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(result).toEqual({ kind: "added", added: 1, text: `${current}\nDawn patrol` });
+  }, 10_000);
+
+  it("trailing line breaks of every kind still go, and only those", () => {
+    expect(mergeExampleCaptions("One\r\n\u2028\u2029\n\r", ["Two"])).toEqual({ kind: "added", added: 1, text: "One\nTwo" });
+    expect(mergeExampleCaptions("One\n\nTwo  \n", ["Three"])).toEqual({ kind: "added", added: 1, text: "One\n\nTwo  \nThree" });
+  });
+});

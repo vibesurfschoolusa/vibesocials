@@ -3,15 +3,22 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { accountInitials, accountLabel, firstName, nameInitial } from "@/lib/accountInitials";
 import { cleanAltText, fitAltText } from "@/lib/altText";
-import { cleanBrandVoice, cleanBrandVoiceExamples, exampleBoxStatus } from "@/lib/brandVoice";
+import { cleanBrandVoice, cleanBrandVoiceExamples, exampleBoxStatus, mergeExampleCaptions } from "@/lib/brandVoice";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import { captionCounter } from "@/lib/captionLimits";
 import { cleanAvoidCaptions, cleanRecentCaptions } from "@/lib/captionVariety";
+import { workspaceInitials } from "@/lib/clientPage";
 import { hashtagsIn, withoutHashtagSigns } from "@/lib/hashtags";
+import { toLinkedInLittleText } from "@/lib/linkedinApi";
+import { reportCaption } from "@/lib/monthlyReport";
 import { fitPinterestDescription, fitPinterestTitle, pinterestCountHint, pinterestDescriptionLength } from "@/lib/pinterestApi";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { platformCaptionCounter } from "@/lib/platformOverrides";
 import { buildPlatformPreview } from "@/lib/platformPreview";
+import { labelName } from "@/lib/queueLabelName";
+import { replyBytes, replyCounter, replyTooLong } from "@/lib/reviewReplyLength";
+import { redactLinkTokens } from "@/lib/sentryRedaction";
+import { trackedWebsiteLink } from "@/lib/trackingTags";
 import {
   fitTitle,
   graphemeCount,
@@ -155,6 +162,7 @@ const HELPERS: Array<[string, Helper]> = [
   ["cleanBrandVoice", cleanBrandVoice],
   ["cleanBrandVoiceExamples", cleanBrandVoiceExamples],
   ["exampleBoxStatus", exampleBoxStatus],
+  ["mergeExampleCaptions", (text) => mergeExampleCaptions(text, ["Dawn patrol"])],
   ["cleanAvoidCaptions", (text) => cleanAvoidCaptions([text])],
   ["cleanRecentCaptions", (text) => cleanRecentCaptions([text])],
   ["captionCounter", captionCounter],
@@ -173,6 +181,15 @@ const HELPERS: Array<[string, Helper]> = [
   ["fitInstagramTags", fitInstagramTags],
   ["computeTikTokCaption", computeTikTokCaption],
   ["computeGbpPostSummary", computeGbpPostSummary],
+  ["toLinkedInLittleText", toLinkedInLittleText],
+  ["replyBytes", replyBytes],
+  ["replyTooLong", replyTooLong],
+  ["replyCounter", replyCounter],
+  ["workspaceInitials", workspaceInitials],
+  ["labelName", labelName],
+  ["trackedWebsiteLink", (text) => trackedWebsiteLink(text, "instagram")],
+  ["redactLinkTokens", redactLinkTokens],
+  ["reportCaption", reportCaption],
 ];
 
 const COMPOSED: Array<[string, (platform: Platform) => Helper]> = [
