@@ -51,14 +51,23 @@ import { fitYouTubeTitle } from "@/server/platforms/youtubeClient";
  * super-linear one fails here.
  *
  * Two checks on each input:
- * - Growth, which holds on any machine: the helper runs at 15,000 and at
- *   30,000 characters, and doubling the input may at most triple the time. A
- *   linear helper about doubles; a quadratic one about quadruples (the planted
- *   one below: 0.25 s, then 1.0 s). A call under 20 ms at 30,000 is too quick
- *   for its ratio to mean anything, and a ratio over 3 is timed twice more, so
- *   a pause in the run (the collector, a busy runner) is not taken for growth.
- * - A backstop budget at 30,000 characters, at least 10x the slowest linear
- *   call measured (MEASURED_MS), so a loaded CI runner does not flake.
+ * - Growth, which holds on any machine: the helper runs at 8,000 and at
+ *   16,000 characters, and doubling the input may at most triple the time. A
+ *   linear helper about doubles (at most 2.84x measured); a quadratic one
+ *   about quadruples (main's removeXMentions: 4.0x).
+ *   - A pause (the collector, a busy runner) only lengthens a call. The small
+ *     size is always timed three times and its fastest call counts, so a pause
+ *     there is unlikely to hide growth; the large one is timed up to seven times,
+ *     until it is not over 3x, so pauses there are unlikely to fake it.
+ *   - A first ratio over 3 is checked again at 16,000 and 32,000, and only
+ *     both failing fails: a linear helper can step up once (a cache, a string
+ *     turning flat), but a quadratic one grows at every size.
+ *   - A helper under 1 ms at 16,000 is too quick for a ratio, so it is timed
+ *     again at 32,000 and 64,000, where a quadratic one is 16x slower. One
+ *     under 1/16 ms at 16,000 could not reach 1 ms there even if quadratic,
+ *     and is harmless at any caption's size.
+ * - A backstop budget at 16,000 characters, at least 10x the slowest linear
+ *   call measured (MEASURED_MS).
  *
  * The composed helpers (buildCaptionWithFooter, buildPlatformPreview,
  * platformCaptionCounter) run the single ones, which are timed on every
@@ -75,17 +84,26 @@ import { fitYouTubeTitle } from "@/server/platforms/youtubeClient";
  *   with no nested repeat, so linear by construction.
  */
 
-const SIZE = 30_000;
-const HALF_SIZE = SIZE / 2;
+const SIZE = 16_000;
+/** The growth is measured from SIZE / SPAN to SIZE. */
+const SPAN = 2;
 /** Doubling the input may at most triple the time. */
 const MAX_GROWTH = 3;
-/** Below this, at SIZE, a call is too quick for its growth to mean anything. */
-const GROWTH_FLOOR_MS = 20;
-// The slowest linear calls measured at 30,000 characters (2026-11-22, this
+/** Below this, at the larger size, a call is too quick for its growth to mean anything. */
+const GROWTH_FLOOR_MS = 1;
+/** The small size is always timed this many times, and the fastest call counts. */
+const TIMINGS = 3;
+/**
+ * The large size is timed up to this many times while it looks too slow: on a
+ * busy runner the system can stop any one call for a time slice (about 15 ms
+ * on Windows), which would fake growth in a call of a few ms.
+ */
+const LARGE_TIMINGS = 7;
+// The slowest linear calls measured at 16,000 characters (2026-11-22, this
 // machine): a single helper, and a composed one on its platform's run.
-const MEASURED_MS = { single: 52, composed: 84 };
-const BUDGET_MS = 550;
-const COMPOSED_BUDGET_MS = 1_000;
+const MEASURED_MS = { single: 22, composed: 42 };
+const BUDGET_MS = 250;
+const COMPOSED_BUDGET_MS = 450;
 
 /** The runs a pattern or a walk may restart on, each one character or grapheme repeated. */
 const RUNS = {
@@ -215,12 +233,36 @@ function timeOf(helper: Helper, input: string): number {
   return performance.now() - started;
 }
 
-/** An input at SIZE and the same input at HALF_SIZE. */
-type Sized = { name: string; full: string; half: string };
+/** An input by name, built at any size. */
+type Sized = { name: string; at: (size: number) => string };
 
 function sizedInputs(): Sized[] {
-  const half = new Map(adversarialInputs(HALF_SIZE));
-  return adversarialInputs().map(([name, full]) => ({ name, full, half: half.get(name) ?? "" }));
+  return (Object.keys(RUNS) as RunName[]).flatMap((run): Sized[] => [
+    { name: `${run} mid-token`, at: (size) => `#a${runOf(run, size - 3)}b` },
+    { name: `${run} after a mention`, at: (size) => `@kai ${runOf(run, size - 6)}x` },
+    { name: `${run} between tags`, at: (size) => betweenTags(run, size) },
+  ]);
+}
+
+/**
+ * The fastest of three calls at `small`, and the fastest call at `large`. A
+ * pause (the collector, a busy runner) only lengthens a call: on the small
+ * input it would hide growth, so the small one is always timed three times;
+ * on the large one it could only fake growth, so while it looks too slow it is
+ * timed again, up to seven times, until two calls agree within 10% (a pause
+ * does not repeat itself so exactly; real growth does).
+ */
+function fastestPair(helper: Helper, small: string, large: string): { smallMs: number; largeMs: number } {
+  let smallMs = Number.POSITIVE_INFINITY;
+  for (let round = 0; round < TIMINGS; round += 1) smallMs = Math.min(smallMs, timeOf(helper, small));
+  let largeMs = timeOf(helper, large);
+  for (let round = 1; round < LARGE_TIMINGS && largeMs > MAX_GROWTH * smallMs; round += 1) {
+    const again = timeOf(helper, large);
+    const agrees = Math.abs(again - largeMs) <= 0.1 * largeMs;
+    largeMs = Math.min(largeMs, again);
+    if (agrees) break;
+  }
+  return { smallMs, largeMs };
 }
 
 /**
@@ -228,23 +270,33 @@ function sizedInputs(): Sized[] {
  * the time) or went over `budgetMs` at SIZE, one line each.
  */
 function failures(helper: Helper, budgetMs: number, inputs: Sized[] = sizedInputs()): string[] {
-  return inputs.flatMap(({ name, full, half }) => {
-    let fullMs = timeOf(helper, full);
+  return inputs.flatMap(({ name, at }) => {
     const found: string[] = [];
-    if (fullMs >= GROWTH_FLOOR_MS) {
-      let halfMs = timeOf(helper, half);
-      if (fullMs > MAX_GROWTH * halfMs) {
-        // Twice more, keeping the quickest of each, so a pause is not taken for growth.
-        for (let again = 0; again < 2; again += 1) {
-          halfMs = Math.min(halfMs, timeOf(helper, half));
-          fullMs = Math.min(fullMs, timeOf(helper, full));
-        }
-      }
-      if (fullMs > MAX_GROWTH * halfMs) {
-        found.push(`${name}: grew ${(fullMs / halfMs).toFixed(1)}x when doubled (${Math.round(halfMs)} ms, then ${Math.round(fullMs)} ms)`);
+    let size = SIZE;
+    let { smallMs, largeMs } = fastestPair(helper, at(size / SPAN), at(size));
+    if (largeMs > budgetMs) found.push(`${name}: ${Math.round(largeMs)} ms at ${size}, over its ${budgetMs} ms budget`);
+    // Too quick at SIZE for a ratio to mean anything: once more at 4x the size,
+    // where a quadratic helper is 16x slower. One still too quick there is
+    // harmless at any size a caption can have.
+    if (largeMs < GROWTH_FLOOR_MS && largeMs >= GROWTH_FLOOR_MS / 16) {
+      size = SIZE * 4;
+      ({ smallMs, largeMs } = fastestPair(helper, at(size / SPAN), at(size)));
+    }
+    const grew = () => largeMs >= GROWTH_FLOOR_MS && largeMs > MAX_GROWTH * smallMs;
+    // A linear helper can step up once between two sizes (a cache, a string
+    // turning flat) and come near 3x; it does not do so again at twice the
+    // sizes, while a quadratic helper does at every size. So a first ratio over
+    // 3 is checked once more at twice the size, and both must be over.
+    if (grew()) {
+      const first = `${(largeMs / smallMs).toFixed(1)}x from ${size / SPAN} to ${size}`;
+      size *= 2;
+      ({ smallMs, largeMs } = fastestPair(helper, at(size / SPAN), at(size)));
+      if (grew()) {
+        found.push(
+          `${name}: grew ${first}, then ${(largeMs / smallMs).toFixed(1)}x from ${size / SPAN} to ${size} characters (${smallMs.toFixed(1)} ms, then ${Math.round(largeMs)} ms)`,
+        );
       }
     }
-    if (fullMs > budgetMs) found.push(`${name}: ${Math.round(fullMs)} ms, over its ${budgetMs} ms budget`);
     return found;
   });
 }
@@ -258,7 +310,7 @@ describe("every helper that walks user text runs in linear time", () => {
   });
   afterAll(() => vi.restoreAllMocks());
 
-  it("the inputs are 30,000 characters each, and every budget keeps a 10x margin", () => {
+  it("the inputs are 16,000 characters each, and every budget keeps a 10x margin", () => {
     for (const [, input] of adversarialInputs()) {
       expect(input.length).toBeGreaterThan(SIZE * 0.99);
       expect(input.length).toBeLessThanOrEqual(SIZE);
@@ -273,21 +325,22 @@ describe("every helper that walks user text runs in linear time", () => {
 
   it.each(platforms)("%s: the composed helpers grow linearly and keep their budget on its own run", (platform) => {
     const run = PLATFORM_RUN[platform];
-    const input = { name: `${run} between tags`, full: betweenTags(run), half: betweenTags(run, HALF_SIZE) };
+    const input: Sized = { name: `${run} between tags`, at: (size) => betweenTags(run, size) };
     for (const [name, compose] of COMPOSED) {
       expect(failures(compose(platform), COMPOSED_BUDGET_MS, [input]), name).toEqual([]);
     }
   }, 60_000);
 
   it("fails on a planted quadratic helper through the growth check alone", () => {
-    // The pattern removeXMentions used before R68: it restarts at every comma
-    // of a run that is not at the very end.
-    const quadratic = (text: string) => text.replace(/[,;]+$/, "");
+    // The pattern removeXMentions used before R68, which restarts at every
+    // comma of a run not at the very end, on the last half of the text: as
+    // quadratic, 4x cheaper, so the check at 32,000 stays quick.
+    const quadratic = (text: string) => text.slice(text.length / 2).replace(/[,;]+$/, "");
     const commas = sizedInputs().filter(({ name }) => name === "commas after a mention");
     // No budget can fail it here, so only the growth check can.
     const found = failures(quadratic, Number.POSITIVE_INFINITY, commas);
     expect(found).toHaveLength(1);
-    expect(found[0]).toMatch(/^commas after a mention: grew \d+\.\dx when doubled/);
+    expect(found[0]).toMatch(/^commas after a mention: grew \d+\.\dx from 8000 to 16000, then \d+\.\dx from 16000 to 32000/);
     // A linear helper on the same input passes.
     expect(failures((text: string) => text.replace(/,+/g, ","), Number.POSITIVE_INFINITY, commas)).toEqual([]);
   }, 60_000);
