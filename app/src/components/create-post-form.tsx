@@ -30,7 +30,6 @@ import {
 import { useCaptionBox } from "./composer/useCaptionBox";
 import { PlatformCaptionEditor } from "./composer/platform-caption-editor";
 import { GooglePostBox, googleBoxOpensOnSubmit } from "./composer/google-post-box";
-import type { GoogleTypeMemory } from "./google-post-settings";
 import { PlatformPreviewList } from "./composer/platform-preview";
 import { PublishBar, type SubmitControlView } from "./composer/publish-bar";
 import { TikTokConsentDeclaration, TikTokPostSettings } from "./tiktok-post-settings";
@@ -127,6 +126,7 @@ import type {
   YouTubePostMetadata,
 } from "@/server/platforms/types";
 import type { GoogleButton } from "@/lib/googlePostOptions";
+import type { GoogleTypeMemory } from "./google-post-settings";
 import {
   REPEAT_DEFAULT_COUNT,
   REPEAT_MAX_COUNT,
@@ -2739,8 +2739,8 @@ function CreatePostFormInner({
       setTiktokCommercialEnabled(false);
       setYoutubeMetadata({ privacyStatus: "unlisted" });
       setGoogleMetadata(initialGoogleMetadata());
-      setGoogleMemory(initialGoogleMemory());
       setGoogleBoxOpen(false);
+      setGoogleMemory(initialGoogleMemory());
       // A Story never carries over to the next post: both go back to Feed.
       const startPlacements = initialPlacements();
       setInstagramPlacement(startPlacements.instagram);
