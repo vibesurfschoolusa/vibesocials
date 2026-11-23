@@ -1253,15 +1253,16 @@ export const QUEUE_OFFLINE_TEXT =
   "We couldn't reach Vibe Socials to load your queue. Check your connection and try again.";
 export const QUEUE_FAILED_TEXT = "We couldn't load your queue. Try again in a moment.";
 
-/** Reads the Queue's first page, or the sentence that says why it couldn't. */
+/** Reads the Queue's first page (or the page at `cursor`), or the sentence that says why it couldn't. */
 export async function readQueuePage(
   workspaceId: string | null,
   fetchImpl: typeof fetch = fetch,
+  cursor?: string,
 ): Promise<{ ok: true; data: PostsResponse } | { ok: false; error: string }> {
   try {
     // clientChangesFirst: the first page also carries every draft the client
     // asked to change (up to 20), however old, so none hides behind Load more.
-    const response = await fetchOrNoAnswer(queueListUrl(workspaceId), { method: "GET" }, fetchImpl);
+    const response = await fetchOrNoAnswer(queueListUrl(workspaceId, cursor), { method: "GET" }, fetchImpl);
     const refusal = await readWorkspaceRefusalText(response);
     if (refusal) return { ok: false, error: refusal };
     if (!response.ok) return { ok: false, error: response.status === 401 ? SIGNED_OUT_ERROR : QUEUE_FAILED_TEXT };
@@ -1325,8 +1326,12 @@ export function QueueView({
   // ?status= filter), so it tracks the cursor locally rather than via
   // usePostJobs. nextCursor is the next (older) page's ?cursor= token from the
   // last load (null = last page → hides Load more); loadingMore guards + spins
-  // the button. The Queue has no background poll, so no page-1 merge is needed.
+  // the button.
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  // R68 publishing-flow-2 L2: the pages on screen. A quiet reload (a series
+  // cancel, a refusal, a lost answer) reads this many again, so the pages
+  // pulled in with Load more stay; a full load starts from page 1.
+  const loadedPagesRef = useRef(1);
   const [loadingMore, setLoadingMore] = useState(false);
   // R26 LL3: why the last Load more failed, said under the button.
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
@@ -1365,8 +1370,21 @@ export function QueueView({
         return;
       }
       const data = read.data;
-      setJobs(sortQueue(data.jobs));
-      setNextCursor(data.nextCursor);
+      let jobsRead = data.jobs;
+      let cursor = data.nextCursor;
+      let pages = 1;
+      const wanted = silent ? loadedPagesRef.current : 1;
+      while (pages < wanted && cursor) {
+        const next = await readQueuePage(workspaceId, undefined, cursor);
+        // A failed quiet reload keeps the list on screen, as for page 1.
+        if (!next.ok) return;
+        jobsRead = appendJobsPage(jobsRead, next.data.jobs);
+        cursor = next.data.nextCursor;
+        pages += 1;
+      }
+      loadedPagesRef.current = pages;
+      setJobs(sortQueue(jobsRead));
+      setNextCursor(cursor);
       setLoadMoreError(null);
       setWorkspaceMemberCount(data.workspaceMemberCount);
       setWorkspaceRole(data.workspaceRole);
@@ -1438,6 +1456,7 @@ export function QueueView({
       // land mid-list at its scheduledFor position — expected for the Queue.
       setJobs((prev) => (prev ? sortQueue(appendJobsPage(prev, data.jobs)) : sortQueue(data.jobs)));
       setNextCursor(data.nextCursor);
+      loadedPagesRef.current += 1;
     } catch (error) {
       // Keep the loaded list + cursor for a retry.
       setLoadMoreError(loadMoreFailureText(isNoConnection(error) ? "offline" : 0));
