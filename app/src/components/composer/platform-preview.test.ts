@@ -107,11 +107,11 @@ describe("PlatformPreviewList count line", () => {
     (markup.match(/<p class="text-xs text-muted-foreground">[^<]*<\/p>/g) ?? []).slice(1);
 
   it.each([
-    ["x", "198 / 280", "3,749 / 280"],
-    ["instagram", "189 / 2,200", "3,749 / 2,200"],
-    ["linkedin", "253 / 3,000", "3,749 / 3,000"],
+    ["x", "198 / 280 incl. footer", "3,749 / 280"],
+    ["instagram", "189 / 2,200 incl. footer", "3,749 / 2,200"],
+    ["linkedin", "253 / 3,000 incl. footer", "3,749 / 3,000"],
     ["facebook_page", "253 characters", "3,867 characters"],
-    ["google_business_profile", "251 / 1,500", "3,749 / 1,500"],
+    ["google_business_profile", "251 / 1,500 incl. footer", "3,749 / 1,500"],
   ] as const)("%s: en-US grouping, as the counter (R68 publishing-flow-2 L1)", (platform, shortLine, longLine) => {
     expect(countLines(card(platform, short))).toEqual([line(shortLine)]);
     expect(countLines(card(platform, long))).toEqual([line(longLine)]);
@@ -237,7 +237,7 @@ describe("PlatformPreviewList count line on the other platforms, unchanged by Pi
   const line = (text: string) => `<p class="text-xs text-muted-foreground">${text}</p>`;
 
   it.each([
-    ["x", ["198 / 280"], ["3,749 / 280"]],
+    ["x", ["198 / 280 incl. footer"], ["3,749 / 280"]],
     // R65: TikTok counts UTF-16 units, so the four waves count 2 each. R66
     // publishing-flow L1: the counter's label and its hint, as Pinterest's card shows.
     [
@@ -245,10 +245,10 @@ describe("PlatformPreviewList count line on the other platforms, unchanged by Pi
       ["193 / 2,200 incl. footer", "TikTok counts some characters, such as emoji, as 2 or more."],
       ["3,749 / 2,200"],
     ],
-    ["instagram", ["189 / 2,200"], ["3,749 / 2,200"]],
-    ["linkedin", ["253 / 3,000"], ["3,749 / 3,000"]],
+    ["instagram", ["189 / 2,200 incl. footer"], ["3,749 / 2,200"]],
+    ["linkedin", ["253 / 3,000 incl. footer"], ["3,749 / 3,000"]],
     ["facebook_page", ["253 characters"], ["3,867 characters"]],
-    ["google_business_profile", ["251 / 1,500"], ["3,749 / 1,500"]],
+    ["google_business_profile", ["251 / 1,500 incl. footer"], ["3,749 / 1,500"]],
     [
       "youtube",
       ["276 / 5,000 incl. footer", "YouTube counts accented letters, curly quotes, emoji, &lt; and &gt; as 2 or more."],
@@ -270,6 +270,13 @@ describe("PlatformPreviewList count line, one format", () => {
       ).match(/<p class="text-xs text-muted-foreground">[^<]*<\/p>/g) ?? []
     ).slice(1);
 
+  const countLineWith = (platform: Platform, caption: string, user: CaptionFooterUser) =>
+    (
+      renderToStaticMarkup(
+        createElement(PlatformPreviewList, { platforms: [platform], caption, user, mediaUrl: null, mediaMimeType: null }),
+      ).match(/<p class="text-xs text-muted-foreground">[^<]*<\/p>/g) ?? []
+    ).slice(1);
+
   it("Instagram at 1,234: 1,234 / 2,200, the counter's own label", () => {
     const caption = "a".repeat(1234);
     expect(countLine("instagram", caption)).toEqual(['<p class="text-xs text-muted-foreground">1,234 / 2,200</p>']);
@@ -280,6 +287,29 @@ describe("PlatformPreviewList count line, one format", () => {
     const caption = "Glassy waves ".repeat(95);
     expect(countLine(platform, caption)).toEqual([
       `<p class="text-xs text-muted-foreground">${platformCaptionCounter(caption, platform, null).label}</p>`,
+    ]);
+  });
+
+  // R68 review: the cards dropped the counter's " incl. footer".
+  it.each(["x", "instagram", "linkedin", "google_business_profile", "tiktok", "pinterest", "youtube"] as const)(
+    "%s with a footer: the counter's own label, incl. footer",
+    (platform) => {
+      const footer = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #waves" };
+      const caption = "Glassy waves at dawn";
+      const label = platformCaptionCounter(caption, platform, footer).label;
+      expect(label).toContain(" incl. footer");
+      const markup = renderToStaticMarkup(
+        createElement(PlatformPreviewList, { platforms: [platform], caption, user: footer, mediaUrl: null, mediaMimeType: null }),
+      );
+      expect(markup).toContain(`<p class="text-xs text-muted-foreground">${label}</p>`);
+    },
+  );
+
+  it("Instagram with a footer: 1,234 / 2,200 incl. footer", () => {
+    const footer = { defaultHashtags: "#surf" };
+    const caption = "a".repeat(1234 - "\n\n#surf".length);
+    expect(countLineWith("instagram", caption, footer)).toEqual([
+      '<p class="text-xs text-muted-foreground">1,234 / 2,200 incl. footer</p>',
     ]);
   });
 
