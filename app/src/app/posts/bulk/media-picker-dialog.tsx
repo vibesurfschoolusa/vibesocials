@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Film } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
-import { AnnouncedText } from "@/components/ui/announcer";
+import { AnnouncedText, useAnnounceOnShow } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
 import { LoadMoreButton } from "@/components/load-error";
 import {
@@ -65,6 +65,18 @@ export function mediaPageUrl(workspaceId: string, cursor: string | null): string
 /** The picker's line once its list is shown; Load more changes it, so it is read again. */
 export function mediaCountLine(count: number): string {
   return count === 1 ? "Showing 1 photo or video." : `Showing ${count} photos and videos.`;
+}
+
+const LIMIT_SENTENCE = "You've chosen as many as fit. Untick one to choose another.";
+
+/**
+ * R69 pages-a L2: the description is read once, when the dialog opens, so its
+ * countdown and limit sentence are announced here when they change. It mounts
+ * with the loaded list and says nothing then, so an opening is not read twice.
+ */
+function AnnounceRoomChanges({ text }: { text: string }) {
+  useAnnounceOnShow(() => text, true, false);
+  return null;
 }
 
 /** "Choose from Media": the workspace's photos and videos, newest first, paged like the Media page. */
@@ -140,6 +152,8 @@ export function MediaPickerDialog({ workspaceId, open, onOpenChange, addedIds, r
   // tiles say why a further tap does nothing. A picker with no room at all is as before.
   const chosenAll = room > 0 && atLimit;
 
+  const roomSentence = chosenAll ? LIMIT_SENTENCE : `${room - selected.size} more can be added.`;
+
   function add() {
     onAdd(items.filter((item) => selected.has(item.id)));
     onOpenChange(false);
@@ -150,13 +164,12 @@ export function MediaPickerDialog({ workspaceId, open, onOpenChange, addedIds, r
       <DialogHeader>
         <DialogTitle>Choose from Media</DialogTitle>
         <DialogDescription>
-          {chosenAll
-            ? "You've chosen as many as fit. Untick one to choose another."
-            : `Tick the photos and videos to add. ${room - selected.size} more can be added.`}
+          {chosenAll ? roomSentence : `Tick the photos and videos to add. ${roomSentence}`}
         </DialogDescription>
       </DialogHeader>
       <DialogBody>
         {error ? <Alert variant="danger">{error}</Alert> : null}
+        {loading ? null : <AnnounceRoomChanges text={roomSentence} />}
         {/* R43 pages-a L6: the skeletons are hidden, so the loading line and
             then the result are read out (AnnouncedText). */}
         {loading ? (
