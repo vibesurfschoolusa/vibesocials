@@ -330,6 +330,57 @@ describe("the connect link page", () => {
     });
   });
 
+  // R68 security-billing-2 L1: a platform the link doesn't offer is not looked
+  // up, so a typed ?error= or ?success= for it never names its account.
+  describe("a code for a platform the link does not offer", () => {
+    const ONLY_INSTAGRAM = { ...LINK, platforms: ["instagram"] };
+    const row = (platform: string, username: string, extra: Record<string, unknown> = {}) => ({
+      platform,
+      accountIdentifier: `${platform}-1`,
+      username,
+      locationName: null,
+      needsReconnect: false,
+      reconnectSoon: false,
+      ended: false,
+      ...extra,
+    });
+
+    it("?error=youtube_account_check_failed: no YouTube channel name", async () => {
+      h.findLink.mockResolvedValue(ONLY_INSTAGRAM);
+      h.listConnections.mockResolvedValue([row("youtube", "Kai Surf Channel", { needsReconnect: true })]);
+      const html = await render({ error: "youtube_account_check_failed" });
+      expect(html).not.toContain("Kai Surf Channel");
+    });
+
+    it("?error=x_different_account while X needs reconnecting: no X name", async () => {
+      h.findLink.mockResolvedValue(ONLY_INSTAGRAM);
+      h.listConnections.mockResolvedValue([row("x", "kaisurfs", { needsReconnect: true })]);
+      const html = await render({ error: "x_different_account" });
+      expect(html).not.toContain("kaisurfs");
+      expect(html).not.toContain("press Reconnect");
+    });
+
+    it("?success= for it: quiet", async () => {
+      h.findLink.mockResolvedValue(ONLY_INSTAGRAM);
+      h.listConnections.mockResolvedValue([row("youtube", "Kai Surf Channel")]);
+      const html = await render({ success: "youtube_connected" });
+      expect(html).not.toContain("is connected");
+      expect(html).not.toContain('role="alert"');
+      expect(html).not.toContain("Kai Surf Channel");
+    });
+
+    it("an offered platform's codes: as before", async () => {
+      h.findLink.mockResolvedValue(ONLY_INSTAGRAM);
+      h.listConnections.mockResolvedValue([row("instagram", "surfco", { needsReconnect: true })]);
+      expect(await render({ error: "instagram_account_check_failed" })).toContain(
+        "We couldn&#x27;t check that this Google account manages surfco. Try again in a minute.",
+      );
+      expect(await render({ error: "instagram_different_account" })).toContain("press Reconnect");
+      h.listConnections.mockResolvedValue([row("instagram", "surfco")]);
+      expect(await render({ success: "instagram_connected" })).toContain("Instagram is connected.");
+    });
+  });
+
   it("a Business Profile reconnect that couldn't be checked: names the location, try again", async () => {
     vi.stubEnv("GOOGLE_GBP_CLIENT_ID", "g");
     vi.stubEnv("GOOGLE_GBP_CLIENT_SECRET", "s");
