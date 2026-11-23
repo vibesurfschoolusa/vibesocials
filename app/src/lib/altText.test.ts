@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { ALT_TEXT_MAX, altTextOf, cleanAltText, fitAltText } from "./altText";
+import {
+  ALT_TEXT_INPUT_MAX,
+  ALT_TEXT_MAX,
+  ALT_TEXT_TOO_LONG_MESSAGE,
+  altTextOf,
+  cleanAltText,
+  fitAltText,
+  isOverlongAltText,
+} from "./altText";
 
 describe("cleanAltText", () => {
   it("trims the ends", () => {
@@ -117,4 +125,36 @@ describe("fitAltText cuts whole graphemes (R67)", () => {
     expect(cleanAltText(text).length).toBeLessThanOrEqual(1000);
     expect(performance.now() - started).toBeLessThan(2000);
   });
+});
+
+// R69 publishing-flow L1: the routes refuse a description over the cap before
+// cleaning it, and cleanAltText itself reads no further, as a backstop.
+describe("the alt text cap (R69)", () => {
+  /** R69: the cleaning took about MEASURED ms alone; ten times that and more. */
+  const CLEAN_BUDGET_MS = 500;
+
+  it("is 10,000 characters, like a caption's", () => {
+    expect(ALT_TEXT_INPUT_MAX).toBe(10_000);
+    expect(isOverlongAltText("a".repeat(10_000))).toBe(false);
+    expect(isOverlongAltText("a".repeat(10_001))).toBe(true);
+    expect(isOverlongAltText(undefined)).toBe(false);
+    expect(isOverlongAltText(["a".repeat(10_001)])).toBe(false);
+  });
+
+  it("is refused in plain words", () => {
+    expect(ALT_TEXT_TOO_LONG_MESSAGE).toBe("Your photo description is too long: keep it to 1,000 characters.");
+  });
+
+  it("cleans 10,000 characters as before", () => {
+    const raw = ` A dog\non a beach.\t${"\u0007x ".repeat(5_000)}`.slice(0, 10_000);
+    const before = fitAltText(raw.replace(/\r\n|[\r\n\t\v\f\p{Zl}\p{Zp}]/gu, " ").replace(/[\x00-\x1f\x7f-\x9f]/g, "").trim(), ALT_TEXT_MAX);
+    expect(cleanAltText(raw)).toBe(before);
+  });
+
+  it("reads no further than the cap: 2.2M newlines and then words come out empty, fast", () => {
+    const raw = `${"\n".repeat(2_200_000)}A dog on a beach.`;
+    const started = performance.now();
+    expect(cleanAltText(raw)).toBe("");
+    expect(performance.now() - started).toBeLessThan(CLEAN_BUDGET_MS);
+  }, 10_000);
 });

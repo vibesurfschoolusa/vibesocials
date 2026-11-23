@@ -48,6 +48,19 @@ vi.mock("@/server/usage/usageLog", async (importOriginal) => ({
   withdrawSend: withdrawSendMock,
 }));
 
+// R69 publishing-flow L1: counts the cleanings, so a refusal is shown to come before any.
+const cleanAltTextCalls = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/lib/altText", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/altText")>();
+  return {
+    ...actual,
+    cleanAltText: (raw: unknown) => {
+      cleanAltTextCalls.count += 1;
+      return actual.cleanAltText(raw);
+    },
+  };
+});
+
 // Team Workspaces (Task 4) — route.ts now resolves the caller via
 // `getWorkspaceContext` instead of `getCurrentUser` (design doc §3/§4).
 vi.mock("@/lib/workspace", () => ({
@@ -109,6 +122,7 @@ vi.mock("@/server/jobs/failPendingResults", async () => {
   return { ...actual, failPendingPostJobResults: failPendingMock };
 });
 
+import { ALT_TEXT_MAX, ALT_TEXT_TOO_LONG_MESSAGE, fitAltText } from "@/lib/altText";
 import { BLOB_URL_REJECTED_MESSAGE, MAX_BLOB_URL_LENGTH, canonicalBlobUrl } from "@/lib/blobUrl";
 import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
 import { PostTargetingError } from "@/lib/postTargets";
@@ -2662,6 +2676,65 @@ describe("POST /api/posts - alt text (07d)", () => {
     for (const [args] of createPostJobForExistingMediaMock.mock.calls) {
       expect(args).not.toHaveProperty("altText");
     }
+  });
+});
+
+// R69 publishing-flow L1: a crafted description cost 0.2-0.4 s of CPU in the
+// cleaning, so one over the cap is refused before any cleaning or media lookup.
+describe("POST /api/posts - an overlong alt text (R69)", () => {
+  const HOST = "https://test.public.blob.vercel-storage.com";
+  const photo = (n: number) => ({ blobUrl: `${HOST}/p${n}.jpg`, filename: `p${n}.jpg`, mimeType: "image/jpeg", sizeBytes: 100 + n });
+  /** R69: the refusal took about MEASURED ms alone; ten times that and more. */
+  const REFUSAL_BUDGET_MS = 2_000;
+
+  beforeEach(() => {
+    cleanAltTextCalls.count = 0;
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"] });
+    createPostJobForExistingMediaMock.mockResolvedValue({ postJobId: "job-2", mediaItemId: "media-9", resultIds: [] });
+  });
+
+  it("refuses 2.2M newlines with a fast 400, before any cleaning or storage read", async () => {
+    const request = jsonRequest({ ...photo(1), baseCaption: "hi", altText: "\n".repeat(2_200_000) });
+    headMock.mockClear();
+    const started = performance.now();
+    const response = await POST(request);
+    const took = performance.now() - started;
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: ALT_TEXT_TOO_LONG_MESSAGE });
+    expect(took).toBeLessThan(REFUSAL_BUDGET_MS);
+    expect(cleanAltTextCalls.count).toBe(0);
+    expect(headMock).not.toHaveBeenCalled();
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it("accepts 10,000 characters and cleans them as before", async () => {
+    const altText = ` A dog\non a beach. ${"x".repeat(9_981)}`;
+    expect(altText).toHaveLength(10_000);
+    const response = await POST(jsonRequest({ ...photo(1), baseCaption: "hi", altText }));
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock.mock.calls[0][0].media.altText).toBe(fitAltText(`A dog on a beach. ${"x".repeat(9_981)}`, ALT_TEXT_MAX));
+  });
+
+  it("refuses the reuse path before the media lookup", async () => {
+    const response = await POST(jsonRequest({ mediaItemId: "x", baseCaption: "hi", altText: "a".repeat(10_001) }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: ALT_TEXT_TOO_LONG_MESSAGE });
+    expect(cleanAltTextCalls.count).toBe(0);
+    expect(createPostJobForExistingMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses an overlong description on one of several photos, naming the file", async () => {
+    const response = await POST(
+      jsonRequest({ media: [photo(1), { ...photo(2), altText: "a".repeat(10_001) }], baseCaption: "hi" }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: `File 2: ${ALT_TEXT_TOO_LONG_MESSAGE}` });
+    expect(cleanAltTextCalls.count).toBe(0);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 });
 
