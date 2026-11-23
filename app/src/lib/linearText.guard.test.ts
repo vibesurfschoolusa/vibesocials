@@ -50,10 +50,15 @@ import { fitYouTubeTitle } from "@/server/platforms/youtubeClient";
  * exported helper that walks user text on adversarial inputs, so a new
  * super-linear one fails here.
  *
- * The inputs are 30,000 characters: a quadratic helper takes about a second
- * there (the planted one below: 1.0 s), a linear one a few ms (at most 52 ms).
- * Each budget is at least 10x the slowest linear call measured
- * (MEASURED_MS), so a loaded CI runner does not flake.
+ * Two checks on each input:
+ * - Growth, which holds on any machine: the helper runs at 15,000 and at
+ *   30,000 characters, and doubling the input may at most triple the time. A
+ *   linear helper about doubles; a quadratic one about quadruples (the planted
+ *   one below: 0.25 s, then 1.0 s). A call under 20 ms at 30,000 is too quick
+ *   for its ratio to mean anything, and a ratio over 3 is timed twice more, so
+ *   a pause in the run (the collector, a busy runner) is not taken for growth.
+ * - A backstop budget at 30,000 characters, at least 10x the slowest linear
+ *   call measured (MEASURED_MS), so a loaded CI runner does not flake.
  *
  * The composed helpers (buildCaptionWithFooter, buildPlatformPreview,
  * platformCaptionCounter) run the single ones, which are timed on every
@@ -71,6 +76,11 @@ import { fitYouTubeTitle } from "@/server/platforms/youtubeClient";
  */
 
 const SIZE = 30_000;
+const HALF_SIZE = SIZE / 2;
+/** Doubling the input may at most triple the time. */
+const MAX_GROWTH = 3;
+/** Below this, at SIZE, a call is too quick for its growth to mean anything. */
+const GROWTH_FLOOR_MS = 20;
 // The slowest linear calls measured at 30,000 characters (2026-11-22, this
 // machine): a single helper, and a composed one on its platform's run.
 const MEASURED_MS = { single: 52, composed: 84 };
@@ -90,9 +100,9 @@ const RUNS = {
   mentions: "@a",
   "hash signs": "#",
   hashtags: "#a",
-  "combining marks": "́",
+  "combining marks": "\u0301",
   emoji: "\u{1F30A}",
-  "ZWJ chain": "\u{1F468}‍",
+  "ZWJ chain": "\u{1F468}\u200D",
   "line breaks": "\n",
 } as const;
 type RunName = keyof typeof RUNS;
@@ -103,17 +113,17 @@ function runOf(name: RunName, room: number): string {
   return unit.repeat(Math.max(1, Math.floor(room / unit.length)));
 }
 
-/** One run between tags, filled to `SIZE` characters. */
-function betweenTags(name: RunName): string {
-  return `#a ${runOf(name, SIZE - 11)} @kai #b`;
+/** One run between tags, filled to `size` characters. */
+function betweenTags(name: RunName, size = SIZE): string {
+  return `#a ${runOf(name, size - 11)} @kai #b`;
 }
 
-/** Each run mid-token, after a mention, and between tags, filled to `SIZE` characters. */
-function adversarialInputs(): Array<[string, string]> {
+/** Each run mid-token, after a mention, and between tags, filled to `size` characters. */
+function adversarialInputs(size = SIZE): Array<[string, string]> {
   return (Object.keys(RUNS) as RunName[]).flatMap((name): Array<[string, string]> => [
-    [`${name} mid-token`, `#a${runOf(name, SIZE - 3)}b`],
-    [`${name} after a mention`, `@kai ${runOf(name, SIZE - 6)}x`],
-    [`${name} between tags`, betweenTags(name)],
+    [`${name} mid-token`, `#a${runOf(name, size - 3)}b`],
+    [`${name} after a mention`, `@kai ${runOf(name, size - 6)}x`],
+    [`${name} between tags`, betweenTags(name, size)],
   ]);
 }
 
@@ -198,13 +208,44 @@ const COMPOSED: Array<[string, (platform: Platform) => Helper]> = [
   ["platformCaptionCounter", (platform) => (text) => platformCaptionCounter(text, platform, user)],
 ];
 
-/** The inputs on which `helper` took longer than `budgetMs`, each with the time it took. */
-function overBudget(helper: Helper, budgetMs: number, inputs = adversarialInputs()): string[] {
-  return inputs.flatMap(([name, input]) => {
-    const started = performance.now();
-    helper(input);
-    const ms = performance.now() - started;
-    return ms > budgetMs ? [`${name}: ${Math.round(ms)} ms`] : [];
+/** How long one call of `helper` on `input` takes, in ms. */
+function timeOf(helper: Helper, input: string): number {
+  const started = performance.now();
+  helper(input);
+  return performance.now() - started;
+}
+
+/** An input at SIZE and the same input at HALF_SIZE. */
+type Sized = { name: string; full: string; half: string };
+
+function sizedInputs(): Sized[] {
+  const half = new Map(adversarialInputs(HALF_SIZE));
+  return adversarialInputs().map(([name, full]) => ({ name, full, half: half.get(name) ?? "" }));
+}
+
+/**
+ * Where `helper` grew faster than linear (doubling the input more than tripled
+ * the time) or went over `budgetMs` at SIZE, one line each.
+ */
+function failures(helper: Helper, budgetMs: number, inputs: Sized[] = sizedInputs()): string[] {
+  return inputs.flatMap(({ name, full, half }) => {
+    let fullMs = timeOf(helper, full);
+    const found: string[] = [];
+    if (fullMs >= GROWTH_FLOOR_MS) {
+      let halfMs = timeOf(helper, half);
+      if (fullMs > MAX_GROWTH * halfMs) {
+        // Twice more, keeping the quickest of each, so a pause is not taken for growth.
+        for (let again = 0; again < 2; again += 1) {
+          halfMs = Math.min(halfMs, timeOf(helper, half));
+          fullMs = Math.min(fullMs, timeOf(helper, full));
+        }
+      }
+      if (fullMs > MAX_GROWTH * halfMs) {
+        found.push(`${name}: grew ${(fullMs / halfMs).toFixed(1)}x when doubled (${Math.round(halfMs)} ms, then ${Math.round(fullMs)} ms)`);
+      }
+    }
+    if (fullMs > budgetMs) found.push(`${name}: ${Math.round(fullMs)} ms, over its ${budgetMs} ms budget`);
+    return found;
   });
 }
 
@@ -226,26 +267,28 @@ describe("every helper that walks user text runs in linear time", () => {
     expect(COMPOSED_BUDGET_MS).toBeGreaterThanOrEqual(10 * MEASURED_MS.composed);
   });
 
-  it.each(HELPERS)("%s: within its budget on every input", (_name, helper) => {
-    expect(overBudget(helper, BUDGET_MS)).toEqual([]);
+  it.each(HELPERS)("%s: linear growth and within its budget on every input", (_name, helper) => {
+    expect(failures(helper, BUDGET_MS)).toEqual([]);
   }, 60_000);
 
-  it.each(platforms)("%s: the composed helpers within their budget on its own run", (platform) => {
+  it.each(platforms)("%s: the composed helpers grow linearly and keep their budget on its own run", (platform) => {
     const run = PLATFORM_RUN[platform];
+    const input = { name: `${run} between tags`, full: betweenTags(run), half: betweenTags(run, HALF_SIZE) };
     for (const [name, compose] of COMPOSED) {
-      expect(overBudget(compose(platform), COMPOSED_BUDGET_MS, [[`${run} between tags`, betweenTags(run)]]), name).toEqual(
-        [],
-      );
+      expect(failures(compose(platform), COMPOSED_BUDGET_MS, [input]), name).toEqual([]);
     }
   }, 60_000);
 
-  it("fails on a planted quadratic helper", () => {
+  it("fails on a planted quadratic helper through the growth check alone", () => {
     // The pattern removeXMentions used before R68: it restarts at every comma
     // of a run that is not at the very end.
     const quadratic = (text: string) => text.replace(/[,;]+$/, "");
-    const commas = adversarialInputs().filter(([name]) => name === "commas after a mention");
-    expect(overBudget(quadratic, BUDGET_MS, commas)).toHaveLength(1);
+    const commas = sizedInputs().filter(({ name }) => name === "commas after a mention");
+    // No budget can fail it here, so only the growth check can.
+    const found = failures(quadratic, Number.POSITIVE_INFINITY, commas);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatch(/^commas after a mention: grew \d+\.\dx when doubled/);
     // A linear helper on the same input passes.
-    expect(overBudget((text: string) => text.replace(/,+/g, ","), BUDGET_MS, commas)).toEqual([]);
+    expect(failures((text: string) => text.replace(/,+/g, ","), Number.POSITIVE_INFINITY, commas)).toEqual([]);
   }, 60_000);
 });
