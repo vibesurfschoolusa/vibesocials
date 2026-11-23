@@ -337,8 +337,7 @@ describe("Queue: a quiet reload keeps the pages loaded with Load more (R68 publi
     expect(shown()).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     // No page twice: every card once.
     for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) {
-      expect(labelled(`Cancel "Post ${n}`)).toBeDefined();
-      expect(buttons((b) => String(b.attributes?.["aria-label"] ?? "").startsWith(`Cancel "Post ${n}"`))).toHaveLength(1);
+      expect(buttons((b) => String(b.attributes?.["aria-label"] ?? "").startsWith(`Cancel "Post ${n}`))).toHaveLength(1);
     }
     expect(loadMoreButton()).toBeUndefined();
   }, 15_000);

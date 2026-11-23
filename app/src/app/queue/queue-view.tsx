@@ -1332,6 +1332,11 @@ export function QueueView({
   // cancel, a refusal, a lost answer) reads this many again, so the pages
   // pulled in with Load more stay; a full load starts from page 1.
   const loadedPagesRef = useRef(1);
+  // R69 pages-a L1: each finished list read bumps the generation, and the
+  // cursor it left is mirrored here, so a Load more that started before a
+  // newer reload finished can tell whether its page still follows the list.
+  const listGenerationRef = useRef(0);
+  const nextCursorRef = useRef<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   // R26 LL3: why the last Load more failed, said under the button.
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
@@ -1385,6 +1390,8 @@ export function QueueView({
         pages += 1;
       }
       loadedPagesRef.current = pages;
+      listGenerationRef.current += 1;
+      nextCursorRef.current = cursor;
       setJobs(sortQueue(jobsRead));
       setNextCursor(cursor);
       setLoadMoreError(null);
@@ -1435,6 +1442,8 @@ export function QueueView({
     // is `disabled` while loadingMore is true; deps refresh this callback when
     // either value changes.
     if (!nextCursor || loadingMore) return;
+    const sentCursor = nextCursor;
+    const generation = listGenerationRef.current;
     setLoadingMore(true);
     setLoadMoreError(null);
     try {
@@ -1452,11 +1461,17 @@ export function QueueView({
         return;
       }
       const data: PostsResponse = await response.json();
+      // R69 pages-a L1: a reload finished while this page was read. When it
+      // left the list at another cursor (a later page of it failed), this
+      // page no longer follows the list: drop it, and the next press reads
+      // the page the reload stopped at.
+      if (listGenerationRef.current !== generation && nextCursorRef.current !== sentCursor) return;
       // Append the older page (de-duped by id), then re-apply the Queue's
       // scheduled-then-drafts ordering over the union. Keyset paging is by
       // (createdAt, id); sortQueue owns DISPLAY order, so an appended row can
       // land mid-list at its scheduledFor position — expected for the Queue.
       setJobs((prev) => (prev ? sortQueue(appendJobsPage(prev, data.jobs)) : sortQueue(data.jobs)));
+      nextCursorRef.current = data.nextCursor;
       setNextCursor(data.nextCursor);
       loadedPagesRef.current += 1;
     } catch (error) {
