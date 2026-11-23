@@ -1373,11 +1373,13 @@ export function QueueView({
       let jobsRead = data.jobs;
       let cursor = data.nextCursor;
       let pages = 1;
-      const wanted = silent ? loadedPagesRef.current : 1;
-      while (pages < wanted && cursor) {
+      // The count is read on every turn: a Load more that lands while this
+      // reload runs is read too, so its page is never undone (BD1 review L2).
+      while (pages < (silent ? loadedPagesRef.current : 1) && cursor) {
         const next = await readQueuePage(workspaceId, undefined, cursor);
-        // A failed quiet reload keeps the list on screen, as for page 1.
-        if (!next.ok) return;
+        // BD1 review L1: a later page that fails ends the reload with the
+        // pages read so far, and Load more asks for the failed page next.
+        if (!next.ok) break;
         jobsRead = appendJobsPage(jobsRead, next.data.jobs);
         cursor = next.data.nextCursor;
         pages += 1;
