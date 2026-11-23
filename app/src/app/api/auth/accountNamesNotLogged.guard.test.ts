@@ -48,6 +48,11 @@ const NAME_WORDS = new Set([
 const NAME_JOINED = /screenname|username|displayname|accountidentifier|userid|vanity|email|handle|pageid|accountid|orgid|channelid|ownerurn/;
 const PLATFORM_ID_NAMES = new Set(["sub", "open_id"]);
 /**
+ * R68 lead follow-up: a stored file's address ends in the customer's file name
+ * (lib/blobKey.ts), so it is logged only through blobLogRef(...).
+ */
+const BLOB_JOINED = /mediaurl|storagelocation|videourl|imageurl|photourl|fileurl|bloburl|coverurl|sourceurl|media_url|video_url|image_url|file_url/;
+/**
  * R67 lead follow-up: a token, a secret, an authorization code or a PKCE
  * verifier in a name (oauthToken, oauth_token, accessToken, refreshToken,
  * codeVerifier). console.* skips the logger's key redaction, so these are
@@ -129,14 +134,15 @@ export function saysWhoItIs(identifier: string): boolean {
     TOKEN_NAMES.has(identifier) ||
     words(identifier).some((word) => TOKEN_WORDS.has(word)) ||
     words(identifier).some((word) => NAME_WORDS.has(word)) ||
-    NAME_JOINED.test(identifier.toLowerCase())
+    NAME_JOINED.test(identifier.toLowerCase()) ||
+    BLOB_JOINED.test(identifier.toLowerCase())
   );
 }
 
 const LOG_METHODS = new Set(["log", "info", "warn", "error", "debug"]);
 
 /** R68 review: what these return says nothing about who, whatever they are given. */
-const SAFE_READERS = new Set(["extensionOf", "loggedAuthor"]);
+const SAFE_READERS = new Set(["extensionOf", "loggedAuthor", "blobLogRef"]);
 
 function isLogCall(node: ts.CallExpression): boolean {
   const callee = node.expression;
@@ -356,6 +362,11 @@ describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
       ['console.log("[TikTok] Init", { captionPreview: preview });', "captionPreview"],
       ['console.log("[X] Media", { originalFilename: mediaItem.originalFilename });', "originalFilename"],
       ['console.log("[LinkedIn] Video", { filename });', "filename"],
+      // R68 lead follow-up: a stored file's address ends in its name.
+      ['logger.info("[LinkedIn] Upload", { mediaUrl });', "mediaUrl"],
+      ['console.log("[TikTok] Media", { storageLocation: mediaItem.storageLocation });', "storageLocation"],
+      ['console.log("[LinkedIn] Image", { imageUrl });', "imageUrl"],
+      ['console.log("[LinkedIn] Video", { videoUrl });', "videoUrl"],
       ['console.log("[YouTube] Channel", { c: channel.snippet.title.slice(0, 50) });', "title"],
       ['console.log("[TikTok] Me", { me: me.display_name.trim() });', "display_name"],
     ])("%s", (source, name) => {
@@ -374,7 +385,7 @@ describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
   it("passes a yes/no under any key and a field read in the middle of a chain (R68)", () => {
     expect(
       loggedNames(
-        'console.log("[TikTok] Refreshed", { refreshTokenRotated: data.refreshToken !== undefined, videoUrn: session.data.video, parts: current.data.partCount, tagCount: tags.length, captionLength: caption.length, fileExtension: extensionOf(mediaItem.originalFilename), titleLength: 3, postedAs: loggedAuthor(authorUrn), n: ctx.caption?.length });',
+        'console.log("[TikTok] Refreshed", { refreshTokenRotated: data.refreshToken !== undefined, videoUrn: session.data.video, parts: current.data.partCount, tagCount: tags.length, captionLength: caption.length, fileExtension: extensionOf(mediaItem.originalFilename), titleLength: 3, postedAs: loggedAuthor(authorUrn), n: ctx.caption?.length, mediaRef: blobLogRef(mediaItem.storageLocation) });',
       ),
     ).toEqual([]);
   });

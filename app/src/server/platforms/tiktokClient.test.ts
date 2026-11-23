@@ -1993,8 +1993,7 @@ describe("tiktokClient.publishVideo", () => {
 
     it("the file name is never logged, only its extension", async () => {
       const { all } = await loggedFor("hello");
-      // The storage address still ends in the name (lib/blobKey.ts): see reports/BD3.md.
-      expect(all).not.toContain('"clip.mp4"');
+      expect(all).not.toContain("clip.mp4");
       expect(all).not.toContain("originalFilename");
       expect(all).toContain('"fileExtension":"mp4"');
     });
