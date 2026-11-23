@@ -1,6 +1,7 @@
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
+import { extensionOf } from "@/lib/fileExtension";
 import { fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import {
   STORAGE_READ_CODES,
@@ -1100,7 +1101,8 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: UsedToken): Promise
   if (mediaItem.mimeType && !mediaItem.mimeType.startsWith("video/")) {
     console.warn("[YouTube] Attempting to upload non-video media", {
       mimeType: mediaItem.mimeType,
-      originalFilename: mediaItem.originalFilename,
+      sizeBytes: mediaItem.sizeBytes,
+      fileExtension: extensionOf(mediaItem.originalFilename ?? ""),
     });
     const error = new Error("YouTube only supports video uploads") as Error & { code: string };
     error.code = "YOUTUBE_MEDIA_NOT_VIDEO";
@@ -1110,7 +1112,7 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: UsedToken): Promise
   console.log("[YouTube] Starting video upload", {
     mimeType: mediaItem.mimeType,
     sizeBytes: mediaItem.sizeBytes,
-    originalFilename: mediaItem.originalFilename,
+    fileExtension: extensionOf(mediaItem.originalFilename ?? ""),
   });
 
   if (store !== undefined && resumable) {

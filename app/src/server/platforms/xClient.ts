@@ -5,6 +5,7 @@ import type { PlatformClient, PublishContext, PublishResult, TextPublishContext 
 
 import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
+import { extensionOf } from "@/lib/fileExtension";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { STORAGE_READ_CODES, asStorageReadFailure, hasInternalDetail } from "@/lib/publishFailureText";
@@ -1737,7 +1738,7 @@ const xPublishing = {
     console.log("[X OAuth 1.0a] Starting post creation", {
       mimeType: mediaItem.mimeType,
       sizeBytes: mediaItem.sizeBytes,
-      originalFilename: mediaItem.originalFilename,
+      fileExtension: extensionOf(mediaItem.originalFilename ?? ""),
       isVideo,
       isImage,
     });

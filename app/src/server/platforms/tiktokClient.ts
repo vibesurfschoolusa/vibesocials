@@ -1,10 +1,11 @@
 import type { Prisma, SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
+import { extensionOf } from "@/lib/fileExtension";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { asStorageReadFailure } from "@/lib/publishFailureText";
-import { truncateGraphemesWithinCodePoints, truncateUtf16AtWord } from "@/lib/truncate";
+import { truncateUtf16AtWord } from "@/lib/truncate";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 
 import { commitRequest, publishUnconfirmedError } from "./commitCall";
@@ -1495,7 +1496,8 @@ export const tiktokClient: PlatformClient = {
 
     console.log('[TikTok] Media item details:', {
       mimeType: mediaItem.mimeType,
-      originalFilename: mediaItem.originalFilename,
+      sizeBytes: mediaItem.sizeBytes,
+      fileExtension: extensionOf(mediaItem.originalFilename ?? ""),
       storageLocation: mediaItem.storageLocation,
     });
 
@@ -1547,14 +1549,14 @@ export const tiktokClient: PlatformClient = {
     // absorbs the trailing bytes so the entire file is uploaded.
     const { chunkSize: CHUNK_SIZE, totalChunks, ranges } = computeChunkPlan(size);
 
-    // Dots only when something was cut: the cut counts code points, not units.
-    const captionPreview = truncateGraphemesWithinCodePoints(tiktokCaption, 100);
     console.log('[TikTok] Initializing upload with FILE_UPLOAD (chunked)', {
       videoSize: size,
       chunkSize: CHUNK_SIZE,
       totalChunks,
       hasAccessToken: !!accessToken,
-      captionPreview: captionPreview + (captionPreview !== tiktokCaption ? '...' : ''),
+      // R68 review: the caption is the customer's own text, so only its size.
+      captionLength: tiktokCaption.length,
+      wasCut: tiktokCaption !== caption,
     });
 
     const postInfo = buildPostInfo(ctx, tiktokCaption);

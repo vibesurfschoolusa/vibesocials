@@ -4,6 +4,7 @@ import type { MediaItem, SocialConnection } from "@prisma/client";
 import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
 import { mediaKindOf, photoSetFormatsReason, PLATFORM_CAPTION_LIMITS, unsupportedMediaReason } from "@/lib/platformLimits";
+import { extensionOf } from "@/lib/fileExtension";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { asStorageReadFailure } from "@/lib/publishFailureText";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders, toLinkedInLittleText } from "@/lib/linkedinApi";
@@ -618,7 +619,7 @@ async function uploadVideo(
   deadline?: number,
   cover?: PostCover,
 ): Promise<{ video: string; coverNote?: string }> {
-  console.log("[LinkedIn] Starting video upload", { videoUrl, filename });
+  console.log("[LinkedIn] Starting video upload", { videoUrl, fileExtension: extensionOf(filename) });
 
   // V1: the cover image first, so the upload asks for a thumbnail only when there is one to send.
   let coverNote: string | undefined;
@@ -2010,7 +2011,8 @@ export const linkedinClient: PlatformClient = {
       mediaUrl,
       mimeType: mediaItem.mimeType,
       isVideo,
-      filename: mediaItem.originalFilename,
+      sizeBytes: mediaItem.sizeBytes,
+      fileExtension: extensionOf(mediaItem.originalFilename ?? ""),
       postedAs,
     });
 

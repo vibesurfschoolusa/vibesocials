@@ -2,6 +2,7 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
 import { altTextOf } from "@/lib/altText";
+import { extensionOf } from "@/lib/fileExtension";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemesAtWord } from "@/lib/truncate";
@@ -1164,7 +1165,7 @@ export const instagramClient: PlatformClient = {
     console.log("[Instagram] Starting media upload", {
       mimeType: mediaItem.mimeType,
       sizeBytes: mediaItem.sizeBytes,
-      originalFilename: mediaItem.originalFilename,
+      fileExtension: extensionOf(mediaItem.originalFilename ?? ""),
       connectionId: socialConnection.id,
     });
 
