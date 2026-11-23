@@ -70,7 +70,7 @@ describe("the preview shows one platform at a time, with tabs", () => {
     const html = render(["instagram", "x"]);
     expect(html).toContain('src="blob:cover"');
     expect(html).toContain(">hello</p>");
-    expect(html).toContain("5 / 2200 characters");
+    expect(html).toContain("5 / 2,200");
   });
 
   it("a platform over its limit is marked on its tab while another is shown", () => {

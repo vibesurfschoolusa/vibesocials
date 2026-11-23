@@ -267,10 +267,11 @@ function PlatformPreviewCard({
           </p>
 
           <p className="text-xs text-muted-foreground">
+            {/* R68 publishing-flow-2 L1: grouped as the counter shows it, "1,234 / 2,200". */}
             {unitCountText(preview) ??
               (preview.limit !== null
-                ? `${preview.charCount} / ${preview.limit} characters`
-                : `${preview.charCount} characters`)}
+                ? `${preview.charCount.toLocaleString("en-US")} / ${preview.limit.toLocaleString("en-US")}`
+                : `${preview.charCount.toLocaleString("en-US")} characters`)}
           </p>
           {/* YouTube's and Pinterest's counts run ahead of the letters: the counter's own hint, on its own line. */}
           {preview.countHint ? <p className="text-xs text-muted-foreground">{preview.countHint}</p> : null}

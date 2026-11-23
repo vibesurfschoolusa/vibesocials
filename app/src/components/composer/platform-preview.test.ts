@@ -85,7 +85,7 @@ describe("PlatformPreviewList with a Story-only platform", () => {
   it("Feed and Story (not Story only) and Story switched off: the caption and its count", () => {
     const html = renderWith([]);
     expect(html).not.toContain(STORY_NO_CAPTION);
-    expect(html).toContain("/ 2200 characters");
+    expect(html).toContain("/ 2,200</p>");
     expect(html).toContain("Will be shortened");
   });
 });
@@ -107,12 +107,12 @@ describe("PlatformPreviewList count line", () => {
     (markup.match(/<p class="text-xs text-muted-foreground">[^<]*<\/p>/g) ?? []).slice(1);
 
   it.each([
-    ["x", "198 / 280 characters", "3749 / 280 characters"],
-    ["instagram", "189 / 2200 characters", "3749 / 2200 characters"],
-    ["linkedin", "253 / 3000 characters", "3749 / 3000 characters"],
-    ["facebook_page", "253 characters", "3867 characters"],
-    ["google_business_profile", "251 / 1500 characters", "3749 / 1500 characters"],
-  ] as const)("%s: unchanged", (platform, shortLine, longLine) => {
+    ["x", "198 / 280", "3,749 / 280"],
+    ["instagram", "189 / 2,200", "3,749 / 2,200"],
+    ["linkedin", "253 / 3,000", "3,749 / 3,000"],
+    ["facebook_page", "253 characters", "3,867 characters"],
+    ["google_business_profile", "251 / 1,500", "3,749 / 1,500"],
+  ] as const)("%s: en-US grouping, as the counter (R68 publishing-flow-2 L1)", (platform, shortLine, longLine) => {
     expect(countLines(card(platform, short))).toEqual([line(shortLine)]);
     expect(countLines(card(platform, long))).toEqual([line(longLine)]);
   });
@@ -237,7 +237,7 @@ describe("PlatformPreviewList count line on the other platforms, unchanged by Pi
   const line = (text: string) => `<p class="text-xs text-muted-foreground">${text}</p>`;
 
   it.each([
-    ["x", ["198 / 280 characters"], ["3749 / 280 characters"]],
+    ["x", ["198 / 280"], ["3,749 / 280"]],
     // R65: TikTok counts UTF-16 units, so the four waves count 2 each. R66
     // publishing-flow L1: the counter's label and its hint, as Pinterest's card shows.
     [
@@ -245,10 +245,10 @@ describe("PlatformPreviewList count line on the other platforms, unchanged by Pi
       ["193 / 2,200 incl. footer", "TikTok counts some characters, such as emoji, as 2 or more."],
       ["3,749 / 2,200"],
     ],
-    ["instagram", ["189 / 2200 characters"], ["3749 / 2200 characters"]],
-    ["linkedin", ["253 / 3000 characters"], ["3749 / 3000 characters"]],
-    ["facebook_page", ["253 characters"], ["3867 characters"]],
-    ["google_business_profile", ["251 / 1500 characters"], ["3749 / 1500 characters"]],
+    ["instagram", ["189 / 2,200"], ["3,749 / 2,200"]],
+    ["linkedin", ["253 / 3,000"], ["3,749 / 3,000"]],
+    ["facebook_page", ["253 characters"], ["3,867 characters"]],
+    ["google_business_profile", ["251 / 1,500"], ["3,749 / 1,500"]],
     [
       "youtube",
       ["276 / 5,000 incl. footer", "YouTube counts accented letters, curly quotes, emoji, &lt; and &gt; as 2 or more."],
@@ -257,6 +257,36 @@ describe("PlatformPreviewList count line on the other platforms, unchanged by Pi
   ] as const)("%s", (platform, shortLines, longLines) => {
     expect(lines(platform, short)).toEqual(shortLines.map(line));
     expect(lines(platform, long)).toEqual(longLines.map(line));
+  });
+});
+
+// R68 publishing-flow-2 L1: every card's count reads as the per-platform
+// counter does, "1,234 / 2,200", not "1234 / 2200 characters".
+describe("PlatformPreviewList count line, one format", () => {
+  const countLine = (platform: Platform, caption: string) =>
+    (
+      renderToStaticMarkup(
+        createElement(PlatformPreviewList, { platforms: [platform], caption, user: null, mediaUrl: null, mediaMimeType: null }),
+      ).match(/<p class="text-xs text-muted-foreground">[^<]*<\/p>/g) ?? []
+    ).slice(1);
+
+  it("Instagram at 1,234: 1,234 / 2,200, the counter's own label", () => {
+    const caption = "a".repeat(1234);
+    expect(countLine("instagram", caption)).toEqual(['<p class="text-xs text-muted-foreground">1,234 / 2,200</p>']);
+    expect(platformCaptionCounter(caption, "instagram", null).label).toBe("1,234 / 2,200");
+  });
+
+  it.each(["x", "linkedin", "google_business_profile"] as const)("%s: the counter's own label", (platform) => {
+    const caption = "Glassy waves ".repeat(95);
+    expect(countLine(platform, caption)).toEqual([
+      `<p class="text-xs text-muted-foreground">${platformCaptionCounter(caption, platform, null).label}</p>`,
+    ]);
+  });
+
+  it("Facebook, with no limit: 1,234 characters", () => {
+    expect(countLine("facebook_page", "a".repeat(1234))).toEqual([
+      '<p class="text-xs text-muted-foreground">1,234 characters</p>',
+    ]);
   });
 });
 
