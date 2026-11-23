@@ -2684,7 +2684,7 @@ describe("POST /api/posts - alt text (07d)", () => {
 describe("POST /api/posts - an overlong alt text (R69)", () => {
   const HOST = "https://test.public.blob.vercel-storage.com";
   const photo = (n: number) => ({ blobUrl: `${HOST}/p${n}.jpg`, filename: `p${n}.jpg`, mimeType: "image/jpeg", sizeBytes: 100 + n });
-  /** R69: the refusal took about MEASURED ms alone; ten times that and more. */
+  /** R69: the whole test took 48-54 ms alone (2026-11-22); this is over 35 times that. */
   const REFUSAL_BUDGET_MS = 2_000;
 
   beforeEach(() => {

@@ -130,7 +130,7 @@ describe("fitAltText cuts whole graphemes (R67)", () => {
 // R69 publishing-flow L1: the routes refuse a description over the cap before
 // cleaning it, and cleanAltText itself reads no further, as a backstop.
 describe("the alt text cap (R69)", () => {
-  /** R69: the cleaning took about MEASURED ms alone; ten times that and more. */
+  /** R69: the whole test took 7-8 ms alone (2026-11-22), and 167 ms without the bound; this is over 60 times the first. */
   const CLEAN_BUDGET_MS = 500;
 
   it("is 10,000 characters, like a caption's", () => {

@@ -9,6 +9,7 @@ import { noConnectionsMessage } from "@/lib/ownerStepAnswers";
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
 import { parseCoverField, withStoredCoverFacts } from "@/lib/videoCoverField";
 import { logoAddressRefusal } from "@/lib/workspaceLogo";
+import { ALT_TEXT_TOO_LONG_MESSAGE, isOverlongAltText } from "@/lib/altText";
 import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits";
 import { POST_NOT_CREATED_MESSAGE } from "@/lib/composerSubmitOutcome";
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
@@ -837,6 +838,19 @@ export async function POST(request: Request) {
       { error: "Send either media or blobUrl / mediaItemId, not both." },
       { status: 400 },
     );
+  }
+
+  // R69 publishing-flow L1: a description over the cap is refused here, before
+  // any cleaning, storage read or media lookup, so a crafted one costs no CPU.
+  if (isOverlongAltText(body.altText)) {
+    return NextResponse.json({ error: ALT_TEXT_TOO_LONG_MESSAGE }, { status: 400 });
+  }
+  if (Array.isArray(body.media)) {
+    const longAt = body.media.findIndex((entry: unknown) => isOverlongAltText((entry as { altText?: unknown } | null)?.altText));
+    if (longAt !== -1) {
+      const error = body.media.length > 1 ? `File ${longAt + 1}: ${ALT_TEXT_TOO_LONG_MESSAGE}` : ALT_TEXT_TOO_LONG_MESSAGE;
+      return NextResponse.json({ error }, { status: 400 });
+    }
   }
 
   const hasBlobUrl = typeof body?.blobUrl === "string" && body.blobUrl.trim().length > 0;

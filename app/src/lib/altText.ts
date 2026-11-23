@@ -11,6 +11,22 @@ import { truncateUtf16AtWord } from "@/lib/truncate";
 /** The most the app stores: X's limit, the largest of the platforms' that we confirmed. */
 export const ALT_TEXT_MAX = 1000;
 
+/**
+ * R69 publishing-flow L1: the longest description a route takes, like a
+ * caption's cap (MAX_CAPTION_CHARS). Cleaning 2.2M newlines cost 0.2-0.4 s of
+ * CPU, so a longer one is refused before it is cleaned. Create sends at most
+ * ALT_TEXT_MAX, so only a crafted request reaches this.
+ */
+export const ALT_TEXT_INPUT_MAX = 10_000;
+
+/** The 400 for a description over ALT_TEXT_INPUT_MAX; it names what is kept. */
+export const ALT_TEXT_TOO_LONG_MESSAGE = `Your photo description is too long: keep it to ${ALT_TEXT_MAX.toLocaleString("en-US")} characters.`;
+
+/** True for text longer than ALT_TEXT_INPUT_MAX, read by length alone. */
+export function isOverlongAltText(raw: unknown): boolean {
+  return typeof raw === "string" && raw.length > ALT_TEXT_INPUT_MAX;
+}
+
 // Line breaks and tabs become spaces: every platform shows alt text on one line.
 // Zl and Zp are the Unicode line and paragraph separators.
 const LINE_BREAKS = /\r\n|[\r\n\t\v\f\p{Zl}\p{Zp}]/gu;
@@ -35,7 +51,10 @@ export function fitAltText(text: string, max: number): string {
  */
 export function cleanAltText(raw: unknown): string {
   if (typeof raw !== "string") return "";
-  const cleaned = raw.replace(LINE_BREAKS, " ").replace(CONTROL_CHARACTERS, "").trim();
+  // R69: a backstop for the routes' refusal; nothing past the cap is ever kept
+  // (the result is at most ALT_TEXT_MAX), so it is not read.
+  const bounded = isOverlongAltText(raw) ? truncateUtf16AtWord(raw, ALT_TEXT_INPUT_MAX) : raw;
+  const cleaned = bounded.replace(LINE_BREAKS, " ").replace(CONTROL_CHARACTERS, "").trim();
   return fitAltText(cleaned, ALT_TEXT_MAX);
 }
 
