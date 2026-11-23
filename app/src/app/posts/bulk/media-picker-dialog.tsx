@@ -136,6 +136,9 @@ export function MediaPickerDialog({ workspaceId, open, onOpenChange, addedIds, r
   }
 
   const atLimit = selected.size >= room;
+  // R68 pages-a L1: the ticks used up the room, so the line and the locked
+  // tiles say why a further tap does nothing. A picker with no room at all is as before.
+  const chosenAll = room > 0 && atLimit;
 
   function add() {
     onAdd(items.filter((item) => selected.has(item.id)));
@@ -147,7 +150,9 @@ export function MediaPickerDialog({ workspaceId, open, onOpenChange, addedIds, r
       <DialogHeader>
         <DialogTitle>Choose from Media</DialogTitle>
         <DialogDescription>
-          Tick the photos and videos to add. {room} more can be added.
+          {chosenAll
+            ? "You've chosen as many as fit. Untick one to choose another."
+            : `Tick the photos and videos to add. ${room - selected.size} more can be added.`}
         </DialogDescription>
       </DialogHeader>
       <DialogBody>
@@ -176,10 +181,11 @@ export function MediaPickerDialog({ workspaceId, open, onOpenChange, addedIds, r
                 const added = addedIds.has(item.id);
                 const checked = added || selected.has(item.id);
                 const isVideo = item.mimeType.startsWith("video/");
+                const lockedByLimit = chosenAll && !checked;
                 return (
                   <li key={item.id}>
                     <label
-                      className={`relative block cursor-pointer overflow-hidden rounded-[var(--radius)] border ${
+                      className={`relative block ${lockedByLimit ? "cursor-not-allowed opacity-50" : "cursor-pointer"} overflow-hidden rounded-[var(--radius)] border ${
                         checked ? "border-primary ring-2 ring-primary" : "border-border"
                       }`}
                     >
