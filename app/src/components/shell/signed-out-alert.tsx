@@ -44,8 +44,16 @@ export function useServerSaysSignedOut(
     let live = true;
     let asking = false;
     let known = false;
+    // R69 review low: a return that lands while a read runs (online firing
+    // just before that read fails) is answered by one more read after it.
+    // Only an event sets it, so it cannot loop.
+    let again = false;
     function ask() {
-      if (asking || known) return;
+      if (known) return;
+      if (asking) {
+        again = true;
+        return;
+      }
       asking = true;
       void read().then((server) => {
         asking = false;
@@ -58,6 +66,10 @@ export function useServerSaysSignedOut(
         if (server.kind === "signedIn" && mayReread.current) {
           mayReread.current = false;
           rereadSessionHere(window);
+        }
+        if (again && !signedOut) {
+          again = false;
+          ask();
         }
       });
     }
