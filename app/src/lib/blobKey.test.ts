@@ -21,6 +21,26 @@ describe("blobLogRef", () => {
     expect(blobLogRef(`https://${HOST}/1763200000000-k3j-Maria.jpg`)).toBe(`${HOST}/1763200000000-k3j`);
   });
 
+  // R68 second look: the client upload-link files and the covers stay traceable.
+  it("an upload-link key keeps ul/<linkId>/<16hex>, never the file name", () => {
+    const ref = blobLogRef(`https://${HOST}/ul/link_A-1/0123456789abcdef-Maria_Lopez.mp4`);
+    expect(ref).toBe(`${HOST}/ul/link_A-1/0123456789abcdef`);
+    expect(ref).not.toContain("Maria");
+  });
+
+  it("a cover keeps covers/<workspace>/<ms>-<random>, never a name", () => {
+    expect(blobLogRef(`https://${HOST}/covers/ws_1/1763200000000-k3j9x2ab-cover.jpg`)).toBe(
+      `${HOST}/covers/ws_1/1763200000000-k3j9x2ab`,
+    );
+    expect(blobLogRef(`https://${HOST}/covers/ws_1/1763200000000-k3j9x2ab-Maria.jpg?x=1`)).toBe(
+      `${HOST}/covers/ws_1/1763200000000-k3j9x2ab`,
+    );
+  });
+
+  it("a logo stays host only", () => {
+    expect(blobLogRef(`https://${HOST}/logos/ws_1/1763200000000-k3j9x2ab-logo.png`)).toBe(HOST);
+  });
+
   it("a key of another shape: only the host", () => {
     expect(blobLogRef(`https://${HOST}/logos/ws-1/Maria.png`)).toBe(HOST);
     expect(blobLogRef("https://blob.example.com/clip.mp4?token=x#Maria")).toBe("blob.example.com");
