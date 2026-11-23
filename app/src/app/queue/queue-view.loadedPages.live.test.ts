@@ -300,6 +300,49 @@ describe("Queue: a quiet reload keeps the pages loaded with Load more (R68 publi
     expect(loadMoreButton()).toBeUndefined();
   }, 15_000);
 
+  // R69 pages-a L1: a Load more that lands after a quiet reload whose later
+  // page failed must not skip the failed page.
+  it("two pages loaded, Load more and a quiet reload at once; the reload's page-2 read fails and Load more's page-3 read lands after: page 2 is not skipped", async () => {
+    // Pages: [1, 2], [3, 4], [5, 6], [7, 8].
+    store = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => scheduled(n));
+    await mount();
+    await click(loadMoreButton(), "Load more");
+    expect(shown()).toEqual([1, 2, 3, 4]);
+
+    // Load more's page-3 read waits until the reload is over.
+    holdCursor = "4";
+    await click(loadMoreButton(), "Load more");
+    expect(heldReads).toHaveLength(1);
+    holdCursor = null;
+
+    cancelAnswer = () => Response.json({ error: "This post changed in the meantime. Try again." }, { status: 409 });
+    failCursor = "2";
+    await click(labelled('Cancel "Post 1'), "Cancel on Post 1");
+    await click(buttons((n) => n.attributes?.["data-confirm"] === "Cancel post")[0], "Cancel post");
+    // The reload kept page 1 only: its page-2 read failed.
+    expect(shown()).toEqual([1, 2]);
+    failCursor = null;
+
+    await act(async () => heldReads.shift()!());
+    await settle();
+    // The late page 3 is dropped, so page 2 is not skipped.
+    expect(shown()).toEqual([1, 2]);
+
+    const before = reads.length;
+    await click(loadMoreButton(), "Load more");
+    expect(reads[before]).toContain("cursor=2");
+    expect(shown()).toEqual([1, 2, 3, 4]);
+    await click(loadMoreButton(), "Load more");
+    await click(loadMoreButton(), "Load more");
+    expect(shown()).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    // No page twice: every card once.
+    for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      expect(labelled(`Cancel "Post ${n}`)).toBeDefined();
+      expect(buttons((b) => String(b.attributes?.["aria-label"] ?? "").startsWith(`Cancel "Post ${n}"`))).toHaveLength(1);
+    }
+    expect(loadMoreButton()).toBeUndefined();
+  }, 15_000);
+
   it("one page loaded: the quiet reload reads page 1 only, as now", async () => {
     store = [1, 2, 3, 4, 5, 6].map((n) => scheduled(n));
     await mount();
