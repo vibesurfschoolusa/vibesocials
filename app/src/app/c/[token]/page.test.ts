@@ -541,6 +541,11 @@ describe("the success sentence is checked against the connection", () => {
     needsReconnect,
   });
 
+  // R68: only a platform the link offers is looked up, so this link offers both.
+  beforeEach(() => {
+    h.findLink.mockResolvedValue({ ...LINK, platforms: [...LINK.platforms, "youtube", "google_business_profile"] });
+  });
+
   it("YouTube connected and working: the sentence", async () => {
     h.listConnections.mockResolvedValue([youtube(false)]);
     expect(await render({ success: "youtube_connected" })).toContain("YouTube is connected.");

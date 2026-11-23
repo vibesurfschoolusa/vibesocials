@@ -80,7 +80,13 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
     listLinkConnections(link.workspaceId),
     findClientPageLogo(link.workspaceId),
   ]);
-  const byPlatform = new Map(connections.map((connection) => [connection.platform, connection]));
+  // R68 security-billing-2 L1: a platform the link doesn't offer is never
+  // looked up, so a typed ?error= or ?success= for it names no account.
+  const byPlatform = new Map(
+    connections
+      .filter((connection) => link.platforms.includes(connection.platform))
+      .map((connection) => [connection.platform, connection]),
+  );
   const platforms = PLATFORM_ORDER.filter(
     (platform) => link.platforms.includes(platform) && connectLinkPlatformConfigured(platform),
   );
