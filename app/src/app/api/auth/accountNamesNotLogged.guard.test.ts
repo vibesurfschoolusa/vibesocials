@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync, statSync } from "fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -17,6 +18,8 @@ import { describe, expect, it } from "vitest";
  */
 
 const APP_SRC = fileURLToPath(new URL("../../../", import.meta.url));
+/** R69: the whole scan, measured at about MEASURED ms alone; ten times that and more. */
+const SCAN_BUDGET_MS = 20_000;
 
 /** Words that, in a variable or property name, say it holds who the account is. */
 // R68 lead follow-up: a post's author or an upload's owner can be a person (urn:li:person:…).
@@ -39,6 +42,10 @@ const NAME_WORDS = new Set([
   "commentary",
   "preview",
   "filename",
+  // R69: a stored file's key and address end in the customer's file name
+  // (lib/blobKey.ts, lib/uploadLink.ts), so they are logged only through blobLogRef.
+  "pathname",
+  "url",
 ]);
 /**
  * The same, joined into one word in any case (userIdFromX, accountIdentifier),
@@ -208,31 +215,46 @@ export function loggedNames(source: string, fileName = "planted.ts"): string[] {
   return [...hits];
 }
 
-/** The OAuth start and callback routes, server/connections and the platform clients, tests left out. */
-function scannedFiles(): string[] {
+/** Test code, which never runs on the server: tests, testkits and test helpers. */
+const TEST_CODE = /\.test\.tsx?$|\.testkit\.tsx?$|\.d\.ts$|^__test-helpers__$/;
+
+/**
+ * R69 (the cure): every source file under `root`, tests left out. R65, R67 and
+ * R68 each scanned only the folders just fixed, and R69 found the upload routes
+ * and the orphan sweep outside them, so nothing is left to a list of folders.
+ */
+export function scannedFiles(root = APP_SRC): string[] {
   const files: string[] = [];
-  const auth = path.join(APP_SRC, "app", "api", "auth");
-  for (const platform of readdirSync(auth)) {
-    for (const leg of ["start", "callback"]) {
-      const route = path.join(auth, platform, leg, "route.ts");
-      try {
-        if (statSync(route).isFile()) files.push(route);
-      } catch {
-        // Not every folder under auth/ is a platform.
-      }
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (TEST_CODE.test(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.tsx?$/.test(entry.name)) files.push(full);
+    }
+  };
+  walk(root);
+  return files;
+}
+
+/** A file with no logger or console call has nothing to judge, so it is not parsed. */
+const HAS_LOG_CALL = /\b(?:logger|console)\s*\??\.\s*(?:log|info|warn|error|debug)\b/;
+
+/** Each hit in the source files under `root`, as `file:line: name`, with the SAFE ones split out. */
+export function scanForLoggedNames(root = APP_SRC): { found: string[]; safe: Set<string> } {
+  const found: string[] = [];
+  const safe = new Set<string>();
+  for (const file of scannedFiles(root)) {
+    const source = readFileSync(file, "utf8");
+    if (!HAS_LOG_CALL.test(source)) continue;
+    const name = path.relative(root, file).split(path.sep).join("/");
+    for (const hit of loggedNames(source, name)) {
+      const key = `${name} ${hit.replace(/^\d+: /, "")}`;
+      if (root === APP_SRC && key in SAFE) safe.add(key);
+      else found.push(`${name}:${hit}`);
     }
   }
-  const connections = path.join(APP_SRC, "server", "connections");
-  for (const entry of readdirSync(connections)) {
-    if (entry.endsWith(".ts") && !/\.test\.ts$|\.testkit\.ts$/.test(entry)) files.push(path.join(connections, entry));
-  }
-  // R68 platform-clients L1: the publish logs run on every post, so they are
-  // held to the same rule as the connect logs.
-  const platforms = path.join(APP_SRC, "server", "platforms");
-  for (const entry of readdirSync(platforms)) {
-    if (/Client\.ts$/.test(entry)) files.push(path.join(platforms, entry));
-  }
-  return files;
+  return { found, safe };
 }
 
 function relative(file: string): string {
@@ -249,6 +271,9 @@ const TOKEN_TYPE = "the kind of token TikTok sent (Bearer), never the token";
 const ERROR_NAME = "an Error's class name (error.name), never a person's";
 const TIKTOK_ERROR_DESCRIPTION = "TikTok's own sentence for a failed token reply (error_description), never customer text";
 const FAILED_REPLY = "the body of a FAILED reply (read under !response.ok), as errorText elsewhere";
+const OWN_REFUSAL_CODE = "the code a Vibe Socials route refused with (data.code), never an OAuth code";
+const STRIPE_CODE = "Stripe's error code (StripeApiError.code), never an OAuth code";
+const EMAIL_CAP = "a constant: how many emails one run may send, never an address";
 const SAFE: Record<string, string> = {
   "app/api/auth/facebook_page/callback/route.ts userId": OWN_USER_ID,
   "app/api/auth/instagram/callback/route.ts userId": OWN_USER_ID,
@@ -285,10 +310,78 @@ const SAFE: Record<string, string> = {
   "server/platforms/xClient.ts code": "an Error's code or the code X's reply sent (an API error number), never an OAuth code",
   "server/platforms/xClient.ts name": ERROR_NAME,
   "server/platforms/youtubeClient.ts code": ERROR_CODE,
+  // R69 (every source file): what the wider scan found, each read at its line.
+  "app/api/auth/account/route.ts userId": OWN_USER_ID,
+  "app/api/auth/x/start/route.ts callbackUrl": "our own OAuth callback address (X_CALLBACK_URL), the same for everyone",
+  "app/api/invites/[token]/accept/route.ts userId": OWN_USER_ID,
+  "app/api/media/[id]/route.ts userId": OWN_USER_ID,
+  "app/api/posts/auto-caption/route.ts userId": OWN_USER_ID,
+  "app/api/posts/route.ts userId": OWN_USER_ID,
+  "app/api/settings/route.ts userId": OWN_USER_ID,
+  "app/api/upload/route.ts userId": OWN_USER_ID,
+  "app/api/workspaces/connect-link/route.ts userId": OWN_USER_ID,
+  "app/api/workspaces/invites/route.ts userId": OWN_USER_ID,
+  "app/api/workspaces/logo/route.ts url":
+    "a logo's address, whose key is logos/<32 random hex>.png (server/workspaceLogo.ts) with no file name, kept whole so the file left in storage can be found",
+  "app/api/workspaces/members/formerOwnerNotice.ts name": ERROR_NAME,
+  "app/api/workspaces/review-link/route.ts userId": OWN_USER_ID,
+  "app/api/workspaces/upload-link/route.ts userId": OWN_USER_ID,
+  "app/page.tsx name": ERROR_NAME,
+  "app/posts/bulk/bulk-posts-form.tsx code": OWN_REFUSAL_CODE,
+  "app/posts/bulk/bulkExtras.ts code": OWN_REFUSAL_CODE,
+  "lib/accountEmails.ts name": ERROR_NAME,
+  "lib/assertOk.ts body": FAILED_REPLY,
+  "lib/oauthCallbackGuard.ts stateUserId": `${OWN_USER_ID}: the one the OAuth state was signed for`,
+  "lib/oauthCallbackGuard.ts sessionUserId": `${OWN_USER_ID}: the signed-in session's`,
+  "server/billing/cancelOnDelete.ts code": STRIPE_CODE,
+  "server/billing/cancelOnDelete.ts name": ERROR_NAME,
+  "server/billing/checkout.ts code": STRIPE_CODE,
+  "server/billing/checkout.ts name": ERROR_NAME,
+  "server/billing/planPrices.ts code": STRIPE_CODE,
+  "server/billing/reminders.ts userId": OWN_USER_ID,
+  "server/billing/reminders.ts name": ERROR_NAME,
+  "server/billing/reminders.ts REMINDER_MAX_EMAILS_PER_RUN": EMAIL_CAP,
+  "server/billing/stripeWebhook.ts userId": OWN_USER_ID,
+  "server/billing/stripeWebhook.ts name": ERROR_NAME,
+  "server/googleFailure.ts code": "Google's error code from a failed reply (fields.code), never an OAuth code",
+  "server/googleFailure.ts name": ERROR_NAME,
+  "server/googleReviews.ts locationName":
+    "a business location's id, Google's path accounts/<n>/locations/<n>, never its title (lead decision, R68)",
+  "server/googleReviews.ts reviewName":
+    "a review's id, Google's path accounts/<n>/locations/<n>/reviews/<id>, never the reviewer's name",
+  "server/jobs/connectionNotices.ts userId": OWN_USER_ID,
+  "server/jobs/connectionNotices.ts name": ERROR_NAME,
+  "server/jobs/inngest-functions.ts code": `${ERROR_CODE}, or a failed refresh's code string`,
+  "server/jobs/listingMetrics.ts name": ERROR_NAME,
+  "server/jobs/listingMetrics.ts code": ERROR_CODE,
+  "server/jobs/monthlyReportEmail.ts userId": OWN_USER_ID,
+  "server/jobs/problemDigest.ts DIGEST_MAX_EMAILS_PER_RUN": EMAIL_CAP,
+  "server/jobs/problemDigest.ts userId": OWN_USER_ID,
+  "server/jobs/reviewAlerts.ts name": ERROR_NAME,
+  "server/jobs/reviewAlerts.ts code": ERROR_CODE,
+  "server/jobs/reviewAlerts.ts REVIEW_ALERT_MAX_EMAILS_PER_RUN": EMAIL_CAP,
+  "server/jobs/reviewAlerts.ts userId": OWN_USER_ID,
+  "server/notifications/email.ts name": ERROR_NAME,
+  "server/notifications/freeRunCeilingEmail.ts name": ERROR_NAME,
+  "server/notifications/postOutcomeEmail.ts userId": OWN_USER_ID,
+  "server/platforms/commitCall.ts name": ERROR_NAME,
+  "server/platforms/connectionHealth.ts code": "the failure code saved as lastRefreshErrorCode, never an OAuth code",
+  "server/platforms/facebookMetrics.ts name": ERROR_NAME,
+  "server/platforms/facebookMetrics.ts code": ERROR_CODE,
+  "server/platforms/googleTokens.ts code": `${ERROR_CODE}, or a fixed GOOGLE_* code written there`,
+  "server/platforms/linkedinClient.ts LINKEDIN_POSTS_URL": "LinkedIn's API address, a constant",
+  "server/platforms/linkedinMetrics.ts name": ERROR_NAME,
+  "server/platforms/linkedinMetrics.ts code": ERROR_CODE,
+  "server/platforms/pinterestMetrics.ts name": ERROR_NAME,
+  "server/platforms/pinterestMetrics.ts code": ERROR_CODE,
+  "server/platforms/xClient.ts tweetUrl": "the post's address twitter.com/i/web/status/<id>, built from its id, with no handle",
+  "server/platforms/youtubeClient.ts watchUrl": "youtube.com/watch?v=<id>, built from the video's id",
+  "server/platforms/youtubeMetrics.ts body": FAILED_REPLY,
+  "server/usage/usageLog.ts userId": OWN_USER_ID,
 };
 
 describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
-  it("scans the routes, server/connections and the platform clients", () => {
+  it("scans every source file under src, tests left out", () => {
     const files = scannedFiles().map(relative);
     expect(files).toContain("app/api/auth/x/callback/route.ts");
     expect(files).toContain("app/api/auth/youtube/callback/route.ts");
@@ -299,24 +392,43 @@ describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
     expect(files).toContain("server/platforms/instagramClient.ts");
     expect(files).toContain("server/platforms/linkedinClient.ts");
     expect(files).toContain("server/platforms/youtubeClient.ts");
-    expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
+    // R69: the upload routes and the orphan sweep, outside the old folders.
+    expect(files).toContain("app/api/upload/route.ts");
+    expect(files).toContain("app/api/upload-link/[token]/upload/route.ts");
+    expect(files).toContain("server/jobs/orphanBlobSweep.ts");
+    expect(files).toContain("lib/blobKey.ts");
+    expect(files).toContain("app/page.tsx");
+    expect(files.some((file) => /\.test\.tsx?$|\.testkit\.tsx?$|__test-helpers__/.test(file))).toBe(false);
   });
 
   it("no log call in them passes a name, handle, title, email or platform user id", () => {
-    const found: string[] = [];
-    const used = new Set<string>();
-    for (const file of scannedFiles()) {
-      const name = relative(file);
-      for (const hit of loggedNames(readFileSync(file, "utf8"), name)) {
-        const key = `${name} ${hit.replace(/^\d+: /, "")}`;
-        if (key in SAFE) used.add(key);
-        else found.push(`${name}:${hit}`);
-      }
-    }
+    const { found, safe } = scanForLoggedNames();
     expect(found).toEqual([]);
     // A safe entry nothing uses any more is removed, so the list stays true.
-    expect(Object.keys(SAFE).filter((key) => !used.has(key))).toEqual([]);
+    expect(Object.keys(SAFE).filter((key) => !safe.has(key))).toEqual([]);
   });
+
+  // R69: a route in a folder no earlier list named is still read.
+  it("fails on a planted { pathname } log in a route outside the old folders", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "BE2-guard-"));
+    try {
+      const route = path.join(root, "app", "api", "brand-new", "route.ts");
+      mkdirSync(path.dirname(route), { recursive: true });
+      writeFileSync(route, 'logger.info("[brand-new] Token", { pathname, linkId: link.id });\n');
+      writeFileSync(path.join(path.dirname(route), "route.test.ts"), 'logger.info("x", { pathname });\n');
+      expect(scanForLoggedNames(root).found).toEqual(["app/api/brand-new/route.ts:1: pathname"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // R69: the guard reads all of src, so it is timed; the budget is far above
+  // the measured time (see the R69 report), so CI load cannot fail it.
+  it("reads every source file well within its budget", () => {
+    const started = performance.now();
+    scanForLoggedNames();
+    expect(performance.now() - started).toBeLessThan(SCAN_BUDGET_MS);
+  }, 60_000);
 
   describe("fails on a planted log call", () => {
     it.each([
@@ -375,6 +487,11 @@ describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
       ['console.log("[LinkedIn] Video", { videoUrl });', "videoUrl"],
       ['console.log("[YouTube] Channel", { c: channel.snippet.title.slice(0, 50) });', "title"],
       ['console.log("[TikTok] Me", { me: me.display_name.trim() });', "display_name"],
+      // R69: the upload logs, whose keys end in the file's name.
+      ['logger.info("[Upload] Generating token", { pathname, userId: user.id });', "pathname"],
+      ['logger.info("[upload-link] Generating token", { key: signedPathname, linkId });', "signedPathname"],
+      ['logger.warn("[orphanBlobSweep] Couldn\'t delete", { error, file: blob.pathname });', "pathname"],
+      ['logger.info("[Upload] Upload completed", { url: blob.url });', "url"],
     ])("%s", (source, name) => {
       expect(loggedNames(source).map((hit) => hit.replace(/^\d+: /, ""))).toContain(name);
     });

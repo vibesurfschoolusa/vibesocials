@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ prisma: {} }));
 vi.mock("@vercel/blob", () => ({ del: vi.fn(), list: vi.fn(), head: vi.fn() }));
 
+import { logger } from "@/lib/logger";
+
 import { inngestFunctions } from "./inngest-functions";
 import {
   LINK_UPLOAD_MIN_AGE_MS,
@@ -371,5 +373,20 @@ describe("orphanBlobSweep (orphan-blob-sweep)", () => {
       .call(orphanBlobSweep, { baseUrl: new URL("https://app.example/api/inngest"), appPrefix: "vibe-socials" })
       .find((config) => config.id === "vibe-socials-orphan-blob-sweep")?.triggers;
     expect(triggers).toEqual([{ cron: "25 6 * * *" }]);
+  });
+});
+
+// R69 security-billing L1: a failed delete is logged at warn (which reaches
+// Sentry), so it names the file only through blobLogRef, never its name.
+describe("a failed delete's log", () => {
+  it("has no file name, only the store and the key's random part", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const list = fakeList({ ul: [[blob("ul/link-1/0123456789abcdef-Smith_family_beach.mp4")]] });
+    const del = vi.fn().mockRejectedValue(new Error("store down"));
+
+    await expect(run({ list, db: fakeDb(), del }).result).resolves.toMatchObject({ failed: 1 });
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).not.toMatch(/Smith|family|beach/);
+    expect(logged).toContain("store1.public.blob.vercel-storage.com/ul/link-1/0123456789abcdef");
   });
 });

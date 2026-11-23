@@ -63,6 +63,7 @@ import {
   WORKSPACE_CHANGED_CODE,
   WORKSPACE_CHANGED_SAVE_MESSAGE,
 } from "@/lib/workspaceChanged";
+import { logger } from "@/lib/logger";
 import { GET, POST } from "./route";
 
 /** R32: a read from a page drawn for `workspaceId` (the mock's own by default; null sends none). */
@@ -710,5 +711,57 @@ describe("POST /api/upload: the page's workspace id", () => {
       error: "You switched workspace in another tab. Reload this page, then try again.",
       code: "WORKSPACE_CHANGED",
     });
+  });
+});
+
+// R69 security-billing L1: the signed key ends in the file's name, so the token
+// log keeps only <ms>-<random> (or covers/<workspace>/<ms>-<random>).
+describe("POST /api/upload: the token log", () => {
+  const tokenFor = (payload: unknown) =>
+    POST(
+      new Request("http://localhost/api/upload?workspaceId=ws-1", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "blob.generate-client-token", payload }),
+      }),
+    );
+  const signWith = (pathname: string, size = 2 * MB) => {
+    handleUploadMock.mockImplementation(
+      async (opts: { body: { payload: { pathname: string; clientPayload: string | null } }; onBeforeGenerateToken: (p: string, c: string | null) => Promise<unknown> }) => {
+        await opts.onBeforeGenerateToken(opts.body.payload.pathname, opts.body.payload.clientPayload);
+        return { type: "blob.generate-client-token", clientToken: "tok" };
+      },
+    );
+    return tokenFor({ pathname, clientPayload: JSON.stringify({ size }), multipart: false });
+  };
+
+  it("has no file name for a signed-in upload, only <ms>-<random>", async () => {
+    const info = vi.spyOn(logger, "info").mockImplementation(() => {});
+    const res = await signWith("1731600000000-ab12cd34-Maria_Lopez_passport.jpg");
+
+    expect(res.status).toBe(200);
+    const logged = JSON.stringify(info.mock.calls);
+    expect(logged).not.toMatch(/passport|Maria|Lopez/);
+    expect(logged).toContain('"1731600000000-ab12cd34"');
+  });
+
+  it("has no file name for a cover either", async () => {
+    const info = vi.spyOn(logger, "info").mockImplementation(() => {});
+    const res = await signWith("covers/ws-1/1731600000000-ab12cd34-Smith_family.jpg", 300_000);
+
+    expect(res.status).toBe(200);
+    const logged = JSON.stringify(info.mock.calls);
+    expect(logged).not.toMatch(/Smith|family/);
+    expect(logged).toContain('"covers/ws-1/1731600000000-ab12cd34"');
+  });
+
+  it("has no onUploadCompleted log, which would carry the stored file's address", async () => {
+    let options: { onUploadCompleted?: unknown } = {};
+    handleUploadMock.mockImplementation(async (opts: { onUploadCompleted?: unknown }) => {
+      options = opts;
+      return { type: "blob.generate-client-token", clientToken: "tok" };
+    });
+    await tokenFor({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false });
+    expect(options.onUploadCompleted).toBeUndefined();
   });
 });

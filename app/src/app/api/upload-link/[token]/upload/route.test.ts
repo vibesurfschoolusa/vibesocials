@@ -38,6 +38,8 @@ import {
 
 import { uploadLimitText } from "@/app/u/[token]/send-file";
 
+import { logger } from "@/lib/logger";
+
 import { POST } from "./route";
 
 const TOKEN = "T".repeat(43);
@@ -415,5 +417,19 @@ describe("a request refused after it counted", () => {
   it("gives back nothing for a token it signed", async () => {
     await call(tokenRequest());
     expect(releaseMock).not.toHaveBeenCalled();
+  });
+});
+
+// R69 client-journey L1: the signed key ends in the client's file name, so the
+// token log keeps only ul/<link>/<16 hex>, enough to find the file.
+describe("the token log", () => {
+  it("has no file name, only the link's folder and the key's random part", async () => {
+    const info = vi.spyOn(logger, "info").mockImplementation(() => {});
+    const res = await call(tokenRequest({ pathname: "Maria_Gonzalez_passport.jpg" }));
+
+    expect(res.status).toBe(200);
+    const logged = JSON.stringify(info.mock.calls);
+    expect(logged).not.toMatch(/passport|Maria|Gonzalez/);
+    expect(logged).toMatch(/ul\/link-1\/[0-9a-f]{16}"/);
   });
 });
