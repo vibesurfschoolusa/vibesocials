@@ -48,8 +48,22 @@ const SIGNED_IN = { status: "authenticated", data: { user: { name: "Jane Doe", e
 const ENDED = { status: "authenticated", data: { expires: "1970-01-01T00:00:00.000Z" } };
 const UNAUTHENTICATED = { status: "unauthenticated", data: null };
 
+const NAMES_JANE = { status: 200, body: { user: { name: "Jane Doe", email: "jane@example.com" } } };
+
 let root: Root;
 let container: FakeNode;
+/** Storage events this tab dispatched to itself (rereadSessionHere), and the window's "online" listeners. */
+let rereads: Array<{ type: string; key: string | null }>;
+let onlineListeners: Set<() => void>;
+
+class FakeStorageEvent {
+  type: string;
+  key: string | null;
+  constructor(type: string, init: { key?: string }) {
+    this.type = type;
+    this.key = init.key ?? null;
+  }
+}
 
 // GET /api/auth/session: the refresh waits for the server to say nobody (FF1
 // review: a failed next-auth fetch also reads "unauthenticated").
@@ -81,7 +95,22 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const made = makeDocument();
   container = made.container;
-  vi.stubGlobal("window", made.doc.defaultView);
+  const win = made.doc.defaultView as Record<string, unknown>;
+  rereads = [];
+  onlineListeners = new Set();
+  win.addEventListener = (type: string, listener: () => void) => {
+    if (type === "online") onlineListeners.add(listener);
+  };
+  win.removeEventListener = (type: string, listener: () => void) => {
+    if (type === "online") onlineListeners.delete(listener);
+  };
+  win.dispatchEvent = (event: { type: string; key: string | null }) => {
+    rereads.push(event);
+    return true;
+  };
+  vi.stubGlobal("StorageEvent", FakeStorageEvent);
+  vi.stubGlobal("window", win);
+  vi.stubGlobal("document", made.doc);
   serverReply = { status: 200, body: { expires: "1970-01-01T00:00:00.000Z" } };
   sessionFetch.mockClear();
   vi.stubGlobal("fetch", sessionFetch);
@@ -119,7 +148,6 @@ describe("Dashboard on / when the session turns to nobody", () => {
   for (const [label, reply] of [
     ["offline", "offline"],
     ["a 500", { status: 500, body: {} }],
-    ["a 200 naming the person", { status: 200, body: { user: { name: "Jane Doe", email: "jane@example.com" } } }],
   ] as const) {
     it(`the server read answers ${label}: no refresh, nobody signed out`, async () => {
       serverReply = reply as ServerReply;
@@ -130,6 +158,57 @@ describe("Dashboard on / when the session turns to nobody", () => {
       expect(signOut).not.toHaveBeenCalled();
     });
   }
+
+  // R69 new-customer-2 L1: next-auth never re-reads a null session on focus,
+  // so the dashboard waited on its spinner until a manual reload.
+  it("the server read names the person: the session is re-read once, and the dashboard comes back; no refresh", async () => {
+    serverReply = NAMES_JANE;
+    await show(SIGNED_IN);
+    await show(UNAUTHENTICATED);
+    expect(rereads).toHaveLength(1);
+    expect(rereads[0]).toMatchObject({ type: "storage", key: "nextauth.message" });
+    expect(html(container)).toContain("Loading your dashboard");
+    // next-auth's receiver re-reads the session, which names the person again.
+    await show(SIGNED_IN);
+    expect(html(container)).toContain('<main id="main-content"');
+    expect(refresh).not.toHaveBeenCalled();
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it("offline, then the online event, then the server names the person: the dashboard comes back", async () => {
+    serverReply = "offline";
+    await show(SIGNED_IN);
+    await show(UNAUTHENTICATED);
+    expect(rereads).toEqual([]);
+    serverReply = NAMES_JANE;
+    await act(async () => {
+      for (const listener of [...onlineListeners]) listener();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(sessionFetch).toHaveBeenCalledTimes(2);
+    expect(rereads).toHaveLength(1);
+    await show(SIGNED_IN);
+    expect(html(container)).toContain('<main id="main-content"');
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("offline, then the online event, then the server says nobody: one refresh, as now", async () => {
+    serverReply = "offline";
+    await show(SIGNED_IN);
+    await show(UNAUTHENTICATED);
+    serverReply = { status: 200, body: { expires: "1970-01-01T00:00:00.000Z" } };
+    await act(async () => {
+      for (const listener of [...onlineListeners]) listener();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(rereads).toEqual([]);
+    expect(signOut).not.toHaveBeenCalled();
+  });
 
   it("a signed-in session never refreshes", async () => {
     await show(SIGNED_IN);

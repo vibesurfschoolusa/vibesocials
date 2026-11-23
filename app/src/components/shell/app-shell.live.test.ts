@@ -32,7 +32,13 @@ vi.mock("./sidebar", async () => {
 });
 vi.mock("./top-bar", async () => {
   const { createElement: h } = await import("react");
-  return { TopBar: () => h("header", null, "TOPBAR") };
+  const { useSignedInAccount } = await import("@/components/signed-in-swap");
+  // R69 new-customer-2 L1: the account menu is drawn for the account the session names.
+  function TopBar() {
+    const account = useSignedInAccount();
+    return h("header", null, "TOPBAR", account ? h("span", { "data-account-menu": "" }, account.name) : null);
+  }
+  return { TopBar };
 });
 vi.mock("./mobile-drawer", () => ({ MobileDrawer: () => null }));
 vi.mock("./time-zone-sync", () => ({ TimeZoneSync: () => null }));
@@ -104,6 +110,17 @@ let visibility: "visible" | "hidden" = "visible";
 let visibilityListeners: Set<() => void>;
 /** Storage events this tab dispatched to itself (rereadSessionHere). */
 let selfEvents: Array<{ type: string; key: string | null }>;
+/** The window's "online" listeners. */
+let onlineListeners: Set<() => void>;
+
+async function comeOnline() {
+  await act(async () => {
+    for (const listener of [...onlineListeners]) listener();
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
 
 async function becomeVisible(state: "visible" | "hidden" = "visible") {
   visibility = state;
@@ -131,12 +148,19 @@ beforeEach(() => {
   visibility = "visible";
   visibilityListeners = new Set();
   selfEvents = [];
+  onlineListeners = new Set();
   Object.defineProperty(made.doc, "visibilityState", { get: () => visibility, configurable: true });
   made.doc.addEventListener = (type: string, listener: () => void) => {
     if (type === "visibilitychange") visibilityListeners.add(listener);
   };
   made.doc.removeEventListener = (type: string, listener: () => void) => {
     if (type === "visibilitychange") visibilityListeners.delete(listener);
+  };
+  fakeWindow.addEventListener = (type: string, listener: () => void) => {
+    if (type === "online") onlineListeners.add(listener);
+  };
+  fakeWindow.removeEventListener = (type: string, listener: () => void) => {
+    if (type === "online") onlineListeners.delete(listener);
   };
   fakeWindow.dispatchEvent = (event: { type: string; key: string | null }) => {
     selfEvents.push(event);
@@ -239,7 +263,66 @@ describe("AppShell: the session turns to nobody on an open app page", () => {
     expect(html(container)).toContain("You were signed out");
   });
 
-  it("an unknown read, then a later session change (focus, another tab): read again", async () => {
+  // R69 new-customer-2 L1: next-auth never re-reads a null session on focus,
+  // so an unknown read is asked again when the tab is back online or shown.
+  it("an unknown read, then the online event, then the server names the person: the session is re-read and the account menu comes back", async () => {
+    serverReply = "offline";
+    await show(SIGNED_IN);
+    await act(async () => setCaption("kept offline"));
+    await show(UNAUTHENTICATED);
+    expect(html(container)).not.toContain("data-account-menu");
+    expect(selfEvents).toEqual([]);
+
+    serverReply = { status: 200, body: { user: OWNER } };
+    await comeOnline();
+    expect(sessionFetch).toHaveBeenCalledTimes(2);
+    expect(selfEvents).toHaveLength(1);
+    expect(selfEvents[0]).toMatchObject({ type: "storage", key: "nextauth.message" });
+
+    // next-auth's receiver re-reads the session, which names the person again.
+    await show(SIGNED_IN);
+    const markup = html(container);
+    expect(mounts).toBe(1);
+    expect(markup).toContain('data-caption="kept offline"');
+    expect(markup).toContain('<span data-account-menu="">Owner</span>');
+    expect(markup).not.toContain("You were signed out");
+    expect(onlineListeners.size).toBe(0);
+    expect(visibilityListeners.size).toBe(0);
+  });
+
+  it("an unknown read, then the tab is shown again, then the server names the person: re-read once; hidden asks nothing", async () => {
+    serverReply = { status: 500, body: {} };
+    await show(SIGNED_IN);
+    await show(UNAUTHENTICATED);
+    serverReply = { status: 200, body: { user: OWNER } };
+    await becomeVisible("hidden");
+    expect(sessionFetch).toHaveBeenCalledTimes(1);
+    await becomeVisible("visible");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(sessionFetch).toHaveBeenCalledTimes(2);
+    expect(selfEvents).toHaveLength(1);
+    await show(SIGNED_IN);
+    expect(html(container)).toContain("data-account-menu");
+  });
+
+  it("an unknown read, then the online event, then the server says nobody: the line shows, as now, and nothing is re-read", async () => {
+    serverReply = "offline";
+    await show(SIGNED_IN);
+    await show(UNAUTHENTICATED);
+    expect(html(container)).not.toContain("You were signed out");
+    serverReply = NOBODY_REPLY;
+    await comeOnline();
+    expect(sessionFetch).toHaveBeenCalledTimes(2);
+    expect(html(container).match(/You were signed out/g)).toHaveLength(1);
+    expect(selfEvents).toEqual([]);
+    // Known: no more asking on online.
+    await comeOnline();
+    expect(sessionFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("an unknown read, then a later session change (another tab's broadcast): read again", async () => {
     serverReply = "offline";
     await show(SIGNED_IN);
     await show(UNAUTHENTICATED);
@@ -248,6 +331,42 @@ describe("AppShell: the session turns to nobody on an open app page", () => {
     await show({ ...ENDED });
     expect(sessionFetch).toHaveBeenCalledTimes(2);
     expect(html(container)).toContain("You were signed out");
+  });
+
+  it("a null session and the server names the person: the session is re-read once, and the account menu comes back", async () => {
+    serverReply = { status: 200, body: { user: OWNER } };
+    await show(SIGNED_IN);
+    await show(UNAUTHENTICATED);
+    expect(selfEvents).toHaveLength(1);
+    expect(selfEvents[0]).toMatchObject({ type: "storage", key: "nextauth.message" });
+    await show(SIGNED_IN);
+    expect(html(container)).toContain('<span data-account-menu="">Owner</span>');
+    expect(html(container)).not.toContain("You were signed out");
+  });
+
+  it("the re-read fails too: no loop; a new null session asks the server again but does not re-read again", async () => {
+    serverReply = { status: 200, body: { user: OWNER } };
+    await show(SIGNED_IN);
+    await show(UNAUTHENTICATED);
+    expect(selfEvents).toHaveLength(1);
+    // next-auth's re-read failed: the same null session, so nothing changes.
+    await show(UNAUTHENTICATED);
+    for (let i = 0; i < 5; i += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    expect(sessionFetch).toHaveBeenCalledTimes(1);
+    expect(selfEvents).toHaveLength(1);
+    // A new null session (another tab's broadcast): asked again, no second re-read.
+    await show({ ...UNAUTHENTICATED });
+    expect(sessionFetch).toHaveBeenCalledTimes(2);
+    expect(selfEvents).toHaveLength(1);
+    expect(html(container)).not.toContain("You were signed out");
+    // The next return online may re-read once more.
+    await comeOnline();
+    expect(sessionFetch).toHaveBeenCalledTimes(3);
+    expect(selfEvents).toHaveLength(2);
   });
 
   it("a normal signed-in session shows no signed-out line", async () => {
