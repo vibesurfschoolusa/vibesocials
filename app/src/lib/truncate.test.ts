@@ -481,12 +481,21 @@ describe("truncateUtf16AtWord on a huge text", () => {
   it.each([
     ["words", "Glassy waves at dawn ".repeat(200_000)],
     ["emoji", "\u{1F468}‍\u{1F469}‍\u{1F467}\u{1F30A}".repeat(400_000)],
-  ])("4 MB of %s: under 50 ms, and the same cut as before", (_name, text) => {
+  ])("4 MB of %s: far faster than the whole-text split, well within a generous budget, and the same cut", (_name, text) => {
     expect(text.length).toBeGreaterThanOrEqual(4_000_000);
     const started = performance.now();
     const result = truncateUtf16AtWord(text, 1000);
-    expect(performance.now() - started).toBeLessThan(50);
-    expect(result).toBe(oldTruncateUtf16AtWord(text, 1000));
+    const took = performance.now() - started;
+    const oldStarted = performance.now();
+    const oldResult = oldTruncateUtf16AtWord(text, 1000);
+    const oldTook = performance.now() - oldStarted;
+    // R69 publishing-flow: a fixed 50 ms failed at 76 ms under the full suite's
+    // load. Alone the cut takes 6-9 ms and the old whole-text split about
+    // 200-600 ms, so both checks are far from either: a cut that splits the
+    // whole text again is caught by the first, a quadratic one by both.
+    expect(took).toBeLessThan(oldTook / 4);
+    expect(took).toBeLessThan(1_000);
+    expect(result).toBe(oldResult);
   }, 10_000);
 
   it("20,000 random inputs: the same result as the old function", () => {
