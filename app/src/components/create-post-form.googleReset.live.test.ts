@@ -28,6 +28,8 @@ vi.mock("@/hooks/useConnections", async (importOriginal) => ({
 }));
 /** A file named "slowfail" fails to prepare when the test lets it go. */
 const prepareFail: (() => void)[] = [];
+/** A file named "slowpick" prepares when the test lets it go, so the page renders while it prepares. */
+const prepareDone: (() => void)[] = [];
 const PREPARE_FAILED = "This photo could not be read. Check your connection and add it again.";
 vi.mock("@/lib/prepareUploadFile", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/lib/prepareUploadFile")>();
@@ -38,7 +40,9 @@ vi.mock("@/lib/prepareUploadFile", async (importOriginal) => {
         ? new Promise<File>((_resolve, reject) =>
             prepareFail.push(() => reject(new real.PrepareFileError("network", PREPARE_FAILED))),
           )
-        : Promise.resolve(file),
+        : file.name.includes("slowpick")
+          ? new Promise<File>((resolve) => prepareDone.push(() => resolve(file)))
+          : Promise.resolve(file),
   };
 });
 /** Every upload asked for: the key and its signal. Keys naming a `stall` entry never finish unless released. */
@@ -65,6 +69,8 @@ let container: FakeNode;
 let body: FakeNode;
 
 const posted: string[] = [];
+/** The body of every POST /api/posts, parsed. */
+const postedBodies: { googleMetadata?: unknown }[] = [];
 /** The next POST /api/posts answers; empty means 201. */
 let postAnswer: (() => Response) | null = null;
 const autoCaptionCalls: string[] = [];
@@ -72,6 +78,7 @@ const fetchMock = vi.fn((input: unknown, init?: { method?: string }) => {
   const url = String(input);
   if (url === "/api/posts" && init?.method === "POST") {
     posted.push(url);
+    postedBodies.push(JSON.parse(String((init as { body?: string }).body ?? "{}")));
     const answer = postAnswer ?? (() => Response.json({ postJob: { id: "job-1" } }, { status: 201 }));
     return Promise.resolve(answer());
   }
@@ -167,9 +174,11 @@ beforeEach(async () => {
   stall.clear();
   release.clear();
   posted.length = 0;
+  postedBodies.length = 0;
   postAnswer = null;
   autoCaptionCalls.length = 0;
   prepareFail.length = 0;
+  prepareDone.length = 0;
   root = createRoot(container as unknown as HTMLElement);
   await mount();
 });
@@ -235,16 +244,14 @@ async function scheduleWithGoogle() {
 }
 
 describe("Create: the Google box is fresh after a sent post (R67 item 8 review)", () => {
-  it("post 1 with an Event then an Offer, sent: post 2's Event fields are empty, in a new box", async () => {
+  it("post 1 with an Event then an Offer, sent: post 2's Event fields are empty", async () => {
     await scheduleWithGoogle();
-    const before = googlePanel();
     await typeEvent();
     await typeOffer();
     await send();
     expect(posted).toHaveLength(1);
     expect(pageSays(UNEXPECTED)).toBe(false);
 
-    expect(googlePanel()).not.toBe(before);
     await chooseType("event");
     expect(fieldValue("google-event-title")).toBe("");
     expect(fieldValue("google-event-start-date")).toBe("");
@@ -263,17 +270,92 @@ describe("Create: the Google box is fresh after a sent post (R67 item 8 review)"
     expect(posted).toHaveLength(0);
   }, 15_000);
 
-  it("a failed send: nothing is forgotten, and the box is the same", async () => {
+  it("a failed send: nothing is forgotten", async () => {
     postAnswer = REFUSED;
     await scheduleWithGoogle();
-    const before = googlePanel();
+    await typeEvent();
     await typeOffer();
     await send();
     expect(posted).toHaveLength(1);
 
-    expect(googlePanel()).toBe(before);
     expect(fieldValue("google-post-type")).toBe("offer");
     expect(fieldValue("google-offer-title")).toBe("Two lessons for one");
     expect(fieldValue("google-offer-end-date")).toBe("2030-06-30");
+    await chooseType("event");
+    expect(fieldValue("google-event-title")).toBe("Full moon paddle");
+  }, 15_000);
+});
+
+const pick = (...files: File[]) => run(() => props(byId("post-media")).onChange({ target: { files } }));
+/** A pick that renders while it prepares (the Google box leaves the page meanwhile), then finishes. */
+async function slowPick(file: File) {
+  await pick(file);
+  expect(find(container, (n) => n.attributes?.id === "google-post-box-settings")).toBeNull();
+  await run(() => prepareDone.shift()?.());
+}
+const photo = (name: string) => new File([name], `${name}.jpg`, { type: "image/jpeg" });
+const BOOK = { type: "BOOK", url: "https://e.com/book" };
+async function setBook() {
+  await setField("google-button-type", "BOOK");
+  await setField("google-button-url", BOOK.url);
+}
+
+/**
+ * R68 pages-b L1: the box leaves the page while a new pick prepares (no file
+ * type yet), so the memory of other types' details lives in Create, and a new
+ * file never wipes it.
+ */
+describe("Create: a new file pick keeps the remembered Google details (R68 pages-b L1)", () => {
+  it("Event typed on a photo, Offer, a new photo, then Event: the event's fields come back", async () => {
+    await scheduleWithGoogle();
+    await pick(photo("first1"));
+    await typeEvent();
+    await chooseType("offer");
+    await slowPick(photo("slowpick1"));
+    expect(fieldValue("google-post-type")).toBe("offer");
+    await chooseType("event");
+
+    expect(fieldValue("google-event-title")).toBe("Full moon paddle");
+    expect(fieldValue("google-event-start-date")).toBe("2030-06-01");
+    expect(fieldValue("google-event-end-date")).toBe("2030-06-02");
+  }, 15_000);
+
+  it("Update with a Book button, Offer, a new photo, then Update: the button comes back", async () => {
+    await scheduleWithGoogle();
+    await pick(photo("first2"));
+    await setBook();
+    await chooseType("offer");
+    await slowPick(photo("slowpick2"));
+    await setField("google-post-type", "update");
+
+    expect(fieldValue("google-button-type")).toBe("BOOK");
+    expect(fieldValue("google-button-url")).toBe(BOOK.url);
+  }, 15_000);
+
+  it("a text post with an event, switched to Update, gets its first photo, then Event: the fields come back", async () => {
+    await scheduleWithGoogle();
+    await typeEvent();
+    await setField("google-post-type", "update");
+    await slowPick(photo("slowpick3"));
+    await chooseType("event");
+
+    expect(fieldValue("google-event-title")).toBe("Full moon paddle");
+    expect(fieldValue("google-event-end-date")).toBe("2030-06-02");
+  }, 15_000);
+
+  it("after the new pick, the request sends only the chosen type's details", async () => {
+    await scheduleWithGoogle();
+    await pick(photo("first4"));
+    await typeEvent();
+    await typeOffer();
+    await slowPick(photo("slowpick4"));
+    await chooseType("event");
+    await submit();
+
+    expect(posted).toHaveLength(1);
+    expect(postedBodies[0].googleMetadata).toEqual({
+      postType: "event",
+      event: { title: "Full moon paddle", startDate: "2030-06-01", endDate: "2030-06-02" },
+    });
   }, 15_000);
 });
