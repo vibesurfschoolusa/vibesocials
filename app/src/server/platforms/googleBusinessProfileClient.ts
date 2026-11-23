@@ -5,6 +5,7 @@ import { GBP_ACCESS_REFUSED_TEXT, googleSetupRefusedMessage } from "@/lib/publis
 import { googleFailureKind, googlePublish403, isExpiredTokenRejection, withGoogleTokenRetry } from "@/server/googleFailure";
 import { prisma } from "@/lib/db";
 import { resolveGooglePostMetadata } from "@/lib/googlePostOptions";
+import { blobLogRef } from "@/lib/blobKey";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { trackedGoogleButtonUrl } from "@/lib/trackingTags";
@@ -154,7 +155,7 @@ export const googleBusinessProfileClient: PlatformClient = {
 
     console.log(isPhoto ? "[GBP] Creating post" : "[GBP] Adding video to the gallery", {
       locationName,
-      storageLocation: mediaItem.storageLocation,
+      storageLocation: blobLogRef(mediaItem.storageLocation),
       mimeType: mediaItem.mimeType,
     });
 

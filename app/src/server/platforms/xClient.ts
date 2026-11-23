@@ -6,6 +6,7 @@ import type { PlatformClient, PublishContext, PublishResult, TextPublishContext 
 import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
 import { extensionOf } from "@/lib/fileExtension";
+import { blobLogRef } from "@/lib/blobKey";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { STORAGE_READ_CODES, asStorageReadFailure, hasInternalDetail } from "@/lib/publishFailureText";
@@ -217,7 +218,7 @@ async function uploadMedia(
   mimeType: string,
   deadline: number | undefined,
 ): Promise<string> {
-  console.log("[X OAuth 1.0a] Starting media upload", { mediaUrl, mimeType });
+  console.log("[X OAuth 1.0a] Starting media upload", { mediaUrl: blobLogRef(mediaUrl), mimeType });
 
   // Download media from Vercel Blob.
   // fetchWithTimeout's own timeoutMs only bounds the connection + response

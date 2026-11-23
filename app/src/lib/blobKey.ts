@@ -6,6 +6,24 @@ export function generateBlobKey(file: File): string {
 }
 
 /**
+ * What a log may say about a stored file's address (R68 lead follow-up): the
+ * key ends in the customer's file name, so only the host and the key's
+ * "<ms>-<random>" part, which is enough to find the file.
+ */
+export function blobLogRef(url: unknown): string {
+  if (typeof url !== "string") return "(unparseable)";
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "(unparseable)";
+  }
+  const key = parsed.pathname.slice(1);
+  const lead = /^(\d{13}-[a-z0-9]{0,8})-/.exec(key);
+  return lead ? `${parsed.host}/${lead[1]}` : parsed.host;
+}
+
+/**
  * The shape generateBlobKey makes (the random part can come out short). POST
  * /api/upload signs no other root pathname, so every signed-in upload is a file
  * the orphan sweep (server/jobs/orphanBlobSweep.ts) recognises and can delete.

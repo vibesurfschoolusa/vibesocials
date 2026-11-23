@@ -144,6 +144,10 @@ const LOG_METHODS = new Set(["log", "info", "warn", "error", "debug"]);
 /** R68 review: what these return says nothing about who, whatever they are given. */
 const SAFE_READERS = new Set(["extensionOf", "loggedAuthor", "blobLogRef"]);
 
+function isSafeRead(node: ts.Node): boolean {
+  return ts.isCallExpression(node) && ts.isIdentifier(node.expression) && SAFE_READERS.has(node.expression.text);
+}
+
 function isLogCall(node: ts.CallExpression): boolean {
   const callee = node.expression;
   return (
@@ -169,11 +173,13 @@ export function loggedNames(source: string, fileName = "planted.ts"): string[] {
       // R68: a yes/no value says nothing about who under any key
       // (`refreshTokenRotated: data.refreshToken !== undefined`).
       if (isYesNo(node.initializer)) return;
+      // `mediaUrl: blobLogRef(mediaUrl)` logs what the reader returns, under any key.
+      if (isSafeRead(node.initializer)) return;
       if (saysWhoItIs(node.name.text)) record(node.name, node.name.text);
       inArgument(node.initializer);
       return;
     }
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && SAFE_READERS.has(node.expression.text)) return;
+    if (isSafeRead(node)) return;
     if (ts.isIdentifier(node)) {
       const parent = node.parent;
       // `tokenResponse.status` logs the status: a value whose field is read
@@ -385,7 +391,7 @@ describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
   it("passes a yes/no under any key and a field read in the middle of a chain (R68)", () => {
     expect(
       loggedNames(
-        'console.log("[TikTok] Refreshed", { refreshTokenRotated: data.refreshToken !== undefined, videoUrn: session.data.video, parts: current.data.partCount, tagCount: tags.length, captionLength: caption.length, fileExtension: extensionOf(mediaItem.originalFilename), titleLength: 3, postedAs: loggedAuthor(authorUrn), n: ctx.caption?.length, mediaRef: blobLogRef(mediaItem.storageLocation) });',
+        'console.log("[TikTok] Refreshed", { refreshTokenRotated: data.refreshToken !== undefined, videoUrn: session.data.video, parts: current.data.partCount, tagCount: tags.length, captionLength: caption.length, fileExtension: extensionOf(mediaItem.originalFilename), titleLength: 3, postedAs: loggedAuthor(authorUrn), n: ctx.caption?.length, mediaUrl: blobLogRef(mediaItem.storageLocation) });',
       ),
     ).toEqual([]);
   });

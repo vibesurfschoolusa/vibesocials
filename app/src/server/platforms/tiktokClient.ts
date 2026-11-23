@@ -2,6 +2,7 @@ import type { Prisma, SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { extensionOf } from "@/lib/fileExtension";
+import { blobLogRef } from "@/lib/blobKey";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { asStorageReadFailure } from "@/lib/publishFailureText";
@@ -1498,7 +1499,7 @@ export const tiktokClient: PlatformClient = {
       mimeType: mediaItem.mimeType,
       sizeBytes: mediaItem.sizeBytes,
       fileExtension: extensionOf(mediaItem.originalFilename ?? ""),
-      storageLocation: mediaItem.storageLocation,
+      storageLocation: blobLogRef(mediaItem.storageLocation),
     });
 
     if (!mediaItem.mimeType || !mediaItem.mimeType.startsWith("video/")) {

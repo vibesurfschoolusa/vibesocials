@@ -5,6 +5,7 @@ import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
 import { mediaKindOf, photoSetFormatsReason, PLATFORM_CAPTION_LIMITS, unsupportedMediaReason } from "@/lib/platformLimits";
 import { extensionOf } from "@/lib/fileExtension";
+import { blobLogRef } from "@/lib/blobKey";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { asStorageReadFailure } from "@/lib/publishFailureText";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders, toLinkedInLittleText } from "@/lib/linkedinApi";
@@ -421,7 +422,7 @@ async function uploadImage(
   connection: TokenSnapshot,
   deadline?: number,
 ): Promise<string> {
-  console.log("[LinkedIn] Starting image upload", { imageUrl });
+  console.log("[LinkedIn] Starting image upload", { imageUrl: blobLogRef(imageUrl) });
 
   // Step 1: Initialize the image upload (Images API). The answer is
   // { value: { uploadUrlExpiresAt, uploadUrl, image } }.
@@ -619,7 +620,7 @@ async function uploadVideo(
   deadline?: number,
   cover?: PostCover,
 ): Promise<{ video: string; coverNote?: string }> {
-  console.log("[LinkedIn] Starting video upload", { videoUrl, fileExtension: extensionOf(filename) });
+  console.log("[LinkedIn] Starting video upload", { videoUrl: blobLogRef(videoUrl), fileExtension: extensionOf(filename) });
 
   // V1: the cover image first, so the upload asks for a thumbnail only when there is one to send.
   let coverNote: string | undefined;
@@ -2008,7 +2009,7 @@ export const linkedinClient: PlatformClient = {
     const isVideo = mediaItem.mimeType.startsWith("video/");
 
     console.log("[LinkedIn] Starting media upload", {
-      mediaUrl,
+      mediaUrl: blobLogRef(mediaUrl),
       mimeType: mediaItem.mimeType,
       isVideo,
       sizeBytes: mediaItem.sizeBytes,

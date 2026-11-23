@@ -333,7 +333,7 @@ async function completedUpload(response: Response): Promise<PublishResult> {
 
   console.log("[YouTube] Video uploaded successfully", {
     videoId,
-    videoUrl: `https://www.youtube.com/watch?v=${videoId}`,
+    watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
     hasTitle: !!result?.snippet?.title,
   });
 

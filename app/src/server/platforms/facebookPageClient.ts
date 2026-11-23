@@ -2,6 +2,7 @@ import type { PlatformClient, PublishContext, PublishResult, TextPublishContext 
 import type { SocialConnection } from "@prisma/client";
 
 import { altTextOf } from "@/lib/altText";
+import { blobLogRef } from "@/lib/blobKey";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { MAX_POST_MEDIA, MULTI_PHOTO_MIME_TYPES } from "@/lib/postMedia";
 import { connectionTokenChangedError, flagRejectedToken } from "./connectionHealth";
@@ -533,7 +534,7 @@ export const facebookPageClient: PlatformClient = {
 
     console.log(`[FacebookPage] Starting ${what} publish`, {
       pageId,
-      storageLocation: mediaItem.storageLocation,
+      storageLocation: blobLogRef(mediaItem.storageLocation),
       captionLength: caption?.length ?? 0,
     });
 
