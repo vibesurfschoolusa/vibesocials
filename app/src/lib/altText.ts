@@ -51,8 +51,8 @@ export function fitAltText(text: string, max: number): string {
  */
 export function cleanAltText(raw: unknown): string {
   if (typeof raw !== "string") return "";
-  // R69: a backstop for the routes' refusal; nothing past the cap is ever kept
-  // (the result is at most ALT_TEXT_MAX), so it is not read.
+  // R69: a backstop for the routes' refusal, so no caller pays to clean more
+  // than the cap; text up to the cap is cleaned exactly as before.
   const bounded = isOverlongAltText(raw) ? truncateUtf16AtWord(raw, ALT_TEXT_INPUT_MAX) : raw;
   const cleaned = bounded.replace(LINE_BREAKS, " ").replace(CONTROL_CHARACTERS, "").trim();
   return fitAltText(cleaned, ALT_TEXT_MAX);
