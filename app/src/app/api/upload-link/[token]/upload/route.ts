@@ -166,7 +166,10 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
           throw new Error("Upload path outside the link's prefix");
         }
         // R69: the key ends in the client's file name, so only ul/<link>/<16 hex> is logged.
-        logger.info("[upload-link] Generating token", { key: signedPathname.slice(0, prefix.length + 16), linkId: link.id });
+        logger.info("[upload-link] Generating token", {
+          key: signedPathname.match(/^ul\/[^/]+\/[0-9a-f]{16}/)?.[0],
+          linkId: link.id,
+        });
         return {
           allowedContentTypes: [contentType],
           maximumSizeInBytes: size,
