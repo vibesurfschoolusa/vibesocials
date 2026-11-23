@@ -18,7 +18,7 @@ import { describe, expect, it } from "vitest";
  */
 
 const APP_SRC = fileURLToPath(new URL("../../../", import.meta.url));
-/** R69: the whole scan, measured at about MEASURED ms alone; ten times that and more. */
+/** R69: the whole scan took 0.67-0.85 s alone (2026-11-22); this is over 20 times that. */
 const SCAN_BUDGET_MS = 20_000;
 
 /** Words that, in a variable or property name, say it holds who the account is. */

@@ -37,7 +37,6 @@ export async function saveUploadedFile(
   const sizeBytes = file.size;
   
   console.log('[Blob Storage] Upload details:', {
-    originalFilename,
     browserFileType: file.type,
     detectedMimeType,
     sizeBytes

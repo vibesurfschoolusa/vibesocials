@@ -229,7 +229,11 @@ export async function POST(request: Request): Promise<NextResponse> {
         if (!declared.ok || declared.size !== countedBytes) {
           throw new Error(declared.ok ? "The upload's size changed while it was signed." : declared.error);
         }
-        logger.info("[Upload] Generating token", { pathname, userId: user.id });
+        // R69: the key ends in the file's name, so only <ms>-<random> (and a cover's folder) is logged.
+        logger.info("[Upload] Generating token", {
+          key: pathname.match(/^(?:covers\/[^/]+\/)?\d{13}-[a-z0-9]{0,8}/)?.[0],
+          userId: user.id,
+        });
 
         return {
           allowedContentTypes: coverToken ? [...COVER_IMAGE_TYPES] : [...UPLOAD_ALLOWED_CONTENT_TYPES],
@@ -242,9 +246,6 @@ export async function POST(request: Request): Promise<NextResponse> {
             uploadedAt: new Date().toISOString(),
           }),
         };
-      },
-      onUploadCompleted: async ({ blob }) => {
-        logger.info("[Upload] Upload completed", { url: blob.url });
       },
     });
 

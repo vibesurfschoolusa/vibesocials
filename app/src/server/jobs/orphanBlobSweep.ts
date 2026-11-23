@@ -1,5 +1,6 @@
 import { del as blobDel, list as blobList } from "@vercel/blob";
 
+import { blobLogRef } from "@/lib/blobKey";
 import { guardBlobKey } from "@/lib/blobUrl";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
@@ -233,7 +234,7 @@ export async function sweepOrphanBlobs(
           result.failed += 1;
           logger.warn("[orphanBlobSweep] Couldn't delete an unregistered upload (tried again tomorrow)", {
             error,
-            pathname: blob.pathname,
+            file: blobLogRef(blob.url),
           });
         }
       }
