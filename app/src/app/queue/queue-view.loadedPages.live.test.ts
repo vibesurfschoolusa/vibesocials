@@ -157,7 +157,7 @@ const labelled = (prefix: string) => buttons((n) => String(n.attributes?.["aria-
 const text = () => String(container.textContent);
 const loadMoreButton = () => buttons((n) => String(n.textContent).includes("Load more"))[0];
 /** The posts on the page, by caption: cards in the list, chips in the calendar. */
-const shown = () => [1, 2, 3, 4, 5, 6].filter((n) => text().includes(`Post ${n}`));
+const shown = () => [1, 2, 3, 4, 5, 6, 7, 8].filter((n) => text().includes(`Post ${n}`));
 
 async function mount() {
   await act(async () => {
