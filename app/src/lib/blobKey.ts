@@ -19,7 +19,12 @@ export function blobLogRef(url: unknown): string {
     return "(unparseable)";
   }
   const key = parsed.pathname.slice(1);
-  const lead = /^(\d{13}-[a-z0-9]{0,8})-/.exec(key);
+  // R68 second look: a client upload-link file and a cover keep their folder and
+  // their own random part too, so a failed publish can be traced; logos do not.
+  const lead =
+    /^(\d{13}-[a-z0-9]{0,8})-/.exec(key) ??
+    /^(ul\/[A-Za-z0-9_-]+\/[0-9a-f]{16})-/.exec(key) ??
+    /^(covers\/[A-Za-z0-9_-]+\/\d{13}-[a-z0-9]{0,8})-/.exec(key);
   return lead ? `${parsed.host}/${lead[1]}` : parsed.host;
 }
 
