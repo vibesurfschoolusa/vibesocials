@@ -271,24 +271,44 @@ function linkOf(text: string): TextLink {
   };
 }
 
+export interface TextUnitsOptions {
+  /**
+   * R68 platform-clients L2: a link ends at the next grapheme boundary, so the
+   * marks after its last letter ("vibesurf.com/1" + a keycap's U+FE0F U+20E3, or
+   * "cafe" + U+0301) go with it, and the pieces' grapheme counts add up to the
+   * text's. LinkedIn's cut asks for this, so it counts as its grapheme counter
+   * does. X's count does not: twitter-text weighs those marks apart from the link.
+   */
+  wholeGraphemes?: boolean;
+}
+
 /**
  * Split `text` into the pieces a cut may not split (fix round 1, M4/M5):
  * extended grapheme clusters, and links (`https://…`, `www.example.com`,
  * `example.com/path`) as one piece each. Joined back, the pieces are `text`.
  */
-export function textUnits(text: string): TextUnit[] {
+export function textUnits(text: string, opts?: TextUnitsOptions): TextUnit[] {
   const units: TextUnit[] = [];
   let at = 0;
   const pushGraphemes = (part: string) => {
     for (const grapheme of toGraphemes(part)) units.push({ text: grapheme, link: null });
   };
+  // One segmentation of the whole text, made only when a link needs it.
+  let segments: Intl.Segments | null = null;
   for (const match of text.matchAll(LINK)) {
-    const link = trimLinkTrailing(match[0]);
+    let link = trimLinkTrailing(match[0]);
     // A match trimmed down to a bare "a.b" with no letters left is not a link.
     if (!/\.[A-Za-z]{2,}/.test(link)) continue;
+    let end = match.index + link.length;
+    if (opts?.wholeGraphemes && end < text.length) {
+      segments ??= graphemeSegmenter.segment(text);
+      const last = segments.containing(end - 1);
+      if (last) end = last.index + last.segment.length;
+      link = text.slice(match.index, end);
+    }
     pushGraphemes(text.slice(at, match.index));
     units.push({ text: link, link: linkOf(link) });
-    at = match.index + link.length;
+    at = end;
   }
   pushGraphemes(text.slice(at));
   return units;
@@ -332,9 +352,11 @@ function cutUnits(
   weigh: (unit: TextUnit) => number,
   ellipsis: string,
   atWord: boolean,
+  wholeGraphemes = false,
 ): string {
-  const measure = (value: string) => textUnits(value).reduce((sum, unit) => sum + weigh(unit), 0);
-  const units = textUnits(text);
+  const split = (value: string) => textUnits(value, { wholeGraphemes });
+  const measure = (value: string) => split(value).reduce((sum, unit) => sum + weigh(unit), 0);
+  const units = split(text);
   if (units.reduce((sum, unit) => sum + weigh(unit), 0) <= max) return text;
 
   const kept: TextUnit[] = [];
@@ -373,15 +395,18 @@ function cutUnits(
   return measure(result) <= max ? result : "";
 }
 
+// A link weighs its graphemes, and every other piece is one grapheme.
+const graphemeWeight = (unit: TextUnit) => (unit.link ? graphemeCount(unit.text) : 1);
+
 /**
  * `truncateGraphemes` that never cuts inside a link: a link that does not fit
  * goes whole (review fix, LinkedIn). Text that fits comes back unchanged.
  */
 export function truncateKeepingLinks(text: string, maxGraphemes: number, ellipsis = ""): string {
-  return truncateUnits(text, maxGraphemes, (unit) => (unit.link ? graphemeCount(unit.text) : 1), ellipsis);
+  return cutUnits(text, maxGraphemes, graphemeWeight, ellipsis, false, true);
 }
 
 /** `truncateKeepingLinks` cut at the last whole word (R63 platform-clients L1, LinkedIn). */
 export function truncateKeepingLinksAtWord(text: string, maxGraphemes: number, ellipsis = ""): string {
-  return truncateUnitsAtWord(text, maxGraphemes, (unit) => (unit.link ? graphemeCount(unit.text) : 1), ellipsis);
+  return cutUnits(text, maxGraphemes, graphemeWeight, ellipsis, true, true);
 }

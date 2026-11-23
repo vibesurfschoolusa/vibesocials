@@ -13,6 +13,10 @@ import {
   truncateUnitsAtWord,
   truncateUtf16AtWord,
 } from "./truncate";
+import { buildCaptionWithFooter } from "./captionFooter";
+import { platformCaptionCounter } from "./platformOverrides";
+import { PLATFORM_CAPTION_LIMITS } from "./platformLimits";
+import { buildPlatformPreview } from "./platformPreview";
 
 // Grapheme count via the same primitive the implementation uses, so assertions
 // about "<= max graphemes" are measured the way the helper measures.
@@ -370,5 +374,74 @@ describe("truncateGraphemesWithinCodePoints", () => {
 
   it("a bound of 0 or less gives an empty string", () => {
     expect(truncateGraphemesWithinCodePoints("abc", 0)).toBe("");
+  });
+});
+
+// R68 platform-clients L2: the link pattern can end a link inside a grapheme
+// ("vibesurf.com/1" + the keycap's U+FE0F U+20E3, or "cafe" + U+0301). The
+// marks then became a piece of their own, so LinkedIn's cut counted one more
+// than its grapheme counter, and a caption the counter said fits was cut.
+describe("LinkedIn: a link that ends inside a grapheme", () => {
+  const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS.linkedin;
+  const limit = charLimit ?? 0;
+  const cut = (text: string) => truncateKeepingLinksAtWord(text, limit, ellipsis);
+  const keycap = "Steps at vibesurf.com/1️⃣";
+  const cafe = "Steps at vibesurf.com/café";
+
+  it.each([
+    ["a keycap", keycap],
+    ["a decomposed café", cafe],
+  ])("3,000 graphemes ending in %s: the counter and the cut agree", (_name, tail) => {
+    const pad = "wave ".repeat(Math.floor((limit - countGraphemes(tail)) / 5));
+    const text = `${pad}${"a".repeat(limit - countGraphemes(tail) - pad.length)}${tail}`;
+    expect(countGraphemes(text)).toBe(limit);
+    const counter = platformCaptionCounter(text, "linkedin", null);
+    const preview = buildPlatformPreview({ platform: "linkedin", caption: text });
+    expect(counter.over).toBe(false);
+    expect(cut(text)).toBe(text);
+    expect(preview.rendered).toBe(text);
+    expect(preview.truncated).toBe(preview.willTruncate);
+    // One more grapheme: both say over, and the cut still fits.
+    const over = `b${text}`;
+    expect(platformCaptionCounter(over, "linkedin", null).over).toBe(true);
+    expect(cut(over)).not.toBe(over);
+    expect(countGraphemes(cut(over))).toBeLessThanOrEqual(limit);
+  });
+
+  it("the footer rule agrees: a footer kept at exactly 3,000 graphemes is not cut", () => {
+    const user = { companyWebsite: "vibesurfschool.com" };
+    const footer = "For more info visit vibesurfschool.com";
+    const baseLength = limit - countGraphemes(`\n\n${footer}`);
+    const pad = "wave ".repeat(Math.floor((baseLength - countGraphemes(keycap)) / 5));
+    const base = `${pad}${"a".repeat(baseLength - countGraphemes(keycap) - pad.length)}${keycap}`;
+    const full = buildCaptionWithFooter(base, user, "linkedin");
+    expect(full).toBe(`${base}\n\n${footer}`);
+    expect(countGraphemes(full)).toBe(limit);
+    expect(cut(full)).toBe(full);
+  });
+
+  it("the pieces' weights add up to the text's graphemes", () => {
+    for (const text of [keycap, cafe, `${keycap} and ${cafe}`, "x.co/á́̂ ok", "a.io/\u{1F44D}\u{1F3FB}"]) {
+      const units = textUnits(text, { wholeGraphemes: true });
+      expect(units.map((unit) => unit.text).join("")).toBe(text);
+      expect(units.reduce((sum, unit) => sum + countGraphemes(unit.text), 0)).toBe(countGraphemes(text));
+      expect(units.every((unit) => unit.link !== null || countGraphemes(unit.text) === 1)).toBe(true);
+    }
+    expect(textUnits(keycap, { wholeGraphemes: true }).at(-1)).toMatchObject({ text: "vibesurf.com/1️⃣" });
+  });
+
+  it("plain links: as now", () => {
+    const text = "Book at https://vibesurf.com/book?x=1. Or www.surf.co, then a.io/p ok";
+    const before = textUnits(text);
+    expect(textUnits(text, { wholeGraphemes: true })).toEqual(before);
+    expect(before.filter((unit) => unit.link).map((unit) => unit.text)).toEqual([
+      "https://vibesurf.com/book?x=1",
+      "www.surf.co",
+      "a.io/p",
+    ]);
+    // X keeps its own split: the keycap's marks stay a piece, as twitter-text counts them.
+    expect(textUnits(keycap).map((unit) => unit.text).slice(-2)).toEqual(["vibesurf.com/1", "️⃣"]);
+    const long = `${"wave ".repeat(598)}see vibesurf.com/book now`;
+    expect(cut(long)).toBe(`${"wave ".repeat(598)}see...`);
   });
 });
