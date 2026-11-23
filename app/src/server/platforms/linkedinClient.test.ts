@@ -1159,6 +1159,23 @@ describe("linkedinClient — Posts, Images and Videos APIs", () => {
     for (const level of ["log", "warn", "error"] as const) vi.spyOn(console, level).mockImplementation(() => {});
   });
 
+  // R68 platform-clients L1: the organization a client posts as is often their
+  // own business name; the publish log says only how many there are.
+  it("the publish log names neither the organization nor its id", async () => {
+    stub();
+    const connection = makeConnection({
+      id: "conn-li",
+      expiresAt: new Date(Date.now() + 3_600_000),
+      metadata: { organizations: [{ id: "org-90817", name: "Kai Surf School" }] },
+    });
+
+    await linkedinClient.publishVideo({ ...ctx("image/jpeg"), socialConnection: connection } as PublishContext);
+
+    expect(everythingLogged()).not.toContain("Kai Surf School");
+    expect(everythingLogged()).not.toContain("org-90817");
+    expect(everythingLogged()).toContain("Posting as organization");
+  });
+
   it("an image post: initializeUpload as the page, a PUT of the bytes with the token, then POST /rest/posts with the image URN", async () => {
     const li = stub();
 

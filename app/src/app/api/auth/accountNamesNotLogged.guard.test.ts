@@ -133,7 +133,9 @@ export function loggedNames(source: string, fileName = "planted.ts"): string[] {
     if (ts.isPropertyAssignment(node) && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name))) {
       // `hasEmail: !!profile.email` logs a boolean, whatever its value reads;
       // `hasToken: accessToken` logs the token, so a has- name alone is not enough.
-      if (isBooleanName(node.name.text) && isYesNo(node.initializer)) return;
+      // R68: a yes/no value says nothing about who under any key
+      // (`refreshTokenRotated: data.refreshToken !== undefined`).
+      if (isYesNo(node.initializer)) return;
       if (saysWhoItIs(node.name.text)) record(node.name, node.name.text);
       inArgument(node.initializer);
       return;
@@ -142,7 +144,11 @@ export function loggedNames(source: string, fileName = "planted.ts"): string[] {
       const parent = node.parent;
       // `tokenResponse.status` logs the status: a value whose field is read
       // is judged by that field's name, not its own.
-      const readsAField = ts.isPropertyAccessExpression(parent) && parent.expression === node;
+      // R68: so is a field in the middle of a chain (`session.data.video` logs the video).
+      const readsAField =
+        ts.isPropertyAccessExpression(parent) &&
+        (parent.expression === node ||
+          (ts.isPropertyAccessExpression(parent.parent) && parent.parent.expression === parent));
       if (!readsAField && (saysWhoItIs(node.text) || ACCOUNT_OBJECTS.has(node.text))) record(node, node.text);
     }
     ts.forEachChild(node, inArgument);
@@ -157,7 +163,7 @@ export function loggedNames(source: string, fileName = "planted.ts"): string[] {
   return [...hits];
 }
 
-/** The OAuth start and callback routes and server/connections, tests left out. */
+/** The OAuth start and callback routes, server/connections and the platform clients, tests left out. */
 function scannedFiles(): string[] {
   const files: string[] = [];
   const auth = path.join(APP_SRC, "app", "api", "auth");
@@ -175,6 +181,12 @@ function scannedFiles(): string[] {
   for (const entry of readdirSync(connections)) {
     if (entry.endsWith(".ts") && !/\.test\.ts$|\.testkit\.ts$/.test(entry)) files.push(path.join(connections, entry));
   }
+  // R68 platform-clients L1: the publish logs run on every post, so they are
+  // held to the same rule as the connect logs.
+  const platforms = path.join(APP_SRC, "server", "platforms");
+  for (const entry of readdirSync(platforms)) {
+    if (/Client\.ts$/.test(entry)) files.push(path.join(platforms, entry));
+  }
   return files;
 }
 
@@ -190,6 +202,8 @@ const OWN_USER_ID = "our own user id (Vibe Socials' User.id), never the platform
 const ERROR_CODE = "an Error's own code (error.code), never an OAuth code";
 const TOKEN_TYPE = "the kind of token TikTok sent (Bearer), never the token";
 const ERROR_NAME = "an Error's class name (error.name), never a person's";
+const FAILED_REPLY = "the body of a FAILED reply (read under !response.ok), as errorText elsewhere";
+const NOT_BD3 = "R68 BD3: outside the files BD3 may change; left for the lead (see reports/BD3.md)";
 const SAFE: Record<string, string> = {
   "app/api/auth/facebook_page/callback/route.ts userId": OWN_USER_ID,
   "app/api/auth/instagram/callback/route.ts userId": OWN_USER_ID,
@@ -206,15 +220,39 @@ const SAFE: Record<string, string> = {
   "app/api/auth/youtube/callback/route.ts text":
     "the body of a FAILED token reply (await tokenResponse.text() under !tokenResponse.ok), as errorText elsewhere",
   "app/api/auth/tiktok/callback/route.ts token_type": TOKEN_TYPE,
+  // R68 platform-clients L1: the publish logs.
+  "server/platforms/facebookPageClient.ts code": ERROR_CODE,
+  "server/platforms/facebookPageClient.ts pageId": `the business Page's id, public in its own address, never a person's name. ${NOT_BD3}`,
+  "server/platforms/googleBusinessProfileClient.ts locationName":
+    `Google's resource path accounts/<n>/locations/<n>, never the business title. ${NOT_BD3}`,
+  "server/platforms/instagramClient.ts body": FAILED_REPLY,
+  "server/platforms/instagramClient.ts code": ERROR_CODE,
+  "server/platforms/instagramClient.ts name": ERROR_NAME,
+  "server/platforms/linkedinClient.ts code": ERROR_CODE,
+  "server/platforms/pinterestClient.ts body": `${FAILED_REPLY}, cut to 500 characters`,
+  "server/platforms/pinterestClient.ts code": ERROR_CODE,
+  "server/platforms/pinterestClient.ts name": ERROR_NAME,
+  "server/platforms/tiktokClient.ts code": ERROR_CODE,
+  "server/platforms/xClient.ts code": "an Error's code or the code X's reply sent (an API error number), never an OAuth code",
+  "server/platforms/xClient.ts name": ERROR_NAME,
+  "server/platforms/xClient.ts accessTokenLength": "the token's length, a count, never the token",
+  "server/platforms/xClient.ts accessTokenSecretLength": "the secret's length, a count, never the secret",
+  "server/platforms/youtubeClient.ts code": ERROR_CODE,
+  "server/platforms/youtubeClient.ts title": `the video's own title from the post, never the channel's. ${NOT_BD3}`,
 };
 
 describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
-  it("scans the routes and server/connections", () => {
+  it("scans the routes, server/connections and the platform clients", () => {
     const files = scannedFiles().map(relative);
     expect(files).toContain("app/api/auth/x/callback/route.ts");
     expect(files).toContain("app/api/auth/youtube/callback/route.ts");
     expect(files).toContain("app/api/auth/linkedin/start/route.ts");
     expect(files).toContain("server/connections/saveConnection.ts");
+    // R68 platform-clients L1: the publish logs run on every post.
+    expect(files).toContain("server/platforms/tiktokClient.ts");
+    expect(files).toContain("server/platforms/instagramClient.ts");
+    expect(files).toContain("server/platforms/linkedinClient.ts");
+    expect(files).toContain("server/platforms/youtubeClient.ts");
     expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
   });
 
@@ -266,6 +304,13 @@ describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
       ['console.log("[X] secret", { secret });', "secret"],
       ['console.log("[Google] code", { code });', "code"],
       ['console.log("[X] verifier", { verifier, codeVerifier });', "codeVerifier"],
+      // R68 platform-clients L1: the handle logs found in the publish clients.
+      ['console.log("[TikTok] Creator info", { username: creatorInfo.creatorUsername });', "creatorUsername"],
+      ['console.log("[Instagram] Published", { mediaId, username });', "username"],
+      ['console.log("[LinkedIn] Posting as organization", { orgName: organizations[0].name });', "orgName"],
+      ['console.log("[Instagram] Carousel", { igAccountId });', "igAccountId"],
+      ['console.log("[LinkedIn] Upload", { upload: session.data });', "data"],
+      ['console.log("[TikTok] Refreshed", { rotated: data.refreshToken });', "refreshToken"],
     ])("%s", (source, name) => {
       expect(loggedNames(source).map((hit) => hit.replace(/^\d+: /, ""))).toContain(name);
     });
@@ -275,6 +320,14 @@ describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
     expect(
       loggedNames(
         'logger.info("Connected", { hasScreenName, hasUserId: userIdFromX !== null, hasEmail: !!profile.email, connectionId: saved.id, count: organizations.length, status: response.status });',
+      ),
+    ).toEqual([]);
+  });
+
+  it("passes a yes/no under any key and a field read in the middle of a chain (R68)", () => {
+    expect(
+      loggedNames(
+        'console.log("[TikTok] Refreshed", { refreshTokenRotated: data.refreshToken !== undefined, videoUrn: session.data.video, parts: current.data.partCount });',
       ),
     ).toEqual([]);
   });

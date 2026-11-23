@@ -1246,6 +1246,22 @@ describe("tiktokClient.publishVideo", () => {
     expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("video/init"))).toBe(false);
   });
 
+  // R68 platform-clients L1: the creator's handle stays out of the publish log.
+  it("the creator info log says whether there is a handle, never the handle", async () => {
+    stubFetch({
+      "creator_info/query": () =>
+        jsonResponse({ data: { creator_username: "kai.surfs.daily", privacy_level_options: ["SELF_ONLY"] } }),
+      "blob.example.com": () => new Response(null, { status: 404 }),
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await tiktokClient.publishVideo(makeCtx()).catch(() => null);
+
+    const logged = JSON.stringify(logSpy.mock.calls);
+    expect(logged).not.toContain("kai.surfs.daily");
+    expect(logged).toContain('"hasUsername":true');
+  });
+
   it("completes (no timeout failure) when TikTok reports the real uppercase PUBLISH_COMPLETE", async () => {
     vi.useFakeTimers();
     stubFetch({

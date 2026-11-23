@@ -208,6 +208,16 @@ describe("instagramClient.publishVideo — Graph OAuthException 190", () => {
       });
     });
 
+    // R68 platform-clients L1: a client's handle and account id stay out of the publish log.
+    it("the publish log names neither the handle nor the account id", async () => {
+      await publishPhoto(() => json({ permalink: "https://www.instagram.com/p/DfgcZzggTmr/", id: "media-1" }));
+
+      const logged = JSON.stringify(vi.mocked(console.log).mock.calls);
+      expect(logged).not.toContain("acme");
+      expect(logged).not.toContain("ig-account-1");
+      expect(logged).toContain("Media published successfully");
+    });
+
     it("still succeeds, without a link, when the lookup fails", async () => {
       await expect(publishPhoto(() => new Response("{}", { status: 500 }))).resolves.toEqual({
         externalPostId: "media-1",
