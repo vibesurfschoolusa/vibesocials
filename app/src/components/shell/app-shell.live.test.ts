@@ -322,6 +322,47 @@ describe("AppShell: the session turns to nobody on an open app page", () => {
     expect(sessionFetch).toHaveBeenCalledTimes(2);
   });
 
+  // R69 review low: an online event while a read runs was dropped.
+  it("the online event fires while the read is held, and the read answers unknown: one more read runs, and on signed in the menu comes back", async () => {
+    let fail: (error: unknown) => void = () => {};
+    sessionFetch.mockImplementationOnce(() => new Promise<Response>((_, reject) => (fail = reject)));
+    await show(SIGNED_IN);
+    await show(UNAUTHENTICATED);
+    await comeOnline();
+    expect(sessionFetch).toHaveBeenCalledTimes(1);
+    serverReply = { status: 200, body: { user: OWNER } };
+    await act(async () => {
+      fail(new TypeError("Failed to fetch"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(sessionFetch).toHaveBeenCalledTimes(2);
+    expect(selfEvents).toHaveLength(1);
+    await show(SIGNED_IN);
+    expect(html(container)).toContain('<span data-account-menu="">Owner</span>');
+  });
+
+  it("no event during a held read that answers unknown: no more reads, as now", async () => {
+    let fail: (error: unknown) => void = () => {};
+    sessionFetch.mockImplementationOnce(() => new Promise<Response>((_, reject) => (fail = reject)));
+    await show(SIGNED_IN);
+    await show(UNAUTHENTICATED);
+    serverReply = { status: 200, body: { user: OWNER } };
+    await act(async () => {
+      fail(new TypeError("Failed to fetch"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    expect(sessionFetch).toHaveBeenCalledTimes(1);
+    expect(selfEvents).toEqual([]);
+  });
+
   it("an unknown read, then a later session change (another tab's broadcast): read again", async () => {
     serverReply = "offline";
     await show(SIGNED_IN);
