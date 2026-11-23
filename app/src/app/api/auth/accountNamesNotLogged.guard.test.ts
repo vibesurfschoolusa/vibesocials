@@ -20,7 +20,20 @@ const APP_SRC = fileURLToPath(new URL("../../../", import.meta.url));
 
 /** Words that, in a variable or property name, say it holds who the account is. */
 // R68 lead follow-up: a post's author or an upload's owner can be a person (urn:li:person:…).
-const NAME_WORDS = new Set(["name", "title", "email", "handle", "vanity", "username", "screenname", "displayname", "author"]);
+// R68 lead follow-up: tags and hashtags are the customer's own text, as a title is.
+const NAME_WORDS = new Set([
+  "name",
+  "title",
+  "email",
+  "handle",
+  "vanity",
+  "username",
+  "screenname",
+  "displayname",
+  "author",
+  "tags",
+  "hashtags",
+]);
 /**
  * The same, joined into one word in any case (userIdFromX, accountIdentifier),
  * and a platform's own id for the account (LinkedIn's sub, a Page or
@@ -314,6 +327,8 @@ describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
       ['logger.info("[LinkedIn] Creating post", { authorUrn });', "authorUrn"],
       ['console.log("[LinkedIn] Sending", { author: postBody.author });', "author"],
       ['console.log("[LinkedIn] Registering video", { ownerUrn });', "ownerUrn"],
+      ['console.log("[YouTube] Uploading with metadata", { tags: tags });', "tags"],
+      ['console.log("[Instagram] Caption", { hashtags });', "hashtags"],
     ])("%s", (source, name) => {
       expect(loggedNames(source).map((hit) => hit.replace(/^\d+: /, ""))).toContain(name);
     });
@@ -330,7 +345,7 @@ describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
   it("passes a yes/no under any key and a field read in the middle of a chain (R68)", () => {
     expect(
       loggedNames(
-        'console.log("[TikTok] Refreshed", { refreshTokenRotated: data.refreshToken !== undefined, videoUrn: session.data.video, parts: current.data.partCount });',
+        'console.log("[TikTok] Refreshed", { refreshTokenRotated: data.refreshToken !== undefined, videoUrn: session.data.video, parts: current.data.partCount, tagCount: tags.length });',
       ),
     ).toEqual([]);
   });

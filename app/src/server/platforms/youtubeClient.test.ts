@@ -238,6 +238,17 @@ describe("youtubeClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     expect(logged).not.toContain("private lesson");
   });
 
+  // R68 lead follow-up: the tags come from the caption's hashtags, the customer's own text.
+  it("the publish logs carry the tag count, never the tags", async () => {
+    stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
+
+    await youtubeClient.publishVideo(ytCtx({ caption: "hello #KaiPrivateTag" }));
+
+    const logged = JSON.stringify(vi.mocked(console.log).mock.calls);
+    expect(logged).not.toContain("KaiPrivateTag");
+    expect(logged).toContain('"tagCount":1');
+  });
+
   it("insert 400 uploadLimitExceeded -> daily_limit", async () => {
     stubYouTube(() => googleError(400, "uploadLimitExceeded"));
     expect(await failure()).toMatchObject({ code: "RATE_LIMITED", kind: "daily_limit" });
