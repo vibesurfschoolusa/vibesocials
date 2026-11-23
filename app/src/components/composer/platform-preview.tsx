@@ -10,7 +10,8 @@ import { MediaCountBadge, mediaCountBadge } from "@/components/media-thumb";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
-import { buildPlatformPreview, unitCountText } from "@/lib/platformPreview";
+import { platformCaptionCounter } from "@/lib/platformOverrides";
+import { buildPlatformPreview } from "@/lib/platformPreview";
 import { STORY_NO_CAPTION } from "@/lib/storyPlacement";
 
 export interface PlatformPreviewListProps {
@@ -267,11 +268,11 @@ function PlatformPreviewCard({
           </p>
 
           <p className="text-xs text-muted-foreground">
-            {/* R68 publishing-flow-2 L1: grouped as the counter shows it, "1,234 / 2,200". */}
-            {unitCountText(preview) ??
-              (preview.limit !== null
-                ? `${preview.charCount.toLocaleString("en-US")} / ${preview.limit.toLocaleString("en-US")}`
-                : `${preview.charCount.toLocaleString("en-US")} characters`)}
+            {/* R68 publishing-flow-2 L1 and review: with a limit, the counter's own label
+                ("1,234 / 2,200 incl. footer"), so the two can't differ. */}
+            {preview.limit !== null || preview.byteLimit !== undefined
+              ? platformCaptionCounter(override ? override : caption, platform, user).label
+              : `${preview.charCount.toLocaleString("en-US")} characters`}
           </p>
           {/* YouTube's and Pinterest's counts run ahead of the letters: the counter's own hint, on its own line. */}
           {preview.countHint ? <p className="text-xs text-muted-foreground">{preview.countHint}</p> : null}
