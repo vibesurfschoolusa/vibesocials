@@ -1,7 +1,5 @@
 "use client";
 
-import { useState } from "react";
-
 import { Card } from "@/components/ui/card";
 import { CharacterCount } from "@/components/ui/character-count";
 import { Input } from "@/components/ui/input";
@@ -26,11 +24,29 @@ import {
 } from "@/lib/googlePostOptions";
 import type { GoogleBusinessPostMetadata } from "@/server/platforms/types";
 
+/**
+ * What a type switch keeps for switching back: the event and offer details
+ * (R67 pages-a-3 L4) and the button an offer dropped (changeGooglePostType).
+ */
+export interface GoogleTypeMemory {
+  fields: GooglePostFields;
+  button: GoogleButton | undefined;
+}
+
+export const NO_GOOGLE_TYPE_MEMORY: GoogleTypeMemory = { fields: {}, button: undefined };
+
 interface GooglePostSettingsProps {
   metadata: GoogleBusinessPostMetadata;
   onChange: (metadata: GoogleBusinessPostMetadata) => void;
   /** R65: Create's send lock (sendLocksFields): every field is disabled. */
   disabled?: boolean;
+  /**
+   * R68 pages-b L1: the memory is the caller's, not this box's. Create removes
+   * the box while a new file prepares, and the memory must outlive that.
+   * Without it, a switch keeps nothing.
+   */
+  memory?: GoogleTypeMemory;
+  onMemoryChange?: (memory: GoogleTypeMemory) => void;
 }
 
 type EventFields = NonNullable<GoogleBusinessPostMetadata["event"]>;
@@ -85,23 +101,24 @@ const ACTION = "post to Google";
  * event or an offer, and a button. Only the chosen type's fields show. The
  * message under the fields is the same check POST /api/posts applies.
  */
-export function GooglePostSettings({ metadata, onChange, disabled = false }: GooglePostSettingsProps) {
+export function GooglePostSettings({
+  metadata,
+  onChange,
+  disabled = false,
+  memory = NO_GOOGLE_TYPE_MEMORY,
+  onMemoryChange,
+}: GooglePostSettingsProps) {
   // R45 lead review: a field over its limit is said by its count (and the
   // press refused by its validity), so the alert line keeps every other problem.
   const check = parseGooglePostMetadata(withinLimits(metadata));
   const event: EventFields = metadata.event ?? EMPTY_DATES;
   const offer: OfferFields = metadata.offer ?? EMPTY_DATES;
   const button = metadata.button;
-  // The button an offer dropped, restored when the user switches back (changeGooglePostType).
-  const [savedButton, setSavedButton] = useState<GoogleButton | undefined>(metadata.button);
-  // R67 pages-a-3 L4: the event and offer details, restored the same way.
-  const [savedFields, setSavedFields] = useState<GooglePostFields>({});
 
   const setType = (postType: GooglePostType) => {
-    const kept = rememberGooglePostFields(metadata, savedFields);
-    const next = changeGooglePostType({ ...metadata, ...kept }, postType, savedButton);
-    setSavedButton(next.savedButton);
-    setSavedFields(kept);
+    const kept = rememberGooglePostFields(metadata, memory.fields);
+    const next = changeGooglePostType({ ...metadata, ...kept }, postType, memory.button);
+    onMemoryChange?.({ fields: kept, button: next.savedButton });
     onChange(next.metadata);
   };
   const setButtonType = (value: string) => {

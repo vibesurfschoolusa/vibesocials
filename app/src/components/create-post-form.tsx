@@ -30,6 +30,7 @@ import {
 import { useCaptionBox } from "./composer/useCaptionBox";
 import { PlatformCaptionEditor } from "./composer/platform-caption-editor";
 import { GooglePostBox, googleBoxOpensOnSubmit } from "./composer/google-post-box";
+import type { GoogleTypeMemory } from "./google-post-settings";
 import { PlatformPreviewList } from "./composer/platform-preview";
 import { PublishBar, type SubmitControlView } from "./composer/publish-bar";
 import { TikTokConsentDeclaration, TikTokPostSettings } from "./tiktok-post-settings";
@@ -1420,9 +1421,10 @@ function CreatePostFormInner({
   const initialGoogleMetadata = (): GoogleBusinessPostMetadata =>
     googleButtonDefault ? { postType: "update", button: googleButtonDefault } : { postType: "update" };
   const [googleMetadata, setGoogleMetadata] = useState<GoogleBusinessPostMetadata>(initialGoogleMetadata);
-  // R67 item 8 review: the box remembers other types' details in its own state;
-  // a new key on the success reset forgets them, so post 2 starts clean.
-  const [googleBoxKey, setGoogleBoxKey] = useState(0);
+  // R68 pages-b L1: what a type switch keeps lives here, not in the box, which
+  // leaves the page while a new file prepares. The success reset forgets it.
+  const initialGoogleMemory = (): GoogleTypeMemory => ({ fields: {}, button: initialGoogleMetadata().button });
+  const [googleMemory, setGoogleMemory] = useState<GoogleTypeMemory>(initialGoogleMemory);
   // The Google box starts collapsed behind its summary (M1); Offer, Event or a
   // press with a required field missing opens it (composer/google-post-box.tsx).
   const [googleBoxOpen, setGoogleBoxOpen] = useState(false);
@@ -2737,8 +2739,8 @@ function CreatePostFormInner({
       setTiktokCommercialEnabled(false);
       setYoutubeMetadata({ privacyStatus: "unlisted" });
       setGoogleMetadata(initialGoogleMetadata());
+      setGoogleMemory(initialGoogleMemory());
       setGoogleBoxOpen(false);
-      setGoogleBoxKey((key) => key + 1);
       // A Story never carries over to the next post: both go back to Feed.
       const startPlacements = initialPlacements();
       setInstagramPlacement(startPlacements.instagram);
@@ -3413,9 +3415,10 @@ function CreatePostFormInner({
         )}
         {googleOptionsShown && (
           <GooglePostBox
-            key={`google-box-${googleBoxKey}`}
             metadata={googleMetadata}
             onChange={setGoogleMetadata}
+            memory={googleMemory}
+            onMemoryChange={setGoogleMemory}
             open={googleBoxOpen}
             onOpenChange={setGoogleBoxOpen}
             disabled={sendLocksFields}

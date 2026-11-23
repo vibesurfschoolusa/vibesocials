@@ -21,7 +21,7 @@ vi.mock("@/components/ui/select", async () => {
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import type { GoogleBusinessPostMetadata } from "@/server/platforms/types";
 
-import { GooglePostSettings } from "./google-post-settings";
+import { GooglePostSettings, NO_GOOGLE_TYPE_MEMORY, type GoogleTypeMemory } from "./google-post-settings";
 
 let root: Root;
 let container: FakeNode;
@@ -61,10 +61,14 @@ async function choose(postType: GoogleBusinessPostMetadata["postType"]) {
   await type("google-post-type", postType);
 }
 
+/** Holds the memory as Create does (R68 pages-b L1): the box keeps none of its own. */
 function Host({ initial }: { initial: GoogleBusinessPostMetadata }) {
   const [metadata, setMetadata] = useState(initial);
+  const [memory, setMemory] = useState<GoogleTypeMemory>({ fields: {}, button: initial.button });
   return createElement(GooglePostSettings, {
     metadata,
+    memory,
+    onMemoryChange: setMemory,
     onChange: (next: GoogleBusinessPostMetadata) => {
       sent.push(next);
       setMetadata(next);
@@ -147,6 +151,25 @@ describe("GooglePostSettings: switching the post type keeps what was typed", () 
     expect(last()).toEqual({ postType: "offer", offer: { title: "Deal", startDate: "", endDate: "" } });
     await choose("event");
     expect(last()).toEqual({ postType: "event", event: { title: "Full moon paddle", startDate: "", endDate: "" } });
+  });
+
+  it("without a memory from its caller, a switch keeps nothing", async () => {
+    let shown: GoogleBusinessPostMetadata = { postType: "event", event: { title: "Paddle", startDate: "", endDate: "" } };
+    const render = () =>
+      root.render(
+        createElement(GooglePostSettings, {
+          metadata: shown,
+          onChange: (next: GoogleBusinessPostMetadata) => {
+            shown = next;
+            render();
+          },
+        }),
+      );
+    await act(async () => render());
+    await choose("offer");
+    await choose("event");
+    expect(shown).toEqual({ postType: "event", event: { title: "", startDate: "", endDate: "" } });
+    expect(NO_GOOGLE_TYPE_MEMORY).toEqual({ fields: {}, button: undefined });
   });
 
   it("the button round trip through Offer is as before", async () => {

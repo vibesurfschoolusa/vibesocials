@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { AlertTriangle, ChevronDown } from "lucide-react";
 
-import { GooglePostSettings } from "@/components/google-post-settings";
+import { GooglePostSettings, type GoogleTypeMemory } from "@/components/google-post-settings";
 import { cn } from "@/lib/cn";
 import {
   GOOGLE_BUTTON_LABELS,
@@ -87,6 +87,8 @@ export function GooglePostBox({
   open,
   onOpenChange,
   disabled = false,
+  memory,
+  onMemoryChange,
 }: {
   metadata: GoogleBusinessPostMetadata;
   onChange: (metadata: GoogleBusinessPostMetadata) => void;
@@ -97,6 +99,9 @@ export function GooglePostBox({
    * The summary button stays usable: opening or closing changes nothing in the post.
    */
   disabled?: boolean;
+  /** R68 pages-b L1: the type switch's memory, kept by Create (GooglePostSettings). */
+  memory?: GoogleTypeMemory;
+  onMemoryChange?: (memory: GoogleTypeMemory) => void;
 }) {
   const settingsRef = useRef<HTMLDivElement>(null);
   // The browser's validity of the fields, read on change (a url field typed
@@ -162,6 +167,8 @@ export function GooglePostBox({
         <GooglePostSettings
           metadata={metadata}
           disabled={disabled}
+          memory={memory}
+          onMemoryChange={onMemoryChange}
           onChange={(next) => {
             if (googleBoxOpenAfterChange(open, { metadata: next, fieldsValid }) !== open) onOpenChange(true);
             onChange(next);
