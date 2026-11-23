@@ -59,7 +59,7 @@ function count(node: FakeNode, nodeName: string): number {
   return (node.nodeName === nodeName ? 1 : 0) + node.childNodes.reduce((sum, child) => sum + count(child, nodeName), 0);
 }
 
-async function show(open: boolean) {
+async function show(open: boolean, room = 20) {
   await act(async () => {
     root.render(
       createElement(MediaPickerDialog, {
@@ -67,7 +67,7 @@ async function show(open: boolean) {
         open,
         onOpenChange: () => {},
         addedIds: new Set<string>(),
-        room: 20,
+        room,
         onAdd: () => {},
       }),
     );
@@ -138,5 +138,92 @@ describe("Media picker: reopened after a failure", () => {
     await show(true);
     expect(count(container, "LI")).toBe(2);
     expect(text()).not.toContain(FIRST_LOAD_FAILED_MESSAGE);
+  });
+});
+
+// R68 pages-a L1: the line counted the room at opening and never went down,
+// and the tiles the limit locks kept a tappable look.
+function findAll(node: FakeNode, test: (n: FakeNode) => boolean, hits: FakeNode[] = []): FakeNode[] {
+  if (test(node)) hits.push(node);
+  for (const child of node.childNodes) findAll(child, test, hits);
+  return hits;
+}
+function props(node: FakeNode): Record<string, unknown> {
+  const key = Object.keys(node).find((k) => k.startsWith("__reactProps$"));
+  return node[key as string] as Record<string, unknown>;
+}
+const tiles = () => findAll(container, (n) => n.nodeName === "LABEL");
+const boxIn = (tile: FakeNode) => findAll(tile, (n) => n.nodeName === "INPUT")[0]!;
+const classesOf = (node: FakeNode) => String(node.attributes.class ?? "").split(/\s+/).filter(Boolean);
+async function toggle(index: number) {
+  await act(async () => (props(boxIn(tiles()[index]!)).onChange as () => void)());
+}
+const LIMIT_LINE = "You've chosen as many as fit. Untick one to choose another.";
+const TILE_AS_NOW = "relative block cursor-pointer overflow-hidden rounded-[var(--radius)] border border-border";
+const TICKED_AS_NOW = "relative block cursor-pointer overflow-hidden rounded-[var(--radius)] border border-primary ring-2 ring-primary";
+
+describe("Media picker: the count goes down and the limit's locked tiles look locked (R68 pages-a L1)", () => {
+  it("room 2: ticking 1 says 1 more, ticking 2 says the limit sentence", async () => {
+    reply = async () => Response.json({ items: ITEMS.slice(0, 4), nextCursor: null });
+    await show(true, 2);
+    expect(text()).toContain("2 more can be added.");
+    await toggle(0);
+    expect(text()).toContain("1 more can be added.");
+    await toggle(1);
+    expect(text()).toContain(LIMIT_LINE);
+    expect(text()).not.toContain("more can be added");
+  });
+
+  it("at the limit, an unticked tile is disabled and looks it, with no hover; ticked tiles are as now", async () => {
+    reply = async () => Response.json({ items: ITEMS.slice(0, 4), nextCursor: null });
+    await show(true, 2);
+    await toggle(0);
+    await toggle(1);
+    const [first, second, third, fourth] = tiles();
+    for (const tile of [third!, fourth!]) {
+      expect(props(boxIn(tile)).disabled).toBe(true);
+      expect(classesOf(tile)).toEqual(expect.arrayContaining(["cursor-not-allowed", "opacity-50"]));
+      expect(classesOf(tile)).not.toContain("cursor-pointer");
+      expect(classesOf(tile).filter((c) => c.includes("hover:"))).toEqual([]);
+    }
+    for (const tile of [first!, second!]) {
+      expect(props(boxIn(tile)).disabled).toBe(false);
+      expect(tile.attributes.class).toBe(TICKED_AS_NOW);
+    }
+  });
+
+  it("unticking one at the limit unlocks the tiles and brings the count back", async () => {
+    reply = async () => Response.json({ items: ITEMS.slice(0, 4), nextCursor: null });
+    await show(true, 2);
+    await toggle(0);
+    await toggle(1);
+    await toggle(1);
+    expect(text()).toContain("1 more can be added.");
+    expect(text()).not.toContain(LIMIT_LINE);
+    for (const tile of tiles().slice(1)) {
+      expect(props(boxIn(tile)).disabled).toBe(false);
+      expect(tile.attributes.class).toBe(TILE_AS_NOW);
+    }
+  });
+
+  it("room 20: the line and the tiles are as now", async () => {
+    reply = async () => Response.json({ items: ITEMS.slice(0, 4), nextCursor: null });
+    await show(true, 20);
+    expect(text()).toContain("Tick the photos and videos to add. 20 more can be added.");
+    for (const tile of tiles()) {
+      expect(props(boxIn(tile)).disabled).toBe(false);
+      expect(tile.attributes.class).toBe(TILE_AS_NOW);
+    }
+  });
+
+  it("room 0: the line and the tiles are as now", async () => {
+    reply = async () => Response.json({ items: ITEMS.slice(0, 4), nextCursor: null });
+    await show(true, 0);
+    expect(text()).toContain("Tick the photos and videos to add. 0 more can be added.");
+    expect(text()).not.toContain(LIMIT_LINE);
+    for (const tile of tiles()) {
+      expect(props(boxIn(tile)).disabled).toBe(true);
+      expect(tile.attributes.class).toBe(TILE_AS_NOW);
+    }
   });
 });
