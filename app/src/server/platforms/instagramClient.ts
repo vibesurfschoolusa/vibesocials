@@ -836,7 +836,7 @@ async function publishInstagramContainer(args: {
 
   console.log("[Instagram] Media published successfully", {
     mediaId,
-    username,
+    hasUsername: !!username,
   });
 
   const permalink = await fetchInstagramPermalink(mediaId, accessToken, deadline);
@@ -1027,7 +1027,7 @@ async function publishInstagramCarousel(args: {
     );
   }
 
-  console.log("[Instagram] Starting carousel", { count: mediaItems.length, igAccountId });
+  console.log("[Instagram] Starting carousel", { count: mediaItems.length, connectionId: connection.id });
 
   try {
     let saved = store
@@ -1165,7 +1165,7 @@ export const instagramClient: PlatformClient = {
       mimeType: mediaItem.mimeType,
       sizeBytes: mediaItem.sizeBytes,
       originalFilename: mediaItem.originalFilename,
-      igAccountId,
+      connectionId: socialConnection.id,
     });
 
     const mediaUrl = mediaItem.storageLocation;

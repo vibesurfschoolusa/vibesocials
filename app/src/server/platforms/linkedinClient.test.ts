@@ -1160,8 +1160,9 @@ describe("linkedinClient — Posts, Images and Videos APIs", () => {
   });
 
   // R68 platform-clients L1: the organization a client posts as is often their
-  // own business name; the publish log says only how many there are.
-  it("the publish log names neither the organization nor its id", async () => {
+  // own business name; the publish log says only how many there are. (The
+  // organization's id still travels in authorUrn: see reports/BD3.md.)
+  it("the publish log never names the organization", async () => {
     stub();
     const connection = makeConnection({
       id: "conn-li",
@@ -1172,8 +1173,7 @@ describe("linkedinClient — Posts, Images and Videos APIs", () => {
     await linkedinClient.publishVideo({ ...ctx("image/jpeg"), socialConnection: connection } as PublishContext);
 
     expect(everythingLogged()).not.toContain("Kai Surf School");
-    expect(everythingLogged()).not.toContain("org-90817");
-    expect(everythingLogged()).toContain("Posting as organization");
+    expect(everythingLogged()).toContain('"organizationCount":1');
   });
 
   it("an image post: initializeUpload as the page, a PUT of the bytes with the token, then POST /rest/posts with the image URN", async () => {

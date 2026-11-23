@@ -1983,8 +1983,8 @@ export const linkedinClient: PlatformClient = {
     const orgId = organizations[0].id;
     const authorUrn = `urn:li:organization:${orgId}`;
     console.log("[LinkedIn] Posting as organization", {
-      orgId,
-      orgName: organizations[0].name,
+      connectionId: socialConnection.id,
+      organizationCount: organizations.length,
     });
 
     if (items.length > 1) {

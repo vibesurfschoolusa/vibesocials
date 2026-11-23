@@ -956,7 +956,7 @@ async function verifyCreatorInfo(
   try {
     const creatorInfo = await getTikTokCreatorInfo(accessToken, creatorInfoTimeoutMs);
     console.log('[TikTok] Creator info retrieved:', {
-      username: creatorInfo.creatorUsername,
+      hasUsername: creatorInfo.creatorUsername !== "",
       privacyOptions: creatorInfo.privacyLevelOptions,
       maxDuration: creatorInfo.maxVideoPostDurationSec,
     });
