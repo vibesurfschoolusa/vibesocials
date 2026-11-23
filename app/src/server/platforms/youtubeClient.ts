@@ -301,7 +301,7 @@ export function buildYouTubeVideoResource(ctx: PublishContext): {
   };
 
   console.log("[YouTube] Uploading with metadata", {
-    title: metadata.snippet.title,
+    hasTitle: metadata.snippet.title !== "",
     descriptionLength: description.length,
     tags: tags,
     privacyStatus: metadata.status.privacyStatus,
@@ -333,7 +333,7 @@ async function completedUpload(response: Response): Promise<PublishResult> {
   console.log("[YouTube] Video uploaded successfully", {
     videoId,
     videoUrl: `https://www.youtube.com/watch?v=${videoId}`,
-    title: result?.snippet?.title,
+    hasTitle: !!result?.snippet?.title,
   });
 
   return { externalPostId: videoId };
@@ -1145,7 +1145,13 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: UsedToken): Promise
   const boundary = "----VibeSocialsYouTubeBoundary";
   const metadataBody = JSON.stringify(metadata);
 
-  console.log("[YouTube] Full metadata being sent to API:", metadataBody);
+  // R68 lead follow-up: the title and description are the customer's own text,
+  // so the log names the fields and the size only.
+  console.log("[YouTube] Metadata being sent to API", {
+    fields: Object.keys(metadata),
+    snippetFields: Object.keys(metadata.snippet),
+    length: metadataBody.length,
+  });
 
   const parts = [
     `--${boundary}\r\n`,

@@ -654,8 +654,9 @@ async function uploadVideo(
   console.log("[LinkedIn] Video downloaded", { sizeBytes: videoSize });
 
   // Step 2: Initialize the video upload (Videos API).
+  const postedAs = loggedAuthor(ownerUrn);
   console.log("[LinkedIn] Registering video with owner", {
-    ownerUrn,
+    postedAs,
     fileSizeBytes: videoSize,
   });
 
@@ -816,15 +817,24 @@ interface LinkedInPostImage {
 const LINKEDIN_ALT_TEXT_LIMIT = 4086;
 
 /** The post body as logged: every image's `altText` left out. */
-function postBodyForLog(postBody: LinkedInPostBody): LinkedInPostBody {
-  const content = postBody.content;
-  if (!content) return postBody;
-  if ("multiImage" in content) {
-    return { ...postBody, content: { multiImage: { images: content.multiImage.images.map(({ id }) => ({ id })) } } };
-  }
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- left out of the log on purpose
-  const { altText, ...media } = content.media;
-  return { ...postBody, content: { media } };
+function postBodyForLog(postBody: LinkedInPostBody) {
+  // R68 lead follow-up: the commentary and the descriptions are the customer's
+  // own text, so the log names the fields and the size only.
+  return {
+    fields: Object.keys(postBody),
+    contentFields: postBody.content ? Object.keys(postBody.content) : [],
+    length: JSON.stringify(postBody).length,
+  };
+}
+
+/**
+ * What a log may say about a post's author or an upload's owner (R68 lead
+ * follow-up): an organization's URN is a company page id and is kept; any
+ * other (urn:li:person:…) is a platform user id, so only its kind.
+ */
+export function loggedAuthor(urn: string): string {
+  if (urn.startsWith("urn:li:organization:")) return urn;
+  return urn.split(":")[2] || "unknown";
 }
 
 /**
@@ -852,8 +862,9 @@ async function createPost(
   /** 07d: a single image's description; never sent for a video. */
   altText?: string,
 ): Promise<string> {
+  const postedAs = loggedAuthor(authorUrn);
   console.log("[LinkedIn] Creating post", {
-    authorUrn,
+    postedAs,
     hasMedia: !!mediaUrn || !!images,
     isVideo,
   });
@@ -878,7 +889,7 @@ async function createPost(
     // MultiImage API: `content.multiImage.images` is an array of Media, each with its image URN
     // as `id` and, when the photo has a description, its `altText` (07d).
     postBody.content = { multiImage: { images } };
-    console.log("[LinkedIn] Post body includes several images", { images: images.length, author: authorUrn });
+    console.log("[LinkedIn] Post body includes several images", { images: images.length, postedAs });
   } else if (mediaUrn) {
     // A video keeps the title the ugcPosts body gave it ("Video"); an image has none. The title
     // is optional for both (the Post schema requires it only for documents).
@@ -889,21 +900,19 @@ async function createPost(
     console.log("[LinkedIn] Post body includes media", {
       mediaUrn,
       mediaType: isVideo ? "VIDEO" : "IMAGE",
-      author: authorUrn,
+      postedAs,
       hasTitle: isVideo,
     });
   }
 
   console.log("[LinkedIn] Sending post to API", {
     endpoint: LINKEDIN_POSTS_URL,
-    author: postBody.author,
+    postedAs,
     mediaType: images ? "MULTI_IMAGE" : mediaUrn ? (isVideo ? "VIDEO" : "IMAGE") : "NONE",
     hasMedia: !!mediaUrn || !!images,
   });
 
-  // Log full post body for debugging. 07d: without the photo descriptions, which
-  // are the user's text; the line is otherwise what it always was.
-  console.log("[LinkedIn] Full post body:", JSON.stringify(postBodyForLog(postBody), null, 2));
+  console.log("[LinkedIn] Post body", postBodyForLog(postBody));
 
   // 2026-11-01 scale audit (jobs H6, Review Focus 5): POST /rest/posts is the
   // commit call. A 5xx, a timeout or a dropped connection after it was sent is
@@ -1886,7 +1895,8 @@ async function publishMultiImage(args: {
   deadline: number | undefined;
 }): Promise<PublishResult> {
   const { items, accessToken, authorUrn, caption, connection, deadline } = args;
-  console.log("[LinkedIn] Starting a post with several photos", { photos: items.length, authorUrn });
+  const postedAs = loggedAuthor(authorUrn);
+  console.log("[LinkedIn] Starting a post with several photos", { photos: items.length, postedAs });
 
   const images: LinkedInPostImage[] = [];
   for (const [index, item] of items.entries()) {
@@ -1982,6 +1992,7 @@ export const linkedinClient: PlatformClient = {
     // Use first organization
     const orgId = organizations[0].id;
     const authorUrn = `urn:li:organization:${orgId}`;
+    const postedAs = loggedAuthor(authorUrn);
     console.log("[LinkedIn] Posting as organization", {
       connectionId: socialConnection.id,
       organizationCount: organizations.length,
@@ -2000,7 +2011,7 @@ export const linkedinClient: PlatformClient = {
       mimeType: mediaItem.mimeType,
       isVideo,
       filename: mediaItem.originalFilename,
-      authorUrn,
+      postedAs,
     });
 
     // 2026-11-02 scale audit (jobs B3): a video above 50 MiB on a platform enabled in
@@ -2070,9 +2081,9 @@ export const linkedinClient: PlatformClient = {
 
       // Create the post
       console.log("[LinkedIn] Creating post with URNs", {
-        authorUrn,
+        postedAs,
         mediaUrn,
-        match: mediaUrn ? `Video owner and post author both use: ${authorUrn}` : "No media",
+        match: mediaUrn ? `Video owner and post author both use: ${postedAs}` : "No media",
       });
 
       const postId = await createPost(

@@ -19,13 +19,14 @@ import { describe, expect, it } from "vitest";
 const APP_SRC = fileURLToPath(new URL("../../../", import.meta.url));
 
 /** Words that, in a variable or property name, say it holds who the account is. */
-const NAME_WORDS = new Set(["name", "title", "email", "handle", "vanity", "username", "screenname", "displayname"]);
+// R68 lead follow-up: a post's author or an upload's owner can be a person (urn:li:person:…).
+const NAME_WORDS = new Set(["name", "title", "email", "handle", "vanity", "username", "screenname", "displayname", "author"]);
 /**
  * The same, joined into one word in any case (userIdFromX, accountIdentifier),
  * and a platform's own id for the account (LinkedIn's sub, a Page or
  * Instagram account id, an organization id).
  */
-const NAME_JOINED = /screenname|username|displayname|accountidentifier|userid|vanity|email|handle|pageid|accountid|orgid|channelid/;
+const NAME_JOINED = /screenname|username|displayname|accountidentifier|userid|vanity|email|handle|pageid|accountid|orgid|channelid|ownerurn/;
 const PLATFORM_ID_NAMES = new Set(["sub", "open_id"]);
 /**
  * R67 lead follow-up: a token, a secret, an authorization code or a PKCE
@@ -203,7 +204,6 @@ const ERROR_CODE = "an Error's own code (error.code), never an OAuth code";
 const TOKEN_TYPE = "the kind of token TikTok sent (Bearer), never the token";
 const ERROR_NAME = "an Error's class name (error.name), never a person's";
 const FAILED_REPLY = "the body of a FAILED reply (read under !response.ok), as errorText elsewhere";
-const NOT_BD3 = "R68 BD3: outside the files BD3 may change; left for the lead (see reports/BD3.md)";
 const SAFE: Record<string, string> = {
   "app/api/auth/facebook_page/callback/route.ts userId": OWN_USER_ID,
   "app/api/auth/instagram/callback/route.ts userId": OWN_USER_ID,
@@ -222,9 +222,9 @@ const SAFE: Record<string, string> = {
   "app/api/auth/tiktok/callback/route.ts token_type": TOKEN_TYPE,
   // R68 platform-clients L1: the publish logs.
   "server/platforms/facebookPageClient.ts code": ERROR_CODE,
-  "server/platforms/facebookPageClient.ts pageId": `the business Page's id, public in its own address, never a person's name. ${NOT_BD3}`,
+  "server/platforms/facebookPageClient.ts pageId": "a business Page's id, never a person's (lead decision, R68)",
   "server/platforms/googleBusinessProfileClient.ts locationName":
-    `Google's resource path accounts/<n>/locations/<n>, never the business title. ${NOT_BD3}`,
+    "a business location's id, Google's path accounts/<n>/locations/<n>, never its title (lead decision, R68)",
   "server/platforms/instagramClient.ts body": FAILED_REPLY,
   "server/platforms/instagramClient.ts code": ERROR_CODE,
   "server/platforms/instagramClient.ts name": ERROR_NAME,
@@ -238,7 +238,6 @@ const SAFE: Record<string, string> = {
   "server/platforms/xClient.ts accessTokenLength": "the token's length, a count, never the token",
   "server/platforms/xClient.ts accessTokenSecretLength": "the secret's length, a count, never the secret",
   "server/platforms/youtubeClient.ts code": ERROR_CODE,
-  "server/platforms/youtubeClient.ts title": `the video's own title from the post, never the channel's. ${NOT_BD3}`,
 };
 
 describe("account names stay out of the server log (R67 pages-a-2 L1)", () => {
