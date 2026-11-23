@@ -87,6 +87,11 @@ let store: PostJobDTO[] = [];
 let cancelAnswer: (() => Response) | null = null;
 let patchAnswer: (() => Response) | null = null;
 const reads: string[] = [];
+/** A page read at this cursor fails. */
+let failCursor: string | null = null;
+/** While set, a page-1 read waits here until the test lets it go. */
+let holdPageOne = false;
+const heldReads: (() => void)[] = [];
 
 const fetchMock = vi.fn(async (input: unknown, init?: { method?: string }) => {
   const url = String(input);
@@ -95,6 +100,8 @@ const fetchMock = vi.fn(async (input: unknown, init?: { method?: string }) => {
   if (method === "GET" && path === "/api/posts") {
     reads.push(url);
     const cursor = new URLSearchParams(url.split("?")[1]).get("cursor");
+    if (cursor !== null && cursor === failCursor) return Response.json({ error: "Something went wrong." }, { status: 500 });
+    if (cursor === null && holdPageOne) await new Promise<void>((resolve) => heldReads.push(resolve));
     const from = cursor ? Number(cursor) : 0;
     return Response.json({
       jobs: store.slice(from, from + PAGE),
@@ -164,6 +171,9 @@ beforeEach(() => {
   cancelAnswer = null;
   patchAnswer = null;
   reads.length = 0;
+  failCursor = null;
+  holdPageOne = false;
+  heldReads.length = 0;
   const made = makeDocument();
   container = made.container;
   vi.stubGlobal("window", made.doc.defaultView);
@@ -240,6 +250,53 @@ describe("Queue: a quiet reload keeps the pages loaded with Load more (R68 publi
     expect(reads.length).toBeGreaterThan(2);
     expect(shown()).toEqual([1, 2, 3, 4]);
     expect(loadMoreButton()).toBeDefined();
+  }, 15_000);
+
+  // R68 BD1 review L1: a later page that fails no longer throws away the pages read.
+  it("two pages loaded, a series cancel, and the page-2 read fails: page 1 is fresh, and Load more brings page 2", async () => {
+    // Pages: [1, 2], [3, 4], [5, 6]; posts 2 and 3 are one series, from page 1 onto page 2.
+    store = [scheduled(1), scheduled(2, "s1"), scheduled(3, "s1"), scheduled(4), scheduled(5), scheduled(6)];
+    await mount();
+    await click(loadMoreButton(), "Load more");
+    expect(shown()).toEqual([1, 2, 3, 4]);
+    failCursor = "2";
+
+    await click(labelled('Cancel "Post 2'), "Cancel on Post 2");
+    const rest = findAll(container, (n) => n.tagName === "INPUT" && (props(n).name as unknown) === "cancel-scope")[1];
+    await act(async () => {
+      props(rest!).onChange();
+    });
+    await click(buttons((n) => n.attributes?.["data-confirm"] === "Cancel posts")[0], "Cancel posts");
+
+    // Page 1 as read again: post 2 is gone, post 4 moved up; the failed page 2 is not shown.
+    expect(shown()).toEqual([1, 4]);
+    failCursor = null;
+    await click(loadMoreButton(), "Load more");
+    expect(shown()).toEqual([1, 4, 5, 6]);
+    expect(loadMoreButton()).toBeUndefined();
+  }, 15_000);
+
+  // R68 BD1 review L2: a Load more pressed while a quiet reload runs is kept.
+  it("three pages loaded, Load more pressed during a quiet reload: page 4 stays", async () => {
+    store = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => scheduled(n));
+    await mount();
+    await click(loadMoreButton(), "Load more");
+    await click(loadMoreButton(), "Load more");
+    expect(shown()).toEqual([1, 2, 3, 4, 5, 6]);
+    cancelAnswer = () => Response.json({ error: "This post changed in the meantime. Try again." }, { status: 409 });
+    holdPageOne = true;
+
+    await click(labelled('Cancel "Post 1'), "Cancel on Post 1");
+    await click(buttons((n) => n.attributes?.["data-confirm"] === "Cancel post")[0], "Cancel post");
+    expect(heldReads).toHaveLength(1);
+    await click(loadMoreButton(), "Load more");
+    expect(shown()).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+
+    holdPageOne = false;
+    await act(async () => heldReads.shift()!());
+    await settle();
+    expect(shown()).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(loadMoreButton()).toBeUndefined();
   }, 15_000);
 
   it("one page loaded: the quiet reload reads page 1 only, as now", async () => {
