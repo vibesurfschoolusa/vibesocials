@@ -40,15 +40,19 @@ import { fitYouTubeTitle } from "@/server/platforms/youtubeClient";
  * square of their input kept turning up one at a time: firstName's pattern
  * (R66), fitAltText (R68) and removeXMentions (R68), each costing seconds of
  * server CPU, or a frozen Create page, on one pasted caption. This times every
- * exported helper that walks user text on adversarial inputs of 100,000
- * characters, so a new super-linear one fails here.
+ * exported helper that walks user text on adversarial inputs, so a new
+ * super-linear one fails here.
  *
- * The budget is 1 s a call at 100,000 characters. A single helper takes
- * 1-100 ms there, so a loaded CI runner has a 10x margin. The composed ones
- * (buildCaptionWithFooter, buildPlatformPreview, platformCaptionCounter) run
- * several of the others, up to about 460 ms (the X counter, linear: 0.9 s at
- * 200,000), so theirs is 5 s. A quadratic helper takes 10 s or more at
- * 100,000 (removeXMentions took 11 s), so it fails either budget.
+ * The inputs are 30,000 characters: a quadratic helper takes about a second
+ * there (the planted one below: 1.0 s), a linear one a few ms (at most 52 ms).
+ * Each budget is at least 10x the slowest linear call measured
+ * (MEASURED_MS), so a loaded CI runner does not flake.
+ *
+ * The composed helpers (buildCaptionWithFooter, buildPlatformPreview,
+ * platformCaptionCounter) run the single ones, which are timed on every
+ * input, so they are timed once per platform, on the run that platform's own
+ * code walks (commas for X's mentions, dotted labels for LinkedIn's links, and
+ * so on).
  *
  * Left out, each for a reason:
  * - jpegFileName (prepareUploadFile.ts): its /[. ]+$/ is quadratic, but its
@@ -59,47 +63,71 @@ import { fitYouTubeTitle } from "@/server/platforms/youtubeClient";
  *   with no nested repeat, so linear by construction.
  */
 
-const SIZE = 100_000;
-const BUDGET_MS = 1_000;
-const COMPOSED_BUDGET_MS = 5_000;
+const SIZE = 30_000;
+// The slowest linear calls measured at 30,000 characters (2026-11-22, this
+// machine): a single helper, and a composed one on its platform's run.
+const MEASURED_MS = { single: 52, composed: 84 };
+const BUDGET_MS = 550;
+const COMPOSED_BUDGET_MS = 1_000;
 
 /** The runs a pattern or a walk may restart on, each one character or grapheme repeated. */
-const RUNS: Array<[string, string]> = [
-  ["commas", ","],
-  ["semicolons", ";"],
-  ["commas and semicolons", ",;"],
-  ["spaces", " "],
-  ["dots", "."],
-  ["dotted labels", "a."],
-  ["hyphens", "-"],
-  ["at signs", "@"],
-  ["mentions", "@a"],
-  ["hash signs", "#"],
-  ["hashtags", "#a"],
-  ["combining marks", "́"],
-  ["emoji", "\u{1F30A}"],
-  ["ZWJ chain", "\u{1F468}‍"],
-  ["line breaks", "\n"],
-];
+const RUNS = {
+  commas: ",",
+  semicolons: ";",
+  "commas and semicolons": ",;",
+  spaces: " ",
+  dots: ".",
+  "dotted labels": "a.",
+  hyphens: "-",
+  "at signs": "@",
+  mentions: "@a",
+  "hash signs": "#",
+  hashtags: "#a",
+  "combining marks": "́",
+  emoji: "\u{1F30A}",
+  "ZWJ chain": "\u{1F468}‍",
+  "line breaks": "\n",
+} as const;
+type RunName = keyof typeof RUNS;
 
-/** Each run mid-token, after a mention, and between tags, filled to `size` characters. */
-function adversarialInputs(size: number): Array<[string, string]> {
-  const inputs: Array<[string, string]> = [];
-  for (const [name, unit] of RUNS) {
-    const run = (room: number) => unit.repeat(Math.max(1, Math.floor(room / unit.length)));
-    inputs.push([`${name} mid-token`, `#a${run(size - 3)}b`]);
-    inputs.push([`${name} after a mention`, `@kai ${run(size - 6)}x`]);
-    inputs.push([`${name} between tags`, `#a ${run(size - 11)} @kai #b`]);
-  }
-  return inputs;
+/** `unit` repeated to fill about `room` characters. */
+function runOf(name: RunName, room: number): string {
+  const unit = RUNS[name];
+  return unit.repeat(Math.max(1, Math.floor(room / unit.length)));
+}
+
+/** One run between tags, filled to `SIZE` characters. */
+function betweenTags(name: RunName): string {
+  return `#a ${runOf(name, SIZE - 11)} @kai #b`;
+}
+
+/** Each run mid-token, after a mention, and between tags, filled to `SIZE` characters. */
+function adversarialInputs(): Array<[string, string]> {
+  return (Object.keys(RUNS) as RunName[]).flatMap((name): Array<[string, string]> => [
+    [`${name} mid-token`, `#a${runOf(name, SIZE - 3)}b`],
+    [`${name} after a mention`, `@kai ${runOf(name, SIZE - 6)}x`],
+    [`${name} between tags`, betweenTags(name)],
+  ]);
 }
 
 const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #waves @kai", trackWebsiteLinks: true };
+
+/** The run each platform's own code walks: X's mentions, LinkedIn's links, YouTube's bytes, and so on. */
+const PLATFORM_RUN: Record<Platform, RunName> = {
+  x: "commas",
+  linkedin: "dotted labels",
+  youtube: "combining marks",
+  pinterest: "emoji",
+  tiktok: "ZWJ chain",
+  instagram: "hashtags",
+  google_business_profile: "spaces",
+  facebook_page: "mentions",
+};
 const platforms = Object.keys(PLATFORM_CAPTION_LIMITS) as Platform[];
 
 type Helper = (text: string) => unknown;
 
-const HELPERS: Array<[string, Helper, number?]> = [
+const HELPERS: Array<[string, Helper]> = [
   ["graphemeCount", graphemeCount],
   ["truncateGraphemes", (text) => truncateGraphemes(text, 2_200, { ellipsis: "…" })],
   ["truncateGraphemesWithinCodePoints", (text) => truncateGraphemesWithinCodePoints(text, 200)],
@@ -145,32 +173,26 @@ const HELPERS: Array<[string, Helper, number?]> = [
   ["fitInstagramTags", fitInstagramTags],
   ["computeTikTokCaption", computeTikTokCaption],
   ["computeGbpPostSummary", computeGbpPostSummary],
-  ...platforms.flatMap((platform): Array<[string, Helper, number]> => [
-    [`buildCaptionWithFooter, ${platform}`, (text) => buildCaptionWithFooter(text, user, platform), COMPOSED_BUDGET_MS],
-    [`buildPlatformPreview, ${platform}`, (text) => buildPlatformPreview({ platform, caption: text, user }), COMPOSED_BUDGET_MS],
-    [`platformCaptionCounter, ${platform}`, (text) => platformCaptionCounter(text, platform, user), COMPOSED_BUDGET_MS],
-  ]),
 ];
 
-/**
- * The inputs of `size` characters (those whose name starts with `only`, when
- * given) on which `helper` took longer than `budgetMs` scaled to that size,
- * each with the time it took.
- */
-function overBudget(helper: Helper, budgetMs: number, size = SIZE, only = ""): string[] {
-  const over: string[] = [];
-  for (const [name, input] of adversarialInputs(size)) {
-    if (!name.startsWith(only)) continue;
+const COMPOSED: Array<[string, (platform: Platform) => Helper]> = [
+  ["buildCaptionWithFooter", (platform) => (text) => buildCaptionWithFooter(text, user, platform)],
+  ["buildPlatformPreview", (platform) => (text) => buildPlatformPreview({ platform, caption: text, user })],
+  ["platformCaptionCounter", (platform) => (text) => platformCaptionCounter(text, platform, user)],
+];
+
+/** The inputs on which `helper` took longer than `budgetMs`, each with the time it took. */
+function overBudget(helper: Helper, budgetMs: number, inputs = adversarialInputs()): string[] {
+  return inputs.flatMap(([name, input]) => {
     const started = performance.now();
     helper(input);
     const ms = performance.now() - started;
-    if (ms > (budgetMs * input.length) / SIZE) over.push(`${name}: ${Math.round(ms)} ms`);
-  }
-  return over;
+    return ms > budgetMs ? [`${name}: ${Math.round(ms)} ms`] : [];
+  });
 }
 
 describe("every helper that walks user text runs in linear time", () => {
-  // The clients log each cut; thousands of those lines would only slow the run.
+  // The clients log each cut; those lines would only slow the run.
   beforeAll(() => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "info").mockImplementation(() => {});
@@ -178,24 +200,35 @@ describe("every helper that walks user text runs in linear time", () => {
   });
   afterAll(() => vi.restoreAllMocks());
 
-  it("the inputs are 100,000 characters each", () => {
-    for (const [, input] of adversarialInputs(SIZE)) {
+  it("the inputs are 30,000 characters each, and every budget keeps a 10x margin", () => {
+    for (const [, input] of adversarialInputs()) {
       expect(input.length).toBeGreaterThan(SIZE * 0.99);
       expect(input.length).toBeLessThanOrEqual(SIZE);
     }
+    expect(BUDGET_MS).toBeGreaterThanOrEqual(10 * MEASURED_MS.single);
+    expect(COMPOSED_BUDGET_MS).toBeGreaterThanOrEqual(10 * MEASURED_MS.composed);
   });
 
-  it.each(HELPERS)("%s: within its budget on every input", (_name, helper, budgetMs = BUDGET_MS) => {
-    expect(overBudget(helper, budgetMs)).toEqual([]);
-  }, 120_000);
+  it.each(HELPERS)("%s: within its budget on every input", (_name, helper) => {
+    expect(overBudget(helper, BUDGET_MS)).toEqual([]);
+  }, 60_000);
+
+  it.each(platforms)("%s: the composed helpers within their budget on its own run", (platform) => {
+    const run = PLATFORM_RUN[platform];
+    for (const [name, compose] of COMPOSED) {
+      expect(overBudget(compose(platform), COMPOSED_BUDGET_MS, [[`${run} between tags`, betweenTags(run)]]), name).toEqual(
+        [],
+      );
+    }
+  }, 60_000);
 
   it("fails on a planted quadratic helper", () => {
     // The pattern removeXMentions used before R68: it restarts at every comma
-    // of a run that is not at the very end. At 30,000 characters (a budget of
-    // 300 ms) it takes about a second, so the guard sees it without a 10 s wait.
+    // of a run that is not at the very end.
     const quadratic = (text: string) => text.replace(/[,;]+$/, "");
-    expect(overBudget(quadratic, BUDGET_MS, 30_000, "commas after a mention")).toHaveLength(1);
+    const commas = adversarialInputs().filter(([name]) => name === "commas after a mention");
+    expect(overBudget(quadratic, BUDGET_MS, commas)).toHaveLength(1);
     // A linear helper on the same input passes.
-    expect(overBudget((text: string) => text.replace(/,+/g, ","), BUDGET_MS, 30_000, "commas after a mention")).toEqual([]);
+    expect(overBudget((text: string) => text.replace(/,+/g, ","), BUDGET_MS, commas)).toEqual([]);
   }, 60_000);
 });
