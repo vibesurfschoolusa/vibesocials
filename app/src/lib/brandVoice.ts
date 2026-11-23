@@ -26,7 +26,10 @@ export const BRAND_VOICE_REVIEW_LINE =
 export type BrandVoiceCleanResult = { ok: true; value: string | null } | { ok: false; error: string };
 
 const LINE_BREAK = /\r\n|[\r\n\u2028\u2029]/;
-const TRAILING_LINE_BREAKS = /[\r\n\u2028\u2029]+$/;
+// R68 review L1: the look-behind lets a match start only where a run of breaks
+// starts, so each run is read once; without it, 30,000 blank lines before the
+// last word cost about a second. Same result.
+const TRAILING_LINE_BREAKS = /(?<![\r\n\u2028\u2029])[\r\n\u2028\u2029]+$/;
 // C0 and C1 control characters. Line breaks are handled before this runs.
 const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g;
 // A hashtag token: # followed by letters, marks, digits or underscores, in any script.
