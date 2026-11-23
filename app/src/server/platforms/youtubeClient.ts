@@ -303,7 +303,7 @@ export function buildYouTubeVideoResource(ctx: PublishContext): {
   console.log("[YouTube] Uploading with metadata", {
     hasTitle: metadata.snippet.title !== "",
     descriptionLength: description.length,
-    tags: tags,
+    tagCount: tags.length,
     privacyStatus: metadata.status.privacyStatus,
     madeForKids: false,
   });
