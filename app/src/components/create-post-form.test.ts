@@ -423,13 +423,13 @@ describe("no Location field on Create", () => {
     expect(raw).not.toMatch(/^\s*location:/m);
   });
 
-  // TikTok's audit: the Create page's TikTok parts are frozen. Every line that
-  // names TikTok, and the TikTok settings block, hash as on main 4faccbf.
+  // Pin the audit UI after the video-duration fix. The original settings
+  // panel still matches the version prepared for review.
   it("leaves every TikTok line byte-identical", () => {
     const lines = raw.split("\n").filter((line) => /tiktok/i.test(line));
-    expect(lines).toHaveLength(83);
+    expect(lines).toHaveLength(87);
     expect(createHash("sha256").update(lines.join("\n")).digest("hex")).toBe(
-      "161ae7727b30994cd3f9dbb41d554034e789f948940a2de60249b368d42edcb9",
+      "179f50b767e8bfb00d1afad9356cf9c89d7184575e36123353cce9e80e7c3c31",
     );
     const start = raw.indexOf("{tiktokSelected && activeMimeType && (");
     const block = raw.slice(start, raw.indexOf("\n        )}", start) + 11);

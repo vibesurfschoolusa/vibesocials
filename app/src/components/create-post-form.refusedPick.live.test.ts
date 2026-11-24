@@ -65,6 +65,13 @@ const postBodies: Record<string, unknown>[] = [];
 const fetchMock = vi.fn((input: unknown, init?: { body?: unknown }) => {
   const url = String(input);
   calls.push(url);
+  if (url.startsWith("/api/tiktok/creator-info")) {
+    return Promise.resolve(Response.json({
+      creatorNickname: "Test creator",
+      privacyLevelOptions: ["SELF_ONLY"],
+      maxVideoPostDurationSec: 60,
+    }));
+  }
   if (url === "/api/posts") {
     postBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
     return Promise.resolve(Response.json({ id: "job-1" }));
@@ -719,6 +726,52 @@ describe("R55: a shared file that didn't arrive is said at once", () => {
     await openShared([]);
     expect(pageSays(SHARE_LOST_TOAST)).toBe(false);
     expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
+  });
+});
+
+describe("TikTok video duration before publish", () => {
+  async function selectTikTokVideo() {
+    conn.platforms = ["tiktok"];
+    await mount();
+    await typeCaption("Surf lesson today");
+    await pick(new File(["video"], "lesson.mp4", { type: "video/mp4" }));
+    await run(() => props(byId("tiktok-privacy")).onChange({ target: { value: "SELF_ONLY" } }));
+    await chooseMode("Publish now");
+  }
+
+  function video() {
+    const preview = find(container, (node) => node.nodeName === "VIDEO" && "onLoadedMetadata" in props(node));
+    if (!preview) throw new Error("No video preview");
+    return preview;
+  }
+
+  it("waits for each video's duration and refuses a replacement over the creator's limit", async () => {
+    await selectTikTokVideo();
+    await submit();
+    expect(dialogShown()).toBe(false);
+    await run(() => props(video()).onLoadedMetadata({ currentTarget: { duration: 12 } }));
+    await pick(new File(["video"], "long.mp4", { type: "video/mp4" }));
+    await submit();
+    expect(dialogShown()).toBe(false);
+    await run(() => props(video()).onLoadedMetadata({ currentTarget: { duration: 90 } }));
+    await submit();
+    expect(pageSays("TikTok allows up to 1:00")).toBe(true);
+    expect(dialogShown()).toBe(false);
+    expect(postBodies).toHaveLength(0);
+  });
+
+  it("rechecks the duration in an open confirmation and allows a valid duration", async () => {
+    await selectTikTokVideo();
+    await run(() => props(video()).onLoadedMetadata({ currentTarget: { duration: 12 } }));
+    await submit();
+    expect(dialogShown()).toBe(true);
+    await run(() => props(video()).onDurationChange({ currentTarget: { duration: 90 } }));
+    expect(dialogButton("Publish now").attributes.disabled).toBeDefined();
+    expect(postBodies).toHaveLength(0);
+    await run(() => props(video()).onDurationChange({ currentTarget: { duration: 12 } }));
+    expect(dialogButton("Publish now").attributes.disabled).toBeUndefined();
+    await run(() => props(dialogButton("Publish now")).onClick());
+    expect(postBodies).toHaveLength(1);
   });
 });
 

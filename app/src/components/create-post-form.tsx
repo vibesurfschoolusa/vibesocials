@@ -1410,6 +1410,10 @@ function CreatePostFormInner({
   // panel), and the chosen video's length once the browser has read it.
   const [tiktokBlockingReason, setTiktokBlockingReason] = useState<string | null>(null);
   const [videoDurationSec, setVideoDurationSec] = useState<number | null>(null);
+  function readVideoDuration(event: React.SyntheticEvent<HTMLVideoElement>) {
+    const seconds = event.currentTarget.duration;
+    setVideoDurationSec(Number.isFinite(seconds) && seconds > 0 ? seconds : null);
+  }
   // V1: the video's cover, kept with the video it was chosen for, so another
   // file (or a sent post) is back to the platform default without a reset.
   const [coverState, setCoverState] = useState<{ videoUrl: string; choice: CoverChoice } | null>(null);
@@ -1527,10 +1531,13 @@ function CreatePostFormInner({
   // Only while the page is in text mode: with a file again it has nothing to say.
   const fileLostShown = noFile && fileLostNoticeShown(fileLost);
   const tiktokSelected = selectedPlatforms.includes("tiktok");
+  const waitingForVideoLength = activeMimeType?.startsWith("video/") && videoDurationSec === null;
   // Why Publish is blocked for TikTok right now, or null (lib/tiktokPostRules.ts).
   const tiktokBlock = tiktokPublishBlock({
     tiktokSelected,
-    blockingReason: tiktokBlockingReason,
+    blockingReason: tiktokBlockingReason ?? (waitingForVideoLength
+      ? "Waiting for the video length. If the preview cannot play, choose another video."
+      : null),
     commercialContentEnabled: tiktokCommercialEnabled,
     metadata: tiktokMetadata,
   });
@@ -2873,6 +2880,8 @@ function CreatePostFormInner({
       setUploadError(TIKTOK_DISCLOSURE_INCOMPLETE_TEXT);
       return;
     }
+    // The form can also be submitted directly. Its buttons already show this reason.
+    if (tiktokBlock) return;
 
     if (composerSendRefusalAfterDisclosure(sendCheck, pressedAt)) {
       refuse({ kind: "send", at: pressedAt });
@@ -3169,9 +3178,13 @@ function CreatePostFormInner({
                 />
               ) : reuseItem.mimeType.startsWith("video/") ? (
                 <video
+                  key={`preview-${reuseItem.storageLocation}`}
                   src={reuseItem.storageLocation}
                   controls
-                  onLoadedMetadata={(e) => setVideoDurationSec(e.currentTarget.duration)}
+                  preload="metadata"
+                  onLoadedMetadata={readVideoDuration}
+                  onDurationChange={readVideoDuration}
+                  onError={() => setVideoDurationSec(null)}
                   className="max-h-64 w-full rounded-[var(--radius)] border border-border"
                 />
               ) : null}
@@ -3254,9 +3267,13 @@ function CreatePostFormInner({
                     />
                   ) : isVideoPreview ? (
                     <video
+                      key={`preview-${previewUrl}`}
                       src={previewUrl}
                       controls
-                      onLoadedMetadata={(e) => setVideoDurationSec(e.currentTarget.duration)}
+                      preload="metadata"
+                      onLoadedMetadata={readVideoDuration}
+                      onDurationChange={readVideoDuration}
+                      onError={() => setVideoDurationSec(null)}
                       className="max-h-64 w-full rounded-[var(--radius)] border border-border"
                     />
                   ) : null}
@@ -3691,6 +3708,7 @@ function CreatePostFormInner({
               <TikTokConsentDeclaration brandedContent={tiktokMetadata.brandedContent === true} />
             ) : null}
             {confirmCopy.trail ? <span className="block">{confirmCopy.trail}</span> : null}
+            {tiktokBlock ? <span role="alert" className="block text-destructive">TikTok: {tiktokBlock}</span> : null}
             {captionsChanged ? (
               <span role="alert" className="block font-medium text-destructive">
                 {captionsChangedMessage(publishMode, postTextChanged ?? "caption")}
@@ -3699,10 +3717,10 @@ function CreatePostFormInner({
           </span>
         }
         confirmText={confirmCopy.confirmText}
-        confirmDisabled={captionsChanged}
+        confirmDisabled={captionsChanged || tiktokBlock !== null}
         onConfirm={async () => {
           // The line above already says why; the dialog stays open.
-          if (captionsChanged) throw new ConfirmFailureShown();
+          if (captionsChanged || tiktokBlock !== null) throw new ConfirmFailureShown();
           await performSubmit();
         }}
       />
