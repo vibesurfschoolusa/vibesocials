@@ -269,11 +269,19 @@ describe("truncateUnits", () => {
 describe("trimLinkTrailing", () => {
   const OLD_LINK_TRAILING = /[^A-Za-z0-9=_#/\-+&]+$/;
 
-  it.each([10_000, 40_000])("a link with %i stripped characters before one kept one: under 20 ms", (n) => {
+  // The old pattern took seconds here; a linear walk takes a few ms. The budget
+  // is generous so CI load can't fail a linear walk (R69: no tight wall-clock
+  // limits), and the fastest of three runs is judged.
+  it.each([10_000, 40_000])("a link with %i stripped characters before one kept one: well under a second", (n) => {
     const text = `example.com/${"!".repeat(n)}a`;
-    const started = performance.now();
-    const units = textUnits(text);
-    expect(performance.now() - started).toBeLessThan(20);
+    let took = Infinity;
+    let units = textUnits(text);
+    for (let run = 0; run < 3; run += 1) {
+      const started = performance.now();
+      units = textUnits(text);
+      took = Math.min(took, performance.now() - started);
+    }
+    expect(took).toBeLessThan(300);
     expect(units.map((unit) => unit.text).join("")).toBe(text);
   }, 5_000);
 
@@ -483,9 +491,15 @@ describe("truncateUtf16AtWord on a huge text", () => {
     ["emoji", "\u{1F468}‍\u{1F469}‍\u{1F467}\u{1F30A}".repeat(400_000)],
   ])("4 MB of %s: far faster than the whole-text split, well within a generous budget, and the same cut", (_name, text) => {
     expect(text.length).toBeGreaterThanOrEqual(4_000_000);
-    const started = performance.now();
-    const result = truncateUtf16AtWord(text, 1000);
-    const took = performance.now() - started;
+    // The fastest of three runs, so one GC pause or scheduler stall under CI
+    // load can't make a linear cut look slow (R69 BE2 review).
+    let took = Infinity;
+    let result = "";
+    for (let run = 0; run < 3; run += 1) {
+      const started = performance.now();
+      result = truncateUtf16AtWord(text, 1000);
+      took = Math.min(took, performance.now() - started);
+    }
     const oldStarted = performance.now();
     const oldResult = oldTruncateUtf16AtWord(text, 1000);
     const oldTook = performance.now() - oldStarted;
